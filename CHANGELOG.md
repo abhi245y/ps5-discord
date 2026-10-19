@@ -18,6 +18,10 @@ All notable changes to this project are documented here. The format follows
 - App: a page for each server (banner, voice rooms with who is in them, text channels by
   activity); Join is marked "soon" until voice lands. Channel list on Options, history pages
   load ahead of the focus, a marker at the start of a channel.
+- App: the core ships inside the app and starts through elfldr when it is not running; test
+  builds of the core quit 30 s after the app goes quiet (`make CORE_FOLLOWS_APP=0` for release).
+- App: the PS5 system keyboard on Triangle, found through the core's local `/api/dlsym`; the
+  app's own keyboard remains the fallback.
 - App: colour emoji in reactions (server emoji and Twemoji), wrapping onto more lines; role
   and channel names in mentions; markdown links, headings and escapes read as Discord shows them.
 - App: toast and chime for a live DM or mention; text size on R3 (Small, Medium, Large).

@@ -275,6 +275,12 @@ done
 [[ ! -d $root/assets ]] || cp -a "$root/assets" "$app/assets"
 # spot5: the mDNS helper payload the app hands to elfldr while pairing.
 [[ ! -f $build/mdns-helper.elf ]] || cp "$build/mdns-helper.elf" "$app/assets/"
+# The core payload, which the app starts when it is not running (build it first: make at the repo root).
+if [[ -f $root/../build/ps5-discord.elf ]]; then
+    cp "$root/../build/ps5-discord.elf" "$app/assets/"
+else
+    echo "warning: ../build/ps5-discord.elf missing; the app will not start the core" >&2
+fi
 # Directory listing returns nothing under /app0 on the console, so each
 # audio folder carries an index of its files (read by save::list_files).
 for dir in "$app/assets/audio/music" "$app"/assets/audio/sfx/*/; do

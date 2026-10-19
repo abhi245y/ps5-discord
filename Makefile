@@ -12,6 +12,8 @@ PS5_HOST ?=
 ELFLDR_PORT ?= 9021
 CA_PEM ?= /etc/pki/tls/certs/ca-bundle.crt
 HOST_CC ?= cc
+# Test builds quit when the app closes (the app starts the core). Release: make CORE_FOLLOWS_APP=0
+CORE_FOLLOWS_APP ?= 1
 
 SDK := .deps/ps5-payload-sdk
 MBED := .deps/src/mbedtls-3.6.4
@@ -27,7 +29,7 @@ INCLUDES := -Isrc -I$(MBED)/include -I$(ZLIB) -I$(CJSON) -I$(QRGEN)
 PS5_CC := $(SDK)/bin/prospero-clang
 # The SDK wrappers find LLVM through llvm-config; use the system one if present.
 export LLVM_CONFIG ?= $(if $(shell command -v llvm-config),llvm-config,$(abspath tools/llvm-config))
-PS5_CFLAGS := -std=gnu11 -O2 -Wall $(INCLUDES) -D__unix__ \
+PS5_CFLAGS := -std=gnu11 -O2 -Wall $(INCLUDES) -D__unix__ -DCORE_FOLLOWS_APP=$(CORE_FOLLOWS_APP) \
 	'-DMBEDTLS_USER_CONFIG_FILE="platform/mbedtls_config_ps5.h"'
 HOST_CFLAGS := -std=gnu11 -O1 -g -Wall $(INCLUDES)
 

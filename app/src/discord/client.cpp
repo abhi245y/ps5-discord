@@ -107,6 +107,43 @@ Reply failed(Reply reply, const char *stage, int fd = -1)
     return reply;
 }
 
+// The core ships inside the app: when nothing answers on its port, hand the
+// bundled payload to elfldr on this console. A core that finds the port taken
+// exits, so a retry while one is starting does no harm.
+void start_core()
+{
+    static auto last = std::chrono::steady_clock::time_point{};
+    const auto now = std::chrono::steady_clock::now();
+    if (last != decltype(last){} && now - last < std::chrono::seconds(20))
+        return;
+    last = now;
+    FILE *f = std::fopen("/app0/assets/ps5-discord.elf", "rb");
+    if (!f)
+        return; // a host build, or an app packaged without the core
+    std::string elf;
+    char buf[65536];
+    for (std::size_t r; (r = std::fread(buf, 1, sizeof buf, f)) > 0;)
+        elf.append(buf, r);
+    std::fclose(f);
+    const int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0)
+        return;
+    sockaddr_in to{};
+#ifndef __linux__
+    to.sin_len = sizeof to;
+#endif
+    to.sin_family = AF_INET;
+    to.sin_port = htons(9021); // elfldr
+    to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    std::size_t sent = 0;
+    if (connect(fd, reinterpret_cast<sockaddr *>(&to), sizeof to) == 0)
+        for (ssize_t w; sent < elf.size() && (w = send(fd, elf.data() + sent, elf.size() - sent, 0)) > 0;)
+            sent += static_cast<std::size_t>(w);
+    close(fd);
+    hui::sys::log("[CLIENT] core not answering: sent the bundled core to elfldr (%zu of %zu bytes)", sent,
+                  elf.size());
+}
+
 Reply http(int port, const char *method, const std::string &path, const std::string &body = {})
 {
     Reply reply;
@@ -880,8 +917,10 @@ void Client::poll_state()
     {
         if (reply.status > 0)
             hui::sys::log("[CLIENT] /api/state answered %d", reply.status);
+        else
+            start_core();
         snapshot_.connection = Connection::starting;
-        snapshot_.status_message = "Waiting for the ps5-discord core. Send its payload to elfldr (port 9021).";
+        snapshot_.status_message = "Starting the ps5-discord core...";
         ready_ = false;
         publish();
         return;
