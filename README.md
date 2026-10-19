@@ -46,12 +46,5 @@ testing against Discord without the console.
 ## Workflow
 
 - `main` stays releasable; work on `feat/*` and `fix/*` branches, merged by PR.
-- Tags `vX.Y.Z` with a GitHub release only on meaningful milestones.
+- Versioning, release channels and milestones: [ROADMAP.md](ROADMAP.md). Changes: [CHANGELOG.md](CHANGELOG.md).
 
-## Milestones
-
-1. `v0.1.0`: QR login and gateway session, status web UI
-2. `v0.2.0`: read and send text messages
-3. `v0.3.0`: join a voice channel (muted placeholder)
-4. `v0.4.0`: voice audio (Opus + DAVE)
-5. `v0.5.0`: native PS5 app UI talking to the background core
