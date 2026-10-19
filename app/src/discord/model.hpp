@@ -40,6 +40,7 @@ struct User
     std::string voice_room; // room name when in voice, else empty
     bool speaking = false;
     bool muted = false;
+    bool is_friend = false; // on the friends list (others are kept so names and faces resolve)
 };
 
 struct Room // a voice channel

@@ -224,6 +224,8 @@ std::string status_line(const discord::User &u)
         return "Away";
     case discord::Presence::dnd:
         return "Do not disturb";
+    case discord::Presence::offline:
+        return "Offline";
     default:
         return "Online";
     }

@@ -493,6 +493,7 @@ void apply_tree(Snapshot &s, const json &t)
             const std::string id = id_json.is_string() ? id_json.get<std::string>() : std::string();
             User u = users.count(id) ? users[id] : User{};
             u.id = id;
+            u.is_friend = true;
             u.art = art_for(id, kAvatarArt);
             const auto p = presence.find(id);
             if (p != presence.end())

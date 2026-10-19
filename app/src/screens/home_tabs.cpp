@@ -53,10 +53,13 @@ enum class FriendGroup
     voice,
     online,
     away,
+    offline, // last, so their DMs stay one Cross away
 };
 
 FriendGroup group_of(const discord::User &u)
 {
+    if (u.presence == discord::Presence::offline)
+        return FriendGroup::offline;
     if (!u.voice_room.empty())
         return FriendGroup::voice;
     if (u.presence == discord::Presence::idle || u.presence == discord::Presence::dnd)
@@ -74,6 +77,8 @@ const char *group_name(FriendGroup g)
         return "Online";
     case FriendGroup::away:
         return "Away";
+    case FriendGroup::offline:
+        return "Offline";
     }
     return "";
 }
@@ -90,11 +95,11 @@ std::vector<Section> friend_sections(const discord::Snapshot &s)
 {
     std::vector<Section> out;
     float y = kPageTop + kSectionLabel;
-    for (FriendGroup g : {FriendGroup::voice, FriendGroup::online, FriendGroup::away})
+    for (FriendGroup g : {FriendGroup::voice, FriendGroup::online, FriendGroup::away, FriendGroup::offline})
     {
         int count = 0;
         for (const discord::User &u : s.friends)
-            if (u.presence != discord::Presence::offline && group_of(u) == g)
+            if (u.is_friend && group_of(u) == g)
                 ++count;
         if (count == 0)
             continue;
@@ -146,7 +151,7 @@ std::vector<Home::TabItem> Home::layout_tab(const discord::Snapshot &s) const
             for (int i = 0; i < static_cast<int>(s.friends.size()); ++i)
             {
                 const discord::User &u = s.friends[static_cast<std::size_t>(i)];
-                if (u.presence == discord::Presence::offline || group_of(u) != section.group)
+                if (!u.is_friend || group_of(u) != section.group)
                     continue;
                 const int col = n % kFriendColumns;
                 const int row = n / kFriendColumns;
@@ -309,9 +314,7 @@ void Home::draw_tab(const discord::Snapshot &s, DrawList &list) const
 
     const Rect empty{kMargin, kPageTop + 10.0f, kRowWidth, 200.0f};
     if (tab_ == HomeTab::friends && items.empty())
-        empty_note(list, ink_, empty, s.friends.empty() ? "No friends yet" : "No friends online",
-                   s.friends.empty() ? "Friends you add on Discord show up here."
-                                     : "Friends who come online show up here.");
+        empty_note(list, ink_, empty, "No friends yet", "Friends you add on Discord show up here.");
     else if (tab_ == HomeTab::mentions && items.empty())
         empty_note(list, ink_, empty, "No mentions", "Messages that mention you show up here.");
     else if (tab_ == HomeTab::friends)
@@ -337,7 +340,9 @@ void Home::draw_tab(const discord::Snapshot &s, DrawList &list) const
                          r.x + 172.0f, line_y, 23.0f, kDim);
                 line_y += 32.0f;
             }
-            const Color dot = u.presence == discord::Presence::idle ? kIdle : kOnline;
+            const Color dot = u.presence == discord::Presence::offline ? kFaint
+                              : u.presence == discord::Presence::idle  ? kIdle
+                                                                       : kOnline;
             list.circle(r.x + 180.0f, line_y - 8.0f, 6.0f, dot);
             ui::text(list, ink_.fonts.regular, fit(ink_.fonts.regular, status_line(u), 23.0f, r.w - 210.0f),
                      r.x + 196.0f, line_y, 23.0f, kDim);
