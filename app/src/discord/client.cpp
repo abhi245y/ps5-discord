@@ -405,7 +405,13 @@ void apply_tree(Snapshot &s, const json &t)
             guild.members = static_cast<int>(g.value("member_count", 0.0));
             if (g.contains("channels"))
             {
-                std::vector<std::pair<double, Channel>> ordered;
+                // Discord's order: channels without a category first, then each
+                // category by its position, channels by theirs within it.
+                std::map<std::string, std::pair<double, std::string>> categories;
+                for (const json &c : g["channels"])
+                    if (static_cast<int>(c.value("type", 0.0)) == 4)
+                        categories[text(c, "id")] = {c.value("position", 0.0), text(c, "name")};
+                std::vector<std::pair<std::pair<double, double>, Channel>> ordered;
                 for (const json &c : g["channels"])
                 {
                     const int type = static_cast<int>(c.value("type", 0.0));
@@ -418,6 +424,11 @@ void apply_tree(Snapshot &s, const json &t)
                     ch.can_send = c.value("can_send", true);
                     ch.kind = type == 5 ? ChannelKind::announcement : ChannelKind::text;
                     const std::string last = text(c, "last_message_id");
+                    ch.last_ms = snowflake_ms(last);
+                    const auto parent = categories.find(text(c, "parent_id"));
+                    const double category_pos = parent == categories.end() ? -1.0 : parent->second.first;
+                    if (parent != categories.end())
+                        ch.category = parent->second.second;
                     const auto [has_unread, mentions] = read_of(ch.id, last);
                     ch.has_unread = has_unread;
                     ch.unread = mentions;
@@ -436,7 +447,7 @@ void apply_tree(Snapshot &s, const json &t)
                         conv.mention = mentions > 0;
                         unread.push_back(conv);
                     }
-                    ordered.emplace_back(c.value("position", 0.0), ch);
+                    ordered.emplace_back(std::make_pair(category_pos, c.value("position", 0.0)), ch);
                 }
                 std::stable_sort(ordered.begin(), ordered.end(),
                                  [](const auto &a, const auto &b) { return a.first < b.first; });

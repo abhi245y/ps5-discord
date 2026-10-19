@@ -4,6 +4,9 @@
 // Mirrors the design framework's busy account (approved Home comp): every
 // person, server and message here is invented.
 
+// Sample data lists only the fields it sets.
+#pragma clang diagnostic ignored "-Wmissing-field-initializers"
+
 #include "discord/sample.hpp"
 
 namespace discord

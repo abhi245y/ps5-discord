@@ -70,6 +70,8 @@ struct Channel
     bool has_unread = false; // newer messages than you have read, shown as a dot
     bool mentioned = false;
     bool can_send = true; // false: read-only for this account (announcements, rules)
+    std::string category; // the category it sits under, empty at the top
+    std::int64_t last_ms = 0; // when its newest message was sent
 };
 
 struct Guild

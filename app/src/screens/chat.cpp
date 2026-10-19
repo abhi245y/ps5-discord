@@ -98,6 +98,26 @@ std::string author_name(const discord::Snapshot &s, const discord::Message &m)
     return m.author_name.empty() ? std::string("Unknown") : m.author_name;
 }
 
+// Tops of the channel list's rows, from 0: a category heading adds room above its first row.
+std::vector<float> list_tops(const std::vector<const discord::Channel *> &all)
+{
+    std::vector<float> tops;
+    std::string category = "\x01";
+    float y = 0.0f;
+    for (const discord::Channel *c : all)
+    {
+        if (c->category != category)
+        {
+            category = c->category;
+            if (!category.empty())
+                y += 34.0f;
+        }
+        tops.push_back(y);
+        y += 54.0f;
+    }
+    return tops;
+}
+
 } // namespace
 
 const std::vector<discord::Message> &Chat::messages(const discord::Snapshot &s) const
@@ -293,6 +313,42 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
         return true;
     }
 
+    if (mode_ == Mode::channels)
+    {
+        const std::vector<const discord::Channel *> all = chips(s);
+        const int n = static_cast<int>(all.size());
+        if (input.nav == Direction::down || input.nav == Direction::up)
+        {
+            const int next = list_index_ + (input.nav == Direction::down ? 1 : -1);
+            if (next >= 0 && next < n)
+            {
+                list_index_ = next;
+                feedback.play(hui::audio::Cue::focus, 1.0f + 0.01f * static_cast<float>(next % 8));
+            }
+            else
+                feedback.play(hui::audio::Cue::error, 1.0f, 0.0f, 0.5f);
+        }
+        if (input.is_pressed(Action::confirm) && list_index_ < n)
+        {
+            open(s, guild_id_, all[static_cast<std::size_t>(list_index_)]->id, requests);
+            feedback.play(hui::audio::Cue::open);
+        }
+        else if (input.is_pressed(Action::back) || input.is_pressed(Action::menu))
+        {
+            mode_ = Mode::browse;
+            feedback.play(hui::audio::Cue::modal_close);
+        }
+        // Keep the focused row inside the panel.
+        const std::vector<float> tops = list_tops(all);
+        const float row_y = 140.0f + (list_index_ < n ? tops[static_cast<std::size_t>(list_index_)] : 0.0f);
+        if (row_y - list_scroll_.target < 140.0f)
+            list_scroll_.target = row_y - 140.0f;
+        if (row_y - list_scroll_.target > 900.0f)
+            list_scroll_.target = row_y - 900.0f;
+        list_scroll_.update(dt, 16.0f);
+        return true;
+    }
+
     if (mode_ == Mode::keys)
     {
         switch (keys_.update(input, dt, feedback))
@@ -394,6 +450,19 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
     }
 
     // Browsing.
+    if (!dm() && input.is_pressed(Action::menu))
+    {
+        const std::vector<const discord::Channel *> all = chips(s);
+        list_index_ = 0;
+        for (int i = 0; i < static_cast<int>(all.size()); ++i)
+            if (all[static_cast<std::size_t>(i)]->id == channel_id_)
+                list_index_ = i;
+        const std::vector<float> tops = list_tops(all);
+        list_scroll_.snap(tops.empty() ? 0.0f : std::max(0.0f, tops[static_cast<std::size_t>(list_index_)] - 380.0f));
+        mode_ = Mode::channels;
+        feedback.play(hui::audio::Cue::modal_open);
+        return true;
+    }
     if (input.is_pressed(Action::back))
     {
         feedback.play(hui::audio::Cue::back);
@@ -892,7 +961,7 @@ void Chat::draw(const discord::Snapshot &s, DrawList &list) const
     ui::Hint hints[4] = {{ui::Button::cross, "Select"}, {ui::Button::circle, "Back"}, {ui::Button::triangle, "Type"}, {}};
     int count = 3;
     if (!dm())
-        hints[count++] = {ui::Button::l1, "Channels", ui::Button::r1};
+        hints[count++] = {ui::Button::options, "Channels"};
     ui::HintLayout layout;
     layout.size = 34.0f;
     layout.text_size = 23.0f;
@@ -901,6 +970,60 @@ void Chat::draw(const discord::Snapshot &s, DrawList &list) const
     ui::draw_hints(list, ink_.fonts, ui::GlyphStyle::dark(), hints, count, kRight, true, layout);
     if (mode_ == Mode::keys)
         keys_.draw(list);
+    if (mode_ == Mode::channels)
+        draw_channel_list(s, list);
+}
+
+// Every channel of the server, under its categories (Options in a server).
+void Chat::draw_channel_list(const discord::Snapshot &s, DrawList &list) const
+{
+    list.rounded_rect({0, 0, 1920, 1080}, 0.0f, Color::rgb(0x0d0e12, 0.55f));
+    const Rect panel{0, 0, 640, 1080};
+    list.shadow(panel, 0.0f, 40.0f, Color::rgb(0, 0.5f));
+    list.rounded_rect(panel, 0.0f, kRaised);
+    const discord::Guild *g = discord::find_guild(s, guild_id_);
+    ui::text(list, ink_.fonts.display, fit(ink_.fonts.display, g ? g->name : std::string(), 40.0f, 540.0f), kMargin,
+             92.0f, 40.0f, kText);
+    list.push_clip({0, 120.0f, 640, 880.0f});
+    const std::vector<const discord::Channel *> all = chips(s);
+    const std::vector<float> tops = list_tops(all);
+    std::string category = "\x01"; // none drawn yet
+    for (int i = 0; i < static_cast<int>(all.size()); ++i)
+    {
+        const discord::Channel &c = *all[static_cast<std::size_t>(i)];
+        const float y = 140.0f + tops[static_cast<std::size_t>(i)] - list_scroll_.value;
+        if (c.category != category)
+        {
+            category = c.category;
+            if (!category.empty())
+                ui::text(list, ink_.fonts.semibold, fit(ink_.fonts.semibold, category, 19.0f, 520.0f), kMargin,
+                         y - 6.0f, 19.0f, kFaint);
+        }
+        if (y > 1080.0f || y + 54.0f < 100.0f)
+            continue;
+        const Rect r{kMargin - 12.0f, y + 2.0f, 640.0f - 2 * kMargin + 24.0f, 46.0f};
+        const bool on = c.id == channel_id_;
+        const bool hot = i == list_index_;
+        if (on)
+            list.rounded_rect(r, 12.0f, kRaisedHigh);
+        const Color ink = c.has_unread || c.unread > 0 || on ? kText : kDim;
+        ui::text(list, ink_.fonts.semibold, "#", r.x + 14.0f, r.cy() + 9.0f, 25.0f, kFaint);
+        ui::text(list, c.has_unread ? ink_.fonts.semibold : ink_.fonts.regular,
+                 fit(ink_.fonts.regular, c.name, 24.0f, r.w - 130.0f), r.x + 42.0f, r.cy() + 8.0f, 24.0f, ink);
+        if (c.unread > 0)
+            count_badge(list, ink_, c.unread, r.x + r.w - 12.0f, r.cy(), 30.0f);
+        else if (c.has_unread)
+            list.circle(r.x + r.w - 22.0f, r.cy(), 6.0f, kText);
+        if (hot)
+            focus_outline(list, r, 12.0f, 1.0f);
+    }
+    list.pop_clip();
+    const ui::Hint hints[] = {{ui::Button::cross, "Open"}, {ui::Button::circle, "Close"}};
+    ui::HintLayout layout;
+    layout.size = 30.0f;
+    layout.text_size = 22.0f;
+    layout.cy = kHintsBaseline;
+    ui::draw_hints(list, ink_.fonts, ui::GlyphStyle::dark(), hints, 2, 640.0f - kMargin, true, layout);
 }
 
 } // namespace screens

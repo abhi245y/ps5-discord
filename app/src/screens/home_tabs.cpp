@@ -263,14 +263,16 @@ void Home::update_tab(const discord::Snapshot &s, const hui::InputFrame &input, 
         }
         else if (tab_ == HomeTab::servers)
         {
-            // ponytail: the first text channel until the server page (framework frame 05) lands.
+            // The liveliest channel you can talk in (else the liveliest at all);
+            // Options in the chat lists the rest.
             const discord::Guild &g = s.guilds[static_cast<std::size_t>(ref)];
+            const discord::Channel *pick = nullptr;
             for (const discord::Channel &c : g.channels)
-                if (c.kind != discord::ChannelKind::voice)
-                {
-                    open_ = HomeOpen{g.id, c.id, {}};
-                    break;
-                }
+                if (c.kind != discord::ChannelKind::voice &&
+                    (!pick || (c.can_send && !pick->can_send) || (c.can_send == pick->can_send && c.last_ms > pick->last_ms)))
+                    pick = &c;
+            if (pick)
+                open_ = HomeOpen{g.id, pick->id, {}};
         }
         else if (tab_ == HomeTab::friends)
         {

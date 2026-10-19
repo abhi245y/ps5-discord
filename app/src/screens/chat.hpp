@@ -42,6 +42,7 @@ class Chat
         compose, // the composer with quick replies is open
         typing,  // the system keyboard is up over the app
         keys,    // the app's own keyboard is up
+        channels, // the server's channel list is open (Options)
     };
 
     const std::vector<discord::Message> &messages(const discord::Snapshot &snapshot) const;
@@ -65,6 +66,9 @@ class Chat
 
     const Ink &ink_;
     Keyboard keys_; // the app's own keyboard, when the system one is not there
+    int list_index_ = 0;        // focused row of the channel list
+    hui::tween::Spring list_scroll_;
+    void draw_channel_list(const discord::Snapshot &s, DrawList &list) const;
     std::string guild_id_;
     std::string channel_id_;
     Mode mode_ = Mode::browse;
