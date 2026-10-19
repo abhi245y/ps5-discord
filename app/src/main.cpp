@@ -315,6 +315,7 @@ int main()
     std::deque<std::string> remote_keys; // "press" keys still to play
     double remote_wait = 0.0;
     int remote_hold = 0;         // frames the held remote key stays down
+    bool remote_fast = false;    // "press fast,...": 0.1 s apart (bursts, for rate-limit tests)
     std::string remote_hold_key;
     const auto poll_request = [&]()
     {
@@ -348,6 +349,9 @@ int main()
                 remote_keys.push_back(keys.substr(at, comma - at));
                 at = comma + 1;
             }
+            remote_fast = !remote_keys.empty() && remote_keys.front() == "fast";
+            if (remote_fast)
+                remote_keys.pop_front();
             sys::log("[HUI] press %s", argument);
         }
         else if (std::strcmp(verb, "tour") == 0 && !tour)
@@ -394,7 +398,7 @@ int main()
             input.nav = Direction::none;
             --remote_hold;
         }
-        else if (!remote_keys.empty() && (remote_wait += dt) >= kPressSeconds)
+        else if (!remote_keys.empty() && (remote_wait += dt) >= (remote_fast ? 0.1 : kPressSeconds))
         {
             std::string key = remote_keys.front();
             remote_keys.pop_front();

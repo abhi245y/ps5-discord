@@ -185,7 +185,18 @@ Keyboard::Result Keyboard::update(const hui::InputFrame &input, float dt, hui::u
         return Result::send;
     }
     if (input.is_pressed(Action::confirm))
+    {
         press(row_, col_, feedback);
+        type_held_ = 0.0f;
+    }
+    else if (input.is_held(Action::confirm) && !(row_ == kKeyRows && col_ == 0))
+    {
+        // Held: the key repeats after a beat, as TV keyboards do (not Shift).
+        const float before = type_held_;
+        type_held_ += dt;
+        if (type_held_ > 0.45f && std::floor(before / 0.05f) != std::floor(type_held_ / 0.05f))
+            press(row_, col_, feedback);
+    }
     if (input.is_pressed(Action::west))
     {
         erase();
