@@ -112,6 +112,7 @@ static void drop_session(gateway *g)
 
 static void on_dispatch(gateway *g, const char *t, cJSON *d)
 {
+    chat_dispatch(t, d);
     if (strcmp(t, "READY") == 0) {
         const char *sid = cJSON_GetStringValue(cJSON_GetObjectItem(d, "session_id"));
         const char *url = cJSON_GetStringValue(cJSON_GetObjectItem(d, "resume_gateway_url"));
@@ -119,7 +120,6 @@ static void on_dispatch(gateway *g, const char *t, cJSON *d)
             cJSON_GetObjectItem(cJSON_GetObjectItem(d, "user"), "username"));
         snprintf(g->session_id, sizeof g->session_id, "%s", sid ? sid : "");
         snprintf(g->resume_url, sizeof g->resume_url, "%s", url ? url : "");
-        chat_load_ready(d);
         status_user(name, cJSON_GetArraySize(cJSON_GetObjectItem(d, "guilds")),
                     cJSON_GetArraySize(cJSON_GetObjectItem(d, "private_channels")));
         status_state("ready");
@@ -130,9 +130,6 @@ static void on_dispatch(gateway *g, const char *t, cJSON *d)
         status_state("ready");
         LOG("gateway: RESUMED");
     } else {
-        if (strncmp(t, "MESSAGE_", 8) == 0 && (strcmp(t + 8, "CREATE") == 0 ||
-                                                strcmp(t + 8, "UPDATE") == 0 || strcmp(t + 8, "DELETE") == 0))
-            chat_event(t, d);
         // Event names only; message contents stay out of the console log.
         status_event();
         LOG("gateway: %s s=%lld", t, (long long)g->seq);

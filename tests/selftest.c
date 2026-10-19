@@ -76,16 +76,17 @@ static void test_chat(void)
         "{\"id\":\"11\",\"name\":\"general\",\"type\":0,\"position\":0},"
         "{\"id\":\"12\",\"name\":\"Voice\",\"type\":2,\"position\":1}]}],"
         "\"private_channels\":[{\"id\":\"20\",\"type\":1,\"recipient_ids\":[\"2\"]}]}");
-    chat_load_ready(ready);
+    chat_dispatch("READY", ready);
     cJSON_Delete(ready);
     char *t = chat_tree_json();
-    assert(t && strstr(t, "\"name\":\"G\"") && strstr(t, "general") && !strstr(t, "Voice"));
-    assert(strstr(t, "\"name\":\"Bob\"")); // DM named after its recipient
+    assert(t && strstr(t, "\"name\":\"G\"") && strstr(t, "general"));
+    assert(strstr(t, "\"rooms\":[{\"id\":\"12\"")); // voice channels become rooms
+    assert(strstr(t, "\"global_name\":\"Bob\"")); // DM recipients land in users
     free(t);
 
     cJSON *m = cJSON_Parse("{\"id\":\"30\",\"channel_id\":\"11\",\"content\":\"hi\","
                            "\"author\":{\"id\":\"2\",\"username\":\"bob\",\"email\":\"x\"}}");
-    chat_event("MESSAGE_CREATE", m);
+    chat_dispatch("MESSAGE_CREATE", m);
     cJSON_Delete(m);
     char *e = chat_events_json(0);
     assert(e && strstr(e, "\"next\":1") && strstr(e, "\"content\":\"hi\"") && !strstr(e, "email"));
@@ -93,6 +94,9 @@ static void test_chat(void)
     e = chat_events_json(1);
     assert(e && strstr(e, "\"events\":[]"));
     free(e);
+    t = chat_tree_json();
+    assert(strstr(t, "\"last_message_id\":\"30\"")); // the channel moved to the top
+    free(t);
 }
 
 int main(void)

@@ -77,6 +77,7 @@ char *status_json(void)
 {
     cJSON *j = cJSON_CreateObject();
     pthread_mutex_lock(&lock);
+    cJSON_AddNumberToObject(j, "api_version", CORE_API_VERSION);
     cJSON_AddStringToObject(j, "state", state);
     cJSON_AddStringToObject(j, "user", user);
     cJSON_AddNumberToObject(j, "guilds", guilds);

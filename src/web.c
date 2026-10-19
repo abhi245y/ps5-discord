@@ -95,6 +95,77 @@ static void api_messages(int c, const char *query)
     reply_rest(c, http_request("GET", path, NULL, chat_token()));
 }
 
+// %XX and + decoding for query values.
+static void url_decode(char *s)
+{
+    char *out = s;
+    for (; *s; s++) {
+        if (*s == '%' && s[1] && s[2]) {
+            char hex[3] = {s[1], s[2], 0};
+            *out++ = (char)strtol(hex, NULL, 16);
+            s += 2;
+        } else {
+            *out++ = *s == '+' ? ' ' : *s;
+        }
+    }
+    *out = 0;
+}
+
+// Recent mentions of the account (Discord's inbox endpoint).
+static void api_mentions(int c)
+{
+    reply_rest(c, http_request("GET", "/users/@me/mentions?limit=25&roles=false&everyone=false", NULL, chat_token()));
+}
+
+// Avatars, icons and attachments for the app, which speaks no TLS. Only
+// Discord's CDN hosts: the console must not become a general web proxy.
+static void api_image(int c, const char *query)
+{
+    char url[1024];
+    if (query_get(query, "url", url, sizeof url) != 0) {
+        reply(c, "400 Bad Request", "text/plain", "url", 3);
+        return;
+    }
+    url_decode(url);
+    const char *rest = strncmp(url, "https://", 8) == 0 ? url + 8 : NULL;
+    char host[128];
+    size_t hlen = rest ? strcspn(rest, "/") : 0;
+    int allowed = 0;
+    if (rest && hlen > 0 && hlen < sizeof host) {
+        memcpy(host, rest, hlen);
+        host[hlen] = 0;
+        allowed = strcmp(host, "cdn.discordapp.com") == 0 || strcmp(host, "media.discordapp.net") == 0 ||
+                  (strncmp(host, "images-ext-", 11) == 0 && strstr(host, ".discordapp.net") != NULL);
+    }
+    if (!allowed) {
+        reply(c, "403 Forbidden", "text/plain", "host", 4);
+        return;
+    }
+    http_response res = http_get(host, rest + hlen);
+    if (res.status != 200 || !res.body)
+        reply(c, "502 Bad Gateway", "text/plain", "fetch", 5);
+    else
+        reply(c, "200 OK", "application/octet-stream", res.body, res.body_len);
+    free(res.body);
+}
+
+// Marks a channel read up to a message.
+static void api_ack(int c, const char *body)
+{
+    cJSON *in = cJSON_Parse(body ? body : "");
+    const char *channel = cJSON_GetStringValue(cJSON_GetObjectItem(in, "channel"));
+    const char *message = cJSON_GetStringValue(cJSON_GetObjectItem(in, "message"));
+    if (!channel || !is_id(channel) || !message || !is_id(message)) {
+        cJSON_Delete(in);
+        reply(c, "400 Bad Request", "text/plain", "ack", 3);
+        return;
+    }
+    char path[96];
+    snprintf(path, sizeof path, "/channels/%s/messages/%s/ack", channel, message);
+    cJSON_Delete(in);
+    reply_rest(c, http_request("POST", path, "{\"token\":null}", chat_token()));
+}
+
 static void api_send(int c, const char *body)
 {
     cJSON *in = cJSON_Parse(body ? body : "");
@@ -173,6 +244,12 @@ static void handle(int c, int local)
         api_messages(c, query);
     } else if (post && strcmp(path, "/api/send") == 0) {
         api_send(c, body);
+    } else if (get && strcmp(path, "/api/mentions") == 0) {
+        api_mentions(c);
+    } else if (get && strcmp(path, "/api/image") == 0) {
+        api_image(c, query);
+    } else if (post && strcmp(path, "/api/ack") == 0) {
+        api_ack(c, body);
     } else if (post && strcmp(path, "/api/quit") == 0) {
         reply(c, "200 OK", "application/json", "{\"ok\":true}", 11);
         LOG("quit requested from the web UI");
@@ -183,6 +260,8 @@ static void handle(int c, int local)
     }
 }
 
+// ponytail: one connection at a time; an image fetch (~0.3 s) holds the next request.
+// Threads need mbedTLS threading (shared DRBG) first.
 void web_serve(int fd)
 {
     for (;;) {
