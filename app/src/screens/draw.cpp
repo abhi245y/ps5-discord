@@ -61,9 +61,15 @@ void focus_outline(DrawList &list, const Rect &r, float radius, float strength)
 }
 
 void art_circle(DrawList &list, const Ink &ink, discord::ArtIndex art, const std::string &letter, float cx,
-                float cy, float radius)
+                float cy, float radius, const std::string &url)
 {
     const Rect r{cx - radius, cy - radius, radius * 2, radius * 2};
+    if (!url.empty() && ink.art.remote)
+        if (const std::uint32_t tex = ink.art.remote(url))
+        {
+            list.image(tex, r, gfx::kFullUv, Color::rgb(0xffffff), radius);
+            return;
+        }
     if (const std::uint32_t tex = texture(ink.art.avatars, art))
         list.image(tex, r, gfx::kFullUv, Color::rgb(0xffffff), radius);
     else
@@ -81,7 +87,7 @@ void avatar(DrawList &list, const Ink &ink, const discord::User &user, float cx,
     const bool in_voice = !user.voice_room.empty();
     if (in_voice)
         list.ring(cx, cy, radius + 5.0f, 4.0f, kOnline);
-    art_circle(list, ink, user.art, initial(user.name), cx, cy, radius);
+    art_circle(list, ink, user.art, initial(user.name), cx, cy, radius, user.avatar_url);
     if (!show_status)
         return;
 

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "discord/client.hpp"
+#include "third_party/stb/stb_image.h"
 
 #include <arpa/inet.h>
 #include <csignal>
@@ -11,6 +12,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cerrno>
 #include <cstring>
 #include <chrono>
@@ -532,6 +534,64 @@ void Client::publish()
     ++version_;
 }
 
+void Client::want_image(const std::string &url)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    image_queue_.push_back(url);
+}
+
+std::vector<Image> Client::take_images()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<Image> out;
+    out.swap(images_);
+    return out;
+}
+
+// A few images per pass, so polling keeps its pace.
+// ponytail: serial through the single-threaded core; parallel fetches if avatars feel slow.
+void Client::fetch_images()
+{
+    for (int i = 0; i < 4; ++i)
+    {
+        Image image;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (image_queue_.empty())
+                return;
+            image.url = image_queue_.front();
+            image_queue_.pop_front();
+        }
+        std::string query;
+        for (const unsigned char c : image.url)
+        {
+            if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~')
+                query += static_cast<char>(c);
+            else
+            {
+                char hex[4];
+                std::snprintf(hex, sizeof hex, "%%%02X", c);
+                query += hex;
+            }
+        }
+        const Reply reply = http(port_, "GET", "/api/image?url=" + query);
+        if (reply.status == 200)
+        {
+            int n = 0;
+            if (std::uint8_t *px = stbi_load_from_memory(reinterpret_cast<const std::uint8_t *>(reply.body.data()),
+                                                         static_cast<int>(reply.body.size()), &image.w, &image.h, &n, 4))
+            {
+                image.rgba.assign(px, px + static_cast<std::size_t>(image.w) * image.h * 4);
+                stbi_image_free(px);
+            }
+            else
+                image.w = image.h = 0;
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        images_.push_back(std::move(image));
+    }
+}
+
 void Client::run()
 {
     hui::sys::log("[CLIENT] start, core on 127.0.0.1:%d", port_);
@@ -564,6 +624,8 @@ void Client::run()
             }
             handle(request);
         }
+        if (ready_)
+            fetch_images();
         usleep(250000);
     }
 }

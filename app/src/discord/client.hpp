@@ -14,6 +14,7 @@
 #include <deque>
 #include <mutex>
 #include <string>
+#include <vector>
 #include <pthread.h>
 
 #include "discord/model.hpp"
@@ -25,6 +26,15 @@ namespace discord
 // The core API versions this app understands (ROADMAP.md, "Core API version").
 inline constexpr int kApiVersionMin = 1;
 inline constexpr int kApiVersionMax = 1;
+
+// A Discord image fetched through the core, decoded to RGBA (w 0: it failed).
+struct Image
+{
+    std::string url;
+    int w = 0;
+    int h = 0;
+    std::vector<std::uint8_t> rgba;
+};
 
 class Client
 {
@@ -39,6 +49,9 @@ class Client
     void submit(const Request &request);
     // Copies the latest snapshot into out when it changed since the last call.
     bool take(Snapshot &out);
+    // Queues a CDN image (avatar, icon) for download; take_images hands back the results.
+    void want_image(const std::string &url);
+    std::vector<Image> take_images();
 
   private:
     void run();
@@ -47,6 +60,7 @@ class Client
     void poll_events();
     void poll_mentions();
     void handle(const Request &request);
+    void fetch_images();
     void publish(); // marks the snapshot changed (lock held by caller)
 
     const int port_;
@@ -58,6 +72,8 @@ class Client
     std::uint64_t version_ = 0;
     std::uint64_t taken_ = 0;
     std::deque<Request> queue_;
+    std::deque<std::string> image_queue_; // guarded by mutex_
+    std::vector<Image> images_;           // guarded by mutex_
     long events_next_ = -1; // -1: skip the backlog on first contact
     std::int64_t last_chat_ms_ = 0;
     std::int64_t last_mentions_ms_ = 0;

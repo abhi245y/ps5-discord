@@ -36,8 +36,9 @@ void avatar(DrawList &list, const Ink &ink, const discord::User &user, float cx,
             bool show_status = true);
 
 // The same circle for something that is not a user (a server icon).
+// url: the real picture (avatar, server icon) when it has loaded; art and letter until then.
 void art_circle(DrawList &list, const Ink &ink, discord::ArtIndex art, const std::string &letter, float cx,
-                float cy, float radius);
+                float cy, float radius, const std::string &url = {});
 
 // A wide placeholder scene filling r (rooms, server banners).
 void scene(DrawList &list, const Ink &ink, discord::ArtIndex art, const Rect &r, float radius);

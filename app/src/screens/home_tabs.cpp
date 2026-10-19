@@ -365,7 +365,7 @@ void Home::draw_tab(const discord::Snapshot &s, DrawList &list) const
             const float icx = r.x + 72.0f;
             const float icy = r.y + kBannerH + 8.0f;
             list.circle(icx, icy, 60.0f, kRaised);
-            art_circle(list, ink_, g.art + 2, g.name.substr(0, 1), icx, icy, 54.0f);
+            art_circle(list, ink_, g.art + 2, g.name.substr(0, 1), icx, icy, 54.0f, g.icon_url);
             ui::text(list, ink_.fonts.semibold, fit(ink_.fonts.semibold, g.name, 31.0f, r.w - 250.0f), r.x + 148.0f,
                      r.y + kBannerH + 52.0f, 31.0f, kText);
             int live = 0;

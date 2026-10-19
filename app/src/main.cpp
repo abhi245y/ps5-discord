@@ -38,6 +38,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 extern "C" void hui_heap_stats(std::size_t *live_bytes, std::size_t *peak_bytes,
@@ -242,12 +243,22 @@ int main()
     gfx::Shaper shaper;
     app::attach_text_engine(shaper, renderer, std::string(kAssets) + "/fonts",
                             {&regular, &semibold, &display_font, &mono});
-    const app::ArtSet art = app::load_art(renderer, std::string(kAssets) + "/art");
+    app::ArtSet art = app::load_art(renderer, std::string(kAssets) + "/art");
     // The account comes from the core payload over loopback (discord::Client);
     // a sample account stands in only for the scripted tour run.
     discord::Snapshot snapshot;
     discord::Client client;
     const int utc_offset = console_utc_minutes();
+    // Discord images: asked for while drawing, downloaded by the client, uploaded here.
+    std::unordered_map<std::string, std::uint32_t> remote_textures; // 0: on its way or failed
+    art.remote = [&](const std::string &url) -> std::uint32_t {
+        const auto found = remote_textures.find(url);
+        if (found != remote_textures.end())
+            return found->second;
+        remote_textures.emplace(url, 0u);
+        client.want_image(url);
+        return 0;
+    };
 
     ps5::Pad pad;
     pad.open();
@@ -367,6 +378,9 @@ int main()
         if (!tour) // the tour runs on the sample account
             client.take(snapshot);
         snapshot.utc_offset_minutes = utc_offset;
+        for (const discord::Image &image : client.take_images())
+            if (image.w > 0)
+                remote_textures[image.url] = renderer.batch().create_texture(image.w, image.h, image.rgba.data());
         shell.update(input, dt);
         if (shell.take_settings_changed())
         {
