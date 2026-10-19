@@ -593,6 +593,8 @@ Client::~Client()
         pthread_join(thread_, nullptr);
     if (image_started_)
         pthread_join(image_thread_, nullptr);
+    if (events_started_)
+        pthread_join(events_thread_, nullptr);
 }
 
 // pthread rather than std::thread, as spot5 does on the console.
@@ -610,6 +612,13 @@ void Client::start()
                        return nullptr;
                    },
                    this) == 0;
+    events_started_ = pthread_create(
+                          &events_thread_, &attr,
+                          [](void *self) -> void * {
+                              static_cast<Client *>(self)->run_events();
+                              return nullptr;
+                          },
+                          this) == 0;
     image_started_ = pthread_create(
                          &image_thread_, &attr,
                          [](void *self) -> void * {
@@ -618,7 +627,7 @@ void Client::start()
                          },
                          this) == 0;
     pthread_attr_destroy(&attr);
-    if (!started_ || !image_started_)
+    if (!started_ || !image_started_ || !events_started_)
         hui::sys::log("[CLIENT] could not start its threads");
 }
 
@@ -755,7 +764,6 @@ void Client::run()
         {
             if (now - last_chat_ms_ >= 3000)
                 poll_chat();
-            poll_events();
             if (now - last_mentions_ms_ >= 30000)
                 poll_mentions();
         }
@@ -851,23 +859,35 @@ void Client::poll_chat()
     publish();
 }
 
-void Client::poll_events()
+void Client::run_events()
 {
-    const Reply reply = http(port_, "GET", "/api/events?since=" + std::to_string(std::max(0L, events_next_)));
+    while (!stop_)
+    {
+        if (!ready_ || !poll_events())
+            usleep(250000); // not signed in, or the core is away: try again shortly
+    }
+}
+
+// One long poll: the core answers when an event lands, or after a few seconds.
+bool Client::poll_events()
+{
+    const std::string wait = events_next_ < 0 ? "0" : "6"; // under the 8 s socket timeout
+    const Reply reply =
+        http(port_, "GET", "/api/events?since=" + std::to_string(std::max(0L, events_next_)) + "&wait=" + wait);
     if (reply.status != 200)
-        return;
+        return false;
     const json e = json::parse(reply.body, nullptr, false);
     if (e.is_discarded())
-        return;
+        return true;
     const long next = static_cast<long>(e.value("next", 0.0));
     if (events_next_ < 0) // first contact: start from now, history comes from /api/messages
     {
         events_next_ = next;
-        return;
+        return true;
     }
     events_next_ = next;
     if (!e.contains("events") || e["events"].empty())
-        return;
+        return true;
     std::lock_guard<std::mutex> lock(mutex_);
     for (const json &ev : e["events"])
     {
@@ -933,6 +953,7 @@ void Client::poll_events()
         }
     }
     publish();
+    return true;
 }
 
 // Inbox entries are unread while their channel still counts mentions of us;

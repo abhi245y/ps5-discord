@@ -5,10 +5,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define EVENT_RING 256
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t event_ready = PTHREAD_COND_INITIALIZER; // a new event, for long polls
 static char token[256];
 // The live account, served whole by /api/chat:
 //   me, guilds[] (text channels with last_message_id, voice rooms), dms[],
@@ -469,6 +471,7 @@ static void push_event(const char *type, cJSON *d)
     free(events[next_event % EVENT_RING]);
     events[next_event % EVENT_RING] = s;
     next_event++;
+    pthread_cond_broadcast(&event_ready);
     cJSON_Delete(e);
 }
 
@@ -575,9 +578,24 @@ char *chat_tree_json(void)
     return s;
 }
 
-char *chat_events_json(long since)
+char *chat_events_json(long since, int wait_ms)
 {
     pthread_mutex_lock(&lock);
+    // Long poll: with nothing new, wait for the next event (or the time limit).
+    // A cursor past the end (the core restarted) answers at once so the app resyncs.
+    if (wait_ms > 0 && since == next_event) {
+        struct timespec until;
+        clock_gettime(CLOCK_REALTIME, &until);
+        until.tv_sec += wait_ms / 1000;
+        until.tv_nsec += (long)(wait_ms % 1000) * 1000000L;
+        if (until.tv_nsec >= 1000000000L) {
+            until.tv_sec++;
+            until.tv_nsec -= 1000000000L;
+        }
+        while (since == next_event)
+            if (pthread_cond_timedwait(&event_ready, &lock, &until) != 0)
+                break;
+    }
     long first = next_event > EVENT_RING ? next_event - EVENT_RING : 0;
     if (since < first)
         since = first;

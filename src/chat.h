@@ -12,4 +12,4 @@ void chat_dispatch(const char *type, cJSON *d);
 
 // {"me", "guilds", "dms", "users", "friends", "presence", "voice", "reads", "my_voice"}; caller frees
 char *chat_tree_json(void);
-char *chat_events_json(long since);      // {"next":N, "events":[...]}; caller frees
+char *chat_events_json(long since, int wait_ms); // {"next":N, "events":[...]}; waits up to wait_ms for one; caller frees

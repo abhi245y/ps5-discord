@@ -57,16 +57,19 @@ class Client
     void run();
     void poll_state();
     void poll_chat();
-    void poll_events();
+    bool poll_events(); // false: the core did not answer
     void poll_mentions();
     void handle(const Request &request);
     void fetch_images();
     void run_images();
+    void run_events();
     void publish(); // marks the snapshot changed (lock held by caller)
 
     const int port_;
     pthread_t thread_{};
     pthread_t image_thread_{}; // downloads images apart from polling, so neither waits
+    pthread_t events_thread_{}; // holds a long poll open: messages arrive as they are sent
+    bool events_started_ = false;
     bool started_ = false;
     bool image_started_ = false;
     std::atomic<bool> stop_{false};
@@ -78,7 +81,7 @@ class Client
     std::deque<std::string> image_queue_; // guarded by mutex_
     std::vector<Image> images_;           // guarded by mutex_
     long events_next_ = -1; // -1: skip the backlog on first contact
-    std::int64_t last_chat_ms_ = 0;
+    std::atomic<std::int64_t> last_chat_ms_{0}; // the events thread zeroes it to ask for a refresh
     std::int64_t last_mentions_ms_ = 0;
     std::atomic<bool> ready_{false}; // read by the image thread too
 };

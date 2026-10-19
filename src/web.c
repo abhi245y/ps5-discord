@@ -281,9 +281,11 @@ static void handle(int c, int local)
     } else if (get && strcmp(path, "/api/chat") == 0) {
         reply_json(c, chat_tree_json());
     } else if (get && strcmp(path, "/api/events") == 0) {
-        char since[24] = "0";
+        char since[24] = "0", wait[8] = "0";
         query_get(query, "since", since, sizeof since);
-        reply_json(c, chat_events_json(strtol(since, NULL, 10)));
+        query_get(query, "wait", wait, sizeof wait); // seconds, capped: a long poll
+        int seconds = atoi(wait);
+        reply_json(c, chat_events_json(strtol(since, NULL, 10), (seconds > 20 ? 20 : seconds < 0 ? 0 : seconds) * 1000));
     } else if (get && strcmp(path, "/api/messages") == 0) {
         api_messages(c, query);
     } else if (post && strcmp(path, "/api/send") == 0) {

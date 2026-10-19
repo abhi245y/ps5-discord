@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include <zlib.h>
 
 #include <stdlib.h>
@@ -102,11 +103,18 @@ static void test_chat(void)
                            "\"author\":{\"id\":\"2\",\"username\":\"bob\",\"email\":\"x\"}}");
     chat_dispatch("MESSAGE_CREATE", m);
     cJSON_Delete(m);
-    char *e = chat_events_json(0);
+    char *e = chat_events_json(0, 0);
     assert(e && strstr(e, "\"next\":1") && strstr(e, "\"content\":\"hi\"") && !strstr(e, "email"));
     free(e);
-    e = chat_events_json(1);
+    e = chat_events_json(1, 0);
     assert(e && strstr(e, "\"events\":[]"));
+    free(e);
+    time_t before = time(NULL);
+    e = chat_events_json(1, 1000); // nothing new: the long poll waits, then answers empty
+    assert(e && strstr(e, "\"events\":[]") && time(NULL) - before >= 1);
+    free(e);
+    e = chat_events_json(99, 5000); // past the end (core restarted): answers at once
+    assert(e && time(NULL) - before <= 3);
     free(e);
     t = chat_tree_json();
     assert(strstr(t, "\"last_message_id\":\"30\"")); // the channel moved to the top
