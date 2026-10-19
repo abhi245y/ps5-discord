@@ -286,6 +286,36 @@ int main(int argc, char **argv)
                      renderer.last_instances(), renderer.last_draw_calls(), glGetError());
     };
 
+    // ps5-discord: the states before READY, from a copy of the sample account.
+    {
+        const discord::Snapshot ready = snapshot;
+        hui::InputFrame idle;
+        idle.connected = true;
+        const auto settle = [&] {
+            for (int frame = 0; frame < 90; ++frame) // glyphs rasterise a few per frame
+            {
+                shell.update(idle, kDt);
+                shell.compose(renderer);
+                shaper.upload(renderer.batch());
+            }
+        };
+        snapshot.connection = discord::Connection::signing_in;
+        snapshot.login_qr_size = 25;
+        snapshot.login_qr.assign(25 * 25, '0');
+        for (int i = 0; i < 25 * 25; ++i) // a stand-in pattern; the core sends the real code
+            snapshot.login_qr[static_cast<std::size_t>(i)] = ((i * 7919) % 13) < 6 ? '1' : '0';
+        settle();
+        render("00-signin");
+        snapshot.connection = discord::Connection::reconnecting;
+        settle();
+        render("00-reconnecting");
+        snapshot.connection = discord::Connection::starting;
+        snapshot.status_message = "Waiting for the ps5-discord core. Send its payload to elfldr (port 9021).";
+        settle();
+        render("00-waiting-core");
+        snapshot = ready;
+    }
+
     if (const char *strip = std::getenv("HUI_STRIP"))
     {
         int from = 0;

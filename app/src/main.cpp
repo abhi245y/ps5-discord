@@ -18,6 +18,7 @@
 #include "core/version.hpp"
 #include "app/art.hpp"
 #include "app/text_engine.hpp"
+#include "discord/client.hpp"
 #include "discord/sample.hpp"
 #include "gfx/canvas.hpp"
 #include "gfx/renderer.hpp"
@@ -190,8 +191,10 @@ int main()
     app::attach_text_engine(shaper, renderer, std::string(kAssets) + "/fonts",
                             {&regular, &semibold, &display_font, &mono});
     const app::ArtSet art = app::load_art(renderer, std::string(kAssets) + "/art");
-    // ponytail: sample account until the core client lands (M3).
-    discord::Snapshot snapshot = discord::sample_snapshot();
+    // The account comes from the core payload over loopback (discord::Client);
+    // a sample account stands in only for the scripted tour run.
+    discord::Snapshot snapshot;
+    discord::Client client;
 
     ps5::Pad pad;
     pad.open();
@@ -210,11 +213,11 @@ int main()
     for (const std::string &error : bank.errors)
         sys::log("[HUI] sound rejected %s", error.c_str());
 
-    // ponytail: requests change the sample account until the core client lands (M3).
-    const std::function<void(const discord::Request &)> submit = [&snapshot](const discord::Request &r) {
-        discord::apply_sample(snapshot, r);
+    const std::function<void(const discord::Request &)> submit = [&client](const discord::Request &r) {
+        client.submit(r);
     };
     app::Shell shell(fonts, snapshot, art, submit, kDataRoot, renderer.glass_texture());
+    client.start();
     const std::string version = read_content_version("/app0/sce_sys/param.json");
     shell.set_version(version);
     sys::log("[HUI] version %s designs=%zu", version.empty() ? "unknown" : version.c_str(),
@@ -253,6 +256,7 @@ int main()
             std::remove(report_path.c_str()); // a new report must not be taken for an old one
             const bool all = std::strcmp(argument, "all") == 0;
             tour = std::make_unique<app::Tour>(shell, all ? std::string() : std::string(argument));
+            snapshot = discord::sample_snapshot();
             sys::log("[HUI] tour requested: %s token=%s", argument, token);
         }
     };
@@ -283,6 +287,8 @@ int main()
         if (tour)
             input = tour->step(dt);
 
+        if (!tour) // the tour runs on the sample account
+            client.take(snapshot);
         shell.update(input, dt);
         if (shell.take_settings_changed())
         {

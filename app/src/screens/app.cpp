@@ -14,6 +14,7 @@
 #include "screens/draw.hpp"
 #include "screens/chat.hpp"
 #include "screens/home.hpp"
+#include "screens/signin.hpp"
 #include "screens/style.hpp"
 
 namespace screens
@@ -112,8 +113,13 @@ class DiscordApp final : public app::Concept
 
     void update(const hui::InputFrame &input, float dt, app::Feedback &feedback) override
     {
+        time_ += dt;
         std::vector<discord::Request> requests;
-        if (route_ == Route::home)
+        if (context_.snapshot.connection != discord::Connection::ready)
+        {
+            // Sign-in and waiting screens take no input beyond the system's.
+        }
+        else if (route_ == Route::home)
         {
             home_.update(context_.snapshot, input, dt, feedback);
             if (std::optional<HomeOpen> open = home_.take_open())
@@ -140,7 +146,11 @@ class DiscordApp final : public app::Concept
         // A short fade in on every screen change.
         frame.scene.rounded_rect({0, 0, 1920, 1080}, 0.0f, style::kGround);
         frame.scene.push_opacity(std::clamp(fade_.value, 0.0f, 1.0f));
-        if (route_ == Route::home)
+        if (context_.snapshot.connection == discord::Connection::signing_in)
+            draw_sign_in(frame.scene, ink_, context_.snapshot, time_);
+        else if (context_.snapshot.connection != discord::Connection::ready)
+            draw_waiting(frame.scene, ink_, context_.snapshot, time_);
+        else if (route_ == Route::home)
             home_.draw(context_.snapshot, frame.scene);
         else
             chat_.draw(context_.snapshot, frame.scene);
@@ -164,6 +174,7 @@ class DiscordApp final : public app::Concept
     Chat chat_;
     Route route_ = Route::home;
     hui::tween::Spring fade_;
+    float time_ = 0.0f;
 };
 
 } // namespace

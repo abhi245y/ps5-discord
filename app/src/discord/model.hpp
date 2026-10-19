@@ -64,7 +64,8 @@ struct Channel
     std::string name;
     ChannelKind kind = ChannelKind::text;
     std::string topic;
-    int unread = 0;
+    int unread = 0;          // mentions of you, shown as a count
+    bool has_unread = false; // newer messages than you have read, shown as a dot
     bool mentioned = false;
 };
 
@@ -151,6 +152,11 @@ enum class Connection : std::uint8_t
 struct Snapshot
 {
     Connection connection = Connection::starting;
+    std::string status_message; // why we are starting or reconnecting, for the user
+    // While signing in: the core's login QR, row-major '1' = dark module.
+    std::string login_qr;
+    int login_qr_size = 0;
+    bool login_scanned = false; // waiting for approval on the phone
     std::int64_t now_ms = 0; // for "12m ago"
     User me;
     std::vector<User> friends; // everyone the Home rows can show
