@@ -301,6 +301,8 @@ static cJSON *guild_tree(cJSON *g, const char *me, cJSON *my_roles)
     copy(og, g, "id");
     copy(og, props ? props : g, "name");
     copy(og, props ? props : g, "icon");
+    copy(og, props ? props : g, "banner");
+    copy(og, props ? props : g, "splash");
     copy(og, g, "member_count");
     cJSON_AddArrayToObject(og, "channels");
     cJSON_AddArrayToObject(og, "rooms");
@@ -430,7 +432,15 @@ static void push_event(const char *type, cJSON *d)
     copy(e, d, "id");
     copy(e, d, "channel_id");
     copy(e, d, "guild_id");
-    if (strcmp(type, "MESSAGE_DELETE") != 0)
+    if (strncmp(type, "MESSAGE_REACTION_", 17) == 0) {
+        copy(e, d, "message_id");
+        copy(e, d, "user_id");
+        cJSON *em = cJSON_GetObjectItem(d, "emoji");
+        cJSON *oe = cJSON_AddObjectToObject(e, "emoji");
+        copy(oe, em, "name");
+        copy(oe, em, "id");
+    }
+    else if (strcmp(type, "MESSAGE_DELETE") != 0)
     {
         copy(e, d, "content");
         copy(e, d, "timestamp");
@@ -441,6 +451,8 @@ static void push_event(const char *type, cJSON *d)
         copy(e, d, "referenced_message");
         copy(e, d, "type");
         copy(e, d, "sticker_items");
+        copy(e, d, "reactions");
+        copy(e, d, "message_snapshots");
         cJSON *embeds = cJSON_AddArrayToObject(e, "embeds"), *em; // titles only: embeds can be large
         cJSON_ArrayForEach(em, cJSON_GetObjectItem(d, "embeds"))
         {
@@ -545,7 +557,8 @@ void chat_dispatch(const char *type, cJSON *d)
         cJSON_AddItemToArray(cJSON_GetObjectItem(tree, "dms"), oc);
     }
     else if (strncmp(type, "MESSAGE_", 8) == 0 &&
-             (strcmp(type + 8, "CREATE") == 0 || strcmp(type + 8, "UPDATE") == 0 || strcmp(type + 8, "DELETE") == 0))
+             (strcmp(type + 8, "CREATE") == 0 || strcmp(type + 8, "UPDATE") == 0 || strcmp(type + 8, "DELETE") == 0 ||
+              strcmp(type + 8, "REACTION_ADD") == 0 || strcmp(type + 8, "REACTION_REMOVE") == 0))
     {
         if (strcmp(type, "MESSAGE_CREATE") == 0)
             message_created(d);

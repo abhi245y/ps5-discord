@@ -122,7 +122,25 @@ class DiscordApp final : public app::Concept
         else if (route_ == Route::home)
         {
             home_.update(context_.snapshot, input, dt, feedback);
-            if (std::optional<HomeOpen> open = home_.take_open())
+            std::optional<HomeOpen> open = home_.take_open();
+            if (open && open->channel_id.empty() && !open->user_id.empty())
+            {
+                // No DM with them yet: ask for one and open it when it arrives.
+                discord::Request r;
+                r.kind = discord::Request::Kind::open_dm;
+                r.user_id = open->user_id;
+                requests.push_back(r);
+                waiting_dm_ = open->user_id;
+                open.reset();
+            }
+            if (!open && !waiting_dm_.empty())
+                if (const auto dm = context_.snapshot.dm_by_user.find(waiting_dm_);
+                    dm != context_.snapshot.dm_by_user.end())
+                {
+                    open = HomeOpen{"", dm->second, waiting_dm_};
+                    waiting_dm_.clear();
+                }
+            if (open)
             {
                 chat_.open(context_.snapshot, open->guild_id, open->channel_id, requests);
                 route_ = Route::chat;
@@ -173,6 +191,7 @@ class DiscordApp final : public app::Concept
     Home home_;
     Chat chat_;
     Route route_ = Route::home;
+    std::string waiting_dm_; // a friend whose new DM is being made, opened when it lands
     hui::tween::Spring fade_;
     float time_ = 0.0f;
 };

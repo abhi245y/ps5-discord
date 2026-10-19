@@ -65,7 +65,12 @@ struct ArtSet
     std::vector<std::uint32_t> scenes;  // wide scenes for rooms and servers
     // Discord images (avatars, server icons) by URL: the texture once it has
     // arrived, 0 meanwhile (asking for it starts the download). Unset on the host.
-    std::function<std::uint32_t(const std::string &)> remote;
+    struct Remote
+    {
+        std::uint32_t texture = 0;
+        int w = 0, h = 0;
+    };
+    std::function<Remote(const std::string &)> remote;
 };
 
 struct Context

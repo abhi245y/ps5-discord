@@ -36,21 +36,22 @@ constexpr float kRight = 1920.0f - kMargin;
 constexpr float kWidth = kRight - kMargin;
 constexpr float kHeaderY = 34.0f;
 constexpr float kHeaderH = 68.0f;
-constexpr float kChipsY = 122.0f;
-constexpr float kChipH = 62.0f;
-constexpr float kComposerY = 900.0f;
-constexpr float kComposerH = 88.0f;
+constexpr float kChipsY = 112.0f;
+constexpr float kChipH = 54.0f;
+constexpr float kComposerY = 916.0f;
+constexpr float kComposerH = 76.0f;
 constexpr float kListBottom = kComposerY - 14.0f;
 
-constexpr float kAvatarCol = 132.0f; // avatar column width
-constexpr float kTextSize = 31.0f;
-constexpr float kLineH = 43.0f;
-constexpr float kNameLine = 42.0f;
-constexpr float kReplyLine = 34.0f;
+constexpr float kAvatarCol = 112.0f; // avatar column width
+constexpr float kTextSize = 27.0f;
+constexpr float kLineH = 37.0f;
+constexpr float kNameLine = 36.0f;
+constexpr float kReplyLine = 30.0f;
 constexpr float kAttachH = 128.0f;
-constexpr float kPadTop = 14.0f;
+constexpr float kReactH = 40.0f;
+constexpr float kPadTop = 10.0f;
 constexpr float kPadGrouped = 2.0f;
-constexpr float kPadBottom = 14.0f;
+constexpr float kPadBottom = 10.0f;
 constexpr float kDmBubbleW = 860.0f;
 constexpr std::int64_t kGroupMs = 7 * 60 * 1000;
 
@@ -65,11 +66,9 @@ struct Action_
 const Action_ kActions[] = {
     {ui::Button::cross, "Reply"},
     {ui::Button::square, "React"},
-    {ui::Button::none, "Copy text"},
-    {ui::Button::none, "Mark unread"},
-    {ui::Button::none, "Mention"},
 };
-constexpr int kActionCount = 5;
+// ponytail: copy, mark unread and mention return with free typing (system keyboard).
+constexpr int kActionCount = 2;
 const char *const kReactions[] = {"\xE2\x9D\xA4\xEF\xB8\x8F", "\xF0\x9F\x91\x8D", "\xF0\x9F\x98\x82",
                                   "\xF0\x9F\x98\xAE", "\xF0\x9F\x94\xA5"};
 constexpr int kReactionCount = 5;
@@ -105,7 +104,7 @@ const std::vector<discord::Message> &Chat::messages(const discord::Snapshot &s) 
 {
     static const std::vector<discord::Message> kNone;
     const auto found = s.messages.find(channel_id_);
-    return found == s.messages.end() ? kNone : found->second;
+    return found == s.messages.end() || !found->second ? kNone : *found->second;
 }
 
 std::vector<const discord::Channel *> Chat::chips(const discord::Snapshot &s) const
@@ -116,6 +115,20 @@ std::vector<const discord::Channel *> Chat::chips(const discord::Snapshot &s) co
             if (c.kind != discord::ChannelKind::voice)
                 out.push_back(&c);
     return out;
+}
+
+// The other person in this DM: from the DM list, else from their messages.
+const discord::User *Chat::dm_person(const discord::Snapshot &s) const
+{
+    for (const auto &[user_id, channel] : s.dm_by_user)
+        if (channel == channel_id_)
+            if (const discord::User *u = discord::find_user(s, user_id))
+                return u;
+    for (const discord::Message &m : messages(s))
+        if (m.author_id != s.me.id)
+            if (const discord::User *u = author_of(s, m))
+                return u;
+    return nullptr;
 }
 
 bool Chat::can_send(const discord::Snapshot &s) const
@@ -159,6 +172,8 @@ float Chat::row_height(const discord::Snapshot &s, int index, bool grouped) cons
         h += kLineH * static_cast<float>(lines);
     }
     h += static_cast<float>(m.attachments.size()) * (kAttachH + 10.0f);
+    if (!m.reactions.empty())
+        h += kReactH + 10.0f;
     if (dm())
         h += 24.0f; // bubble padding
     return h + kPadBottom;
@@ -232,9 +247,19 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
             quick_ = 0;
             feedback.play(hui::audio::Cue::open);
         }
-        else if (input.is_pressed(Action::confirm))
+        else if ((input.is_pressed(Action::confirm) && action_ == 1) || input.is_pressed(Action::west))
         {
-            // ponytail: react, copy, mark unread and mention need core API routes (0.3.0).
+            action_ = kActionCount; // React (or Square): to the emoji row
+            feedback.play(hui::audio::Cue::focus);
+        }
+        else if (input.is_pressed(Action::confirm) && action_ >= kActionCount)
+        {
+            discord::Request r;
+            r.kind = discord::Request::Kind::react;
+            r.channel_id = channel_id_;
+            r.message_id = ms[static_cast<std::size_t>(focus_)].id;
+            r.emoji = kReactions[action_ - kActionCount];
+            requests.push_back(r);
             mode_ = Mode::browse;
             feedback.play(hui::audio::Cue::select);
         }
@@ -379,11 +404,7 @@ void Chat::draw_header(const discord::Snapshot &s, DrawList &list) const
 {
     if (dm())
     {
-        const discord::Message *any = nullptr;
-        for (const discord::Message &m : messages(s))
-            if (m.author_id != s.me.id)
-                any = &m;
-        const discord::User *other = any ? author_of(s, *any) : nullptr;
+        const discord::User *other = dm_person(s);
         if (other)
         {
             avatar(list, ink_, *other, kMargin + 56.0f, kHeaderY + 40.0f, 54.0f);
@@ -411,9 +432,9 @@ void Chat::draw_header(const discord::Snapshot &s, DrawList &list) const
         if (c->id == channel_id_)
             channel_name = c->name;
     float x = kMargin;
-    x += ui::text(list, ink_.fonts.display, g ? g->name : std::string(), x, 84.0f, 60.0f, kText);
-    x += ui::text(list, ink_.fonts.display, "  /  ", x, 84.0f, 60.0f, kFaint);
-    ui::text(list, ink_.fonts.display, "#" + channel_name, x, 84.0f, 60.0f, Color::rgb(0xb9bfdc));
+    x += ui::text(list, ink_.fonts.display, g ? g->name : std::string(), x, 78.0f, 52.0f, kText);
+    x += ui::text(list, ink_.fonts.display, "  /  ", x, 78.0f, 52.0f, kFaint);
+    ui::text(list, ink_.fonts.display, "#" + channel_name, x, 78.0f, 52.0f, Color::rgb(0xb9bfdc));
     voice_pill(list, ink_, s.voice, kHeaderY, kHeaderH);
 
     constexpr float kChipGap = 16.0f;
@@ -486,7 +507,7 @@ void Chat::draw_message(const discord::Snapshot &s, DrawList &list, const Row &r
     {
         width = kDmBubbleW - 48.0f;
         const float bw = kDmBubbleW;
-        bubble = mine ? Rect{kRight - kAvatarCol + 30.0f - bw, y + (row.grouped ? 0.0f : kNameLine), bw,
+        bubble = mine ? Rect{kRight - kAvatarCol + 12.0f - bw, y + (row.grouped ? 0.0f : kNameLine), bw,
                              r.h - (row.grouped ? kPadGrouped : kPadTop) - kPadBottom - (row.grouped ? 0.0f : kNameLine)}
                       : Rect{kMargin + kAvatarCol - 20.0f, y + (row.grouped ? 0.0f : kNameLine), bw,
                              r.h - (row.grouped ? kPadGrouped : kPadTop) - kPadBottom - (row.grouped ? 0.0f : kNameLine)};
@@ -513,7 +534,7 @@ void Chat::draw_message(const discord::Snapshot &s, DrawList &list, const Row &r
         {
             discord::User face = *u;
             face.voice_room.clear();
-            avatar(list, ink_, face, acx, y + 40.0f, 44.0f);
+            avatar(list, ink_, face, acx, y + 34.0f, 36.0f);
         }
         else
         {
@@ -521,22 +542,22 @@ void Chat::draw_message(const discord::Snapshot &s, DrawList &list, const Row &r
             discord::User face;
             face.name = author_name(s, m);
             face.art = static_cast<discord::ArtIndex>(std::hash<std::string>{}(m.author_id) % 12);
-            avatar(list, ink_, face, acx, y + 40.0f, 44.0f, false);
+            avatar(list, ink_, face, acx, y + 34.0f, 36.0f, false);
         }
         const std::string name = mine ? std::string("You") : author_name(s, m);
         const std::string when = clock_time(m.time_ms, s.utc_offset_minutes);
         if (dm() && mine)
         {
             const float tw = ink_.fonts.regular.measure(when, 22.0f);
-            ui::text(list, ink_.fonts.regular, when, kRight - kAvatarCol + 30.0f, y + 30.0f, 22.0f, kDim, gfx::Align::right);
-            ui::text(list, ink_.fonts.semibold, name, kRight - kAvatarCol + 30.0f - tw - 16.0f, y + 30.0f, 29.0f, kText,
+            ui::text(list, ink_.fonts.regular, when, kRight - kAvatarCol + 12.0f, y + 27.0f, 20.0f, kDim, gfx::Align::right);
+            ui::text(list, ink_.fonts.semibold, name, kRight - kAvatarCol + 12.0f - tw - 16.0f, y + 27.0f, 25.0f, kText,
                      gfx::Align::right);
         }
         else
         {
             const float nx = dm() ? bubble.x + 4.0f : text_x;
-            const float nw = ui::text(list, ink_.fonts.semibold, name, nx, y + 30.0f, 29.0f, kText);
-            ui::text(list, ink_.fonts.regular, when, nx + nw + 16.0f, y + 30.0f, 22.0f, kDim);
+            const float nw = ui::text(list, ink_.fonts.semibold, name, nx, y + 27.0f, 25.0f, kText);
+            ui::text(list, ink_.fonts.regular, when, nx + nw + 14.0f, y + 27.0f, 20.0f, kDim);
         }
         y += kNameLine;
     }
@@ -554,7 +575,7 @@ void Chat::draw_message(const discord::Snapshot &s, DrawList &list, const Row &r
 
     if (!m.content.empty())
     {
-        float line_y = y + 31.0f;
+        float line_y = y + 27.0f;
         float last_end = text_x, last_y = line_y;
         for (const std::string &line : ink_.fonts.regular.font->wrap(m.content, kTextSize, width))
         {
@@ -562,9 +583,9 @@ void Chat::draw_message(const discord::Snapshot &s, DrawList &list, const Row &r
             std::string rest = line;
             if (rest.rfind(mention_token, 0) == 0)
             {
-                const float mw = ink_.fonts.semibold.measure(mention_token, 28.0f);
-                list.rounded_rect({lx - 4.0f, line_y - 30.0f, mw + 24.0f, 42.0f}, 10.0f, kCoral);
-                ui::text(list, ink_.fonts.semibold, mention_token, lx + 8.0f, line_y, 28.0f, kText);
+                const float mw = ink_.fonts.semibold.measure(mention_token, 25.0f);
+                list.rounded_rect({lx - 4.0f, line_y - 27.0f, mw + 22.0f, 37.0f}, 9.0f, kCoral);
+                ui::text(list, ink_.fonts.semibold, mention_token, lx + 7.0f, line_y, 25.0f, kText);
                 lx += mw + 34.0f;
                 rest = rest.substr(mention_token.size());
                 while (!rest.empty() && rest.front() == ' ')
@@ -585,12 +606,34 @@ void Chat::draw_message(const discord::Snapshot &s, DrawList &list, const Row &r
         const Rect card{text_x, y + 6.0f, 560.0f, kAttachH};
         list.rounded_rect(card, 16.0f, kRaisedHigh);
         if (a.image)
-            scene(list, ink_, a.art, {card.x + 10.0f, card.y + 10.0f, 220.0f, card.h - 20.0f}, 10.0f);
+            scene(list, ink_, a.art, {card.x + 10.0f, card.y + 10.0f, 220.0f, card.h - 20.0f}, 10.0f, a.url);
         ui::text(list, ink_.fonts.semibold, fit(ink_.fonts.semibold, a.name, 26.0f, 290.0f), card.x + 250.0f, card.y + 56.0f,
                  26.0f, kText);
         ui::text(list, ink_.fonts.regular, a.size_text, card.x + 250.0f, card.y + 92.0f, 22.0f, kDim);
         y += kAttachH + 10.0f;
     }
+
+    if (!m.reactions.empty())
+    {
+        float rx = text_x;
+        for (const discord::Reaction &reaction : m.reactions)
+        {
+            const std::string count = std::to_string(reaction.count);
+            const float ew = ink_.fonts.regular.measure(reaction.emoji, 24.0f);
+            const float cw = ink_.fonts.semibold.measure(count, 22.0f);
+            const Rect chip{rx, y + 8.0f, ew + cw + 46.0f, kReactH};
+            list.rounded_rect(chip, kReactH * 0.5f, reaction.me ? Color::rgb(0x3a2a28) : kRaisedHigh);
+            if (reaction.me)
+                list.bordered_rect(chip, kReactH * 0.5f, Color::rgb(0, 0.0f), 2.0f, kCoral);
+            ui::text(list, ink_.fonts.regular, reaction.emoji, chip.x + 16.0f, chip.cy() + 9.0f, 24.0f, kText);
+            ui::text(list, ink_.fonts.semibold, count, chip.x + 26.0f + ew, chip.cy() + 8.0f, 22.0f,
+                     reaction.me ? kCoral : kDim);
+            rx += chip.w + 10.0f;
+        }
+        y += kReactH + 10.0f;
+    }
+    if (m.failed)
+        ui::text(list, ink_.fonts.semibold, "Not sent", text_x, y + 26.0f, 22.0f, kCoral);
 
     if (m.pending)
         list.pop_opacity();
@@ -617,6 +660,9 @@ void Chat::draw_composer(const discord::Snapshot &s, DrawList &list) const
     std::string placeholder = "Message ";
     if (dm())
     {
+        if (const discord::User *other = dm_person(s))
+            placeholder += other->name;
+        else
         for (const discord::Message &m : messages(s))
             if (m.author_id != s.me.id)
             {
@@ -734,7 +780,11 @@ void Chat::draw(const discord::Snapshot &s, DrawList &list) const
     }
     if (rows.empty())
         ui::text(list, ink_.fonts.regular,
-                 s.no_access.count(channel_id_) ? "You can't read this channel." : "No messages yet. Say hi.", 960.0f,
+                 s.no_access.count(channel_id_)    ? "You can't read this channel."
+                 : s.load_failed.count(channel_id_) ? "Couldn't load messages. Switch channels to try again."
+                 : s.messages.count(channel_id_) == 0 ? "Loading messages…"
+                                                      : "No messages yet. Say hi.",
+                 960.0f,
                  520.0f, 30.0f, kDim, gfx::Align::center);
     list.pop_clip();
     // Header after the list so scrolled history slides under it, fading out.

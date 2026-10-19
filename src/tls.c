@@ -3,6 +3,8 @@
 #include <poll.h>
 #include <string.h>
 
+#include <pthread.h>
+
 #include <mbedtls/ctr_drbg.h>
 #include <mbedtls/entropy.h>
 #include <mbedtls/error.h>
@@ -17,6 +19,17 @@ static mbedtls_entropy_context entropy;
 static mbedtls_ctr_drbg_context drbg;
 static mbedtls_x509_crt roots;
 static mbedtls_ssl_config conf;
+// The DRBG is shared by every connection (gateway, REST, images) on several threads.
+static pthread_mutex_t drbg_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static int locked_random(void *unused, unsigned char *out, size_t len)
+{
+    (void)unused;
+    pthread_mutex_lock(&drbg_lock);
+    int ret = mbedtls_ctr_drbg_random(&drbg, out, len);
+    pthread_mutex_unlock(&drbg_lock);
+    return ret;
+}
 
 static void log_err(const char *what, int ret)
 {
@@ -44,14 +57,13 @@ int tls_global_init(void)
         return log_err("config", ret), ret;
     mbedtls_ssl_conf_authmode(&conf, MBEDTLS_SSL_VERIFY_REQUIRED);
     mbedtls_ssl_conf_ca_chain(&conf, &roots, NULL);
-    mbedtls_ssl_conf_rng(&conf, mbedtls_ctr_drbg_random, &drbg);
+    mbedtls_ssl_conf_rng(&conf, locked_random, NULL);
     return 0;
 }
 
 int tls_random(void *unused, unsigned char *out, size_t len)
 {
-    (void)unused;
-    return mbedtls_ctr_drbg_random(&drbg, out, len);
+    return locked_random(unused, out, len);
 }
 
 int tls_connect(tls_conn *c, const char *host, const char *port)

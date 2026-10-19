@@ -28,7 +28,8 @@ enum class HomeTab : int
 struct HomeOpen
 {
     std::string guild_id; // empty for a DM
-    std::string channel_id;
+    std::string channel_id; // empty: open the DM with user_id once it exists
+    std::string user_id;
 };
 
 class Home

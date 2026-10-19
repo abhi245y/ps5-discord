@@ -250,14 +250,15 @@ int main()
     discord::Client client;
     const int utc_offset = console_utc_minutes();
     // Discord images: asked for while drawing, downloaded by the client, uploaded here.
-    std::unordered_map<std::string, std::uint32_t> remote_textures; // 0: on its way or failed
-    art.remote = [&](const std::string &url) -> std::uint32_t {
+    // ponytail: textures are kept for the session; evict by use if memory ever matters.
+    std::unordered_map<std::string, app::ArtSet::Remote> remote_textures; // texture 0: on its way or failed
+    art.remote = [&](const std::string &url) -> app::ArtSet::Remote {
         const auto found = remote_textures.find(url);
         if (found != remote_textures.end())
             return found->second;
-        remote_textures.emplace(url, 0u);
+        remote_textures.emplace(url, app::ArtSet::Remote{});
         client.want_image(url);
-        return 0;
+        return {};
     };
 
     ps5::Pad pad;
@@ -380,7 +381,8 @@ int main()
         snapshot.utc_offset_minutes = utc_offset;
         for (const discord::Image &image : client.take_images())
             if (image.w > 0)
-                remote_textures[image.url] = renderer.batch().create_texture(image.w, image.h, image.rgba.data());
+                remote_textures[image.url] = {renderer.batch().create_texture(image.w, image.h, image.rgba.data()),
+                                              image.w, image.h};
         shell.update(input, dt);
         if (shell.take_settings_changed())
         {

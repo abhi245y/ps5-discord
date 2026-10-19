@@ -41,7 +41,9 @@ void art_circle(DrawList &list, const Ink &ink, discord::ArtIndex art, const std
                 float cy, float radius, const std::string &url = {});
 
 // A wide placeholder scene filling r (rooms, server banners).
-void scene(DrawList &list, const Ink &ink, discord::ArtIndex art, const Rect &r, float radius);
+// url: a real picture (server banner, attached image) shown once loaded, cropped to fill.
+void scene(DrawList &list, const Ink &ink, discord::ArtIndex art, const Rect &r, float radius,
+           const std::string &url = {});
 
 // Three or more rounded bars: someone is talking.
 void speaking_bars(DrawList &list, float cx, float cy, float height, Color color);

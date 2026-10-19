@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
@@ -76,6 +77,7 @@ struct Guild
     std::string id;
     std::string name;
     std::string icon_url;
+    std::string banner_url; // the server's banner or invite splash, when it has one
     ArtIndex art = 0;
     std::vector<Channel> channels;
     std::vector<Room> rooms;
@@ -105,6 +107,7 @@ struct Mention
     std::string content;
     std::int64_t time_ms = 0;
     bool unread = true;
+    User author; // as the message carried it, for authors outside the friends list
 };
 
 struct Attachment
@@ -114,6 +117,14 @@ struct Attachment
     std::string size_text; // "1.8 MB"
     bool image = false;
     ArtIndex art = 0; // stand-in thumbnail while the image loads (and in samples)
+};
+
+struct Reaction
+{
+    std::string emoji; // the Unicode emoji, or ":name:" for a server's own
+    std::string emoji_id; // a server emoji's id, empty for Unicode
+    int count = 0;
+    bool me = false; // this account reacted
 };
 
 struct Message
@@ -127,9 +138,12 @@ struct Message
     bool mentions_me = false;
     bool edited = false;
     bool pending = false; // sent from this console, not yet echoed by the gateway
+    bool failed = false;  // Discord refused it (shown as not sent)
+    std::string nonce;    // pending messages: what the echo will carry
     std::string reply_author; // the message this one answers, when it is a reply
     std::string reply_text;
     std::vector<Attachment> attachments;
+    std::vector<Reaction> reactions;
 };
 
 struct Voice // the account's own voice connection
@@ -167,9 +181,12 @@ struct Snapshot
     std::vector<Conversation> recent;
     std::vector<Guild> guilds;
     std::vector<Mention> mentions;
-    // Loaded history by channel id, oldest first (DM channels included).
-    std::map<std::string, std::vector<Message>> messages;
+    // Loaded history by channel id, oldest first (DM channels included). Shared,
+    // copy on write: handing the UI a snapshot copies pointers, not every message.
+    std::map<std::string, std::shared_ptr<std::vector<Message>>> messages;
     std::set<std::string> no_access; // channels Discord refused to read (403)
+    std::set<std::string> load_failed; // history that did not load (network, core); retried on open
+    std::map<std::string, std::string> dm_by_user; // one-to-one DM channel by the other person's id
     Voice voice;
     int friends_online = 0;
     int unread_total = 0;
@@ -177,6 +194,13 @@ struct Snapshot
 };
 
 const User *find_user(const Snapshot &snapshot, const std::string &id);
+// A channel's loaded history to change: a fresh copy, so snapshots already handed out stay as they were.
+inline std::vector<Message> &edit_messages(Snapshot &s, const std::string &channel_id)
+{
+    std::shared_ptr<std::vector<Message>> &slot = s.messages[channel_id];
+    slot = slot ? std::make_shared<std::vector<Message>>(*slot) : std::make_shared<std::vector<Message>>();
+    return *slot;
+}
 const Guild *find_guild(const Snapshot &snapshot, const std::string &id);
 
 } // namespace discord

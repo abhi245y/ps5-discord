@@ -61,11 +61,14 @@ class Client
     void poll_mentions();
     void handle(const Request &request);
     void fetch_images();
+    void run_images();
     void publish(); // marks the snapshot changed (lock held by caller)
 
     const int port_;
     pthread_t thread_{};
+    pthread_t image_thread_{}; // downloads images apart from polling, so neither waits
     bool started_ = false;
+    bool image_started_ = false;
     std::atomic<bool> stop_{false};
     std::mutex mutex_;
     Snapshot snapshot_;    // guarded by mutex_
@@ -77,7 +80,7 @@ class Client
     long events_next_ = -1; // -1: skip the backlog on first contact
     std::int64_t last_chat_ms_ = 0;
     std::int64_t last_mentions_ms_ = 0;
-    bool ready_ = false;
+    std::atomic<bool> ready_{false}; // read by the image thread too
 };
 
 } // namespace discord

@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace hui::gfx
@@ -111,6 +112,9 @@ class Font
     bool has_glyph(std::uint32_t codepoint) const;
 
   private:
+    std::vector<std::string> wrap_uncached(std::string_view text, float size, float max_width) const;
+    // Wrapped paragraphs by size, width and text: screens wrap every message each frame.
+    mutable std::unordered_map<std::string, std::vector<std::string>> wrapped_;
     struct Fallback
     {
         const Font *face;

@@ -115,7 +115,9 @@ Reply http(int port, const char *method, const std::string &path, const std::str
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof timeout);
     sockaddr_in to{};
+#ifndef __linux__ // the console's BSD sockets have sin_len; the host build has not
     to.sin_len = sizeof to; // as spot5 does for its loopback helper
+#endif
     to.sin_family = AF_INET;
     to.sin_port = htons(static_cast<std::uint16_t>(port));
     to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -170,6 +172,12 @@ User user_from(const json &u)
     const std::string avatar = text(u, "avatar");
     if (!avatar.empty())
         user.avatar_url = "https://cdn.discordapp.com/avatars/" + user.id + "/" + avatar + ".png?size=128";
+    else if (!user.id.empty())
+    {
+        // No picture of their own: Discord's default for the account, as the official client shows.
+        const unsigned long long id = std::strtoull(user.id.c_str(), nullptr, 10);
+        user.avatar_url = "https://cdn.discordapp.com/embed/avatars/" + std::to_string((id >> 22) % 6) + ".png";
+    }
     user.art = art_for(user.id, kAvatarArt);
     return user;
 }
@@ -267,6 +275,14 @@ Message message_from(const json &m, const std::string &me_id)
         out.content = "pinned a message.";
     else if (type >= 8 && type <= 11)
         out.content = "boosted the server.";
+    else if (type == 3)
+        out.content = "started a call. \xF0\x9F\x93\x9E";
+    else if (type == 1 || type == 2)
+        out.content = type == 1 ? "added someone to the group." : "left the group.";
+    else if (type == 4 || type == 5)
+        out.content = "changed the name or icon.";
+    else if (type == 18)
+        out.content = "started a thread.";
     if (out.content.empty() && m.contains("sticker_items") && m["sticker_items"].is_array() &&
         !m["sticker_items"].empty())
         out.content = "[Sticker: " + text(m["sticker_items"][0], "name") + "]";
@@ -275,6 +291,16 @@ Message message_from(const json &m, const std::string &me_id)
         const std::string title = text(m["embeds"][0], "title");
         out.content = title.empty() ? std::string("[Embed]") : "[Embed: " + title + "]";
     }
+    // A forwarded message carries its text in a snapshot of the original.
+    if (out.content.empty() && m.contains("message_snapshots") && m["message_snapshots"].is_array() &&
+        !m["message_snapshots"].empty() && m["message_snapshots"][0].contains("message"))
+    {
+        const json &original = m["message_snapshots"][0]["message"];
+        const std::string text_of = readable(text(original, "content"), original);
+        out.content = "\xE2\x86\xAA Forwarded" + (text_of.empty() ? std::string() : ": " + text_of);
+    }
+    if (out.content.empty() && out.attachments.empty() && !(m.contains("attachments") && !m["attachments"].empty()))
+        out.content = "[A message this app cannot show yet]";
     if (m.contains("author") && m["author"].is_object())
     {
         out.author_id = text(m["author"], "id");
@@ -283,7 +309,7 @@ Message message_from(const json &m, const std::string &me_id)
     out.edited = m.contains("edited_timestamp") && m["edited_timestamp"].is_string();
     if (m.contains("mentions") && m["mentions"].is_array())
         for (const json &u : m["mentions"])
-            out.mentions_me |= text(u, "id") == me_id;
+            out.mentions_me |= text(u, "id") == me_id && out.author_id != me_id;
     if (m.contains("referenced_message") && m["referenced_message"].is_object())
     {
         const json &r = m["referenced_message"];
@@ -300,6 +326,8 @@ Message message_from(const json &m, const std::string &me_id)
             if (att.url.empty())
                 att.url = text(a, "url");
             att.image = text(a, "content_type").rfind("image/", 0) == 0;
+            if (att.image) // a small preview from the media proxy, not the full file
+                att.url += std::string(att.url.find('?') == std::string::npos ? "?" : "&") + "width=440&height=248";
             const double size = a.value("size", 0.0);
             char sz[32];
             std::snprintf(sz, sizeof sz, size >= 1048576 ? "%.1f MB" : "%.0f KB",
@@ -307,6 +335,20 @@ Message message_from(const json &m, const std::string &me_id)
             att.size_text = sz;
             att.art = art_for(att.name, kSceneArt);
             out.attachments.push_back(att);
+        }
+    if (m.contains("reactions") && m["reactions"].is_array())
+        for (const json &r : m["reactions"])
+        {
+            Reaction reaction;
+            if (r.contains("emoji") && r["emoji"].is_object())
+            {
+                reaction.emoji_id = text(r["emoji"], "id");
+                reaction.emoji = reaction.emoji_id.empty() ? text(r["emoji"], "name") : ":" + text(r["emoji"], "name") + ":";
+            }
+            reaction.count = static_cast<int>(r.value("count", 0.0));
+            reaction.me = r.value("me", false);
+            if (reaction.count > 0 && !reaction.emoji.empty())
+                out.reactions.push_back(reaction);
         }
     return out;
 }
@@ -335,7 +377,6 @@ void apply_tree(Snapshot &s, const json &t)
     s.live_rooms.clear();
     std::vector<Conversation> unread;
     s.unread_total = 0;
-    s.mention_count = 0;
     auto read_of = [&reads](const std::string &channel, const std::string &last_message) {
         std::pair<bool, int> out{false, 0};
         const auto r = reads.find(channel);
@@ -356,6 +397,10 @@ void apply_tree(Snapshot &s, const json &t)
             const std::string icon = text(g, "icon");
             if (!icon.empty())
                 guild.icon_url = "https://cdn.discordapp.com/icons/" + guild.id + "/" + icon + ".png?size=128";
+            if (const std::string banner = text(g, "banner"); !banner.empty())
+                guild.banner_url = "https://cdn.discordapp.com/banners/" + guild.id + "/" + banner + ".png?size=600";
+            else if (const std::string splash = text(g, "splash"); !splash.empty())
+                guild.banner_url = "https://cdn.discordapp.com/splashes/" + guild.id + "/" + splash + ".png?size=640";
             guild.art = art_for(guild.id, kSceneArt);
             guild.members = static_cast<int>(g.value("member_count", 0.0));
             if (g.contains("channels"))
@@ -378,7 +423,6 @@ void apply_tree(Snapshot &s, const json &t)
                     ch.unread = mentions;
                     ch.mentioned = mentions > 0;
                     guild.unread += mentions;
-                    s.mention_count += mentions;
                     if (has_unread || mentions > 0)
                     {
                         ++s.unread_total;
@@ -486,6 +530,8 @@ void apply_tree(Snapshot &s, const json &t)
                             name += (name.empty() ? "" : ", ") + users[rid.get<std::string>()].name;
             }
             conv.title = name.empty() ? std::string("Direct message") : name;
+            if (static_cast<int>(d.value("type", 1.0)) == 1 && !conv.user_id.empty())
+                s.dm_by_user[conv.user_id] = conv.channel_id;
             const auto [has_unread, mentions] = read_of(conv.channel_id, last);
             conv.unread = has_unread ? std::max(1, mentions) : 0;
             conv.preview = has_unread ? "New messages" : "Direct message";
@@ -534,6 +580,8 @@ Client::~Client()
     stop_ = true;
     if (started_)
         pthread_join(thread_, nullptr);
+    if (image_started_)
+        pthread_join(image_thread_, nullptr);
 }
 
 // pthread rather than std::thread, as spot5 does on the console.
@@ -551,25 +599,47 @@ void Client::start()
                        return nullptr;
                    },
                    this) == 0;
+    image_started_ = pthread_create(
+                         &image_thread_, &attr,
+                         [](void *self) -> void * {
+                             static_cast<Client *>(self)->run_images();
+                             return nullptr;
+                         },
+                         this) == 0;
     pthread_attr_destroy(&attr);
-    if (!started_)
-        hui::sys::log("[CLIENT] could not start its thread");
+    if (!started_ || !image_started_)
+        hui::sys::log("[CLIENT] could not start its threads");
 }
 
-void Client::submit(const Request &request)
+void Client::submit(const Request &incoming)
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    // Show a sent message at once; the gateway's echo replaces it.
+    Request request = incoming;
+    // Show a sent message at once; the gateway's echo (same nonce) replaces it.
     if (request.kind == Request::Kind::send)
     {
+        static std::uint64_t sequence = 0;
+        // A snowflake-shaped nonce, as the official client sends.
+        request.nonce = std::to_string(((static_cast<std::uint64_t>(now_ms()) - 1420070400000ull) << 22) +
+                                       (++sequence & 0x3fffff));
         Message m;
-        m.id = "pending-" + std::to_string(now_ms());
+        m.id = "pending-" + request.nonce;
+        m.nonce = request.nonce;
         m.channel_id = request.channel_id;
         m.author_id = snapshot_.me.id;
         m.content = request.content;
         m.time_ms = now_ms();
         m.pending = true;
-        snapshot_.messages[request.channel_id].push_back(m);
+        std::vector<Message> &ms = edit_messages(snapshot_, request.channel_id);
+        for (const Message &original : ms)
+            if (!request.reply_to.empty() && original.id == request.reply_to)
+            {
+                m.reply_author = original.author_name;
+                m.reply_text = original.content;
+                if (const User *u = find_user(snapshot_, original.author_id))
+                    m.reply_author = u->name;
+            }
+        ms.push_back(m);
         publish();
     }
     queue_.push_back(request);
@@ -605,19 +675,18 @@ std::vector<Image> Client::take_images()
     return out;
 }
 
-// A few images per pass, so polling keeps its pace.
-// ponytail: serial through the single-threaded core; parallel fetches if avatars feel slow.
+// Everything queued, newest asks first (what is on screen now).
 void Client::fetch_images()
 {
-    for (int i = 0; i < 4; ++i)
+    for (;;)
     {
         Image image;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (image_queue_.empty() || !queue_.empty()) // screens' requests go first
+            if (image_queue_.empty())
                 return;
-            image.url = image_queue_.front();
-            image_queue_.pop_front();
+            image.url = image_queue_.back();
+            image_queue_.pop_back();
         }
         std::string query;
         for (const unsigned char c : image.url)
@@ -646,6 +715,16 @@ void Client::fetch_images()
         }
         std::lock_guard<std::mutex> lock(mutex_);
         images_.push_back(std::move(image));
+    }
+}
+
+void Client::run_images()
+{
+    while (!stop_)
+    {
+        if (ready_)
+            fetch_images();
+        usleep(50000);
     }
 }
 
@@ -681,8 +760,6 @@ void Client::run()
             }
             handle(request);
         }
-        if (ready_)
-            fetch_images();
         usleep(250000);
     }
 }
@@ -736,6 +813,8 @@ void Client::poll_state()
     publish();
 }
 
+void refresh_mentions(Snapshot &s);
+
 void Client::poll_chat()
 {
     const Reply reply = http(port_, "GET", "/api/chat");
@@ -745,8 +824,19 @@ void Client::poll_chat()
     const json tree = json::parse(reply.body, nullptr, false);
     if (tree.is_discarded() || !tree.is_object())
         return;
+    // Built outside the lock (the UI thread takes snapshots under it), from a
+    // copy that is cheap because message lists are shared. Only this thread
+    // changes the account part; submit() may add pending messages meanwhile.
+    Snapshot next;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        next = snapshot_;
+    }
+    apply_tree(next, tree);
+    refresh_mentions(next);
     std::lock_guard<std::mutex> lock(mutex_);
-    apply_tree(snapshot_, tree);
+    next.messages = std::move(snapshot_.messages);
+    snapshot_ = std::move(next);
     publish();
 }
 
@@ -772,16 +862,20 @@ void Client::poll_events()
     {
         const std::string type = text(ev, "t");
         const std::string channel = text(ev, "channel_id");
-        auto list = snapshot_.messages.find(channel);
-        if (list == snapshot_.messages.end())
-            continue; // not open: its history loads when it is
-        std::vector<Message> &ms = list->second;
+        if (snapshot_.messages.find(channel) == snapshot_.messages.end())
+        {
+            last_chat_ms_ = 0; // not open: its history loads when it is; refresh unread counts now
+            continue;
+        }
+        std::vector<Message> &ms = edit_messages(snapshot_, channel);
         if (type == "MESSAGE_CREATE")
         {
             Message m = message_from(ev, snapshot_.me.id);
-            // Replace the oldest pending message with the same text (our echo).
+            // Our own echo replaces its pending copy: by nonce, else by text.
+            const std::string nonce = text(ev, "nonce");
             auto pending = std::find_if(ms.begin(), ms.end(), [&](const Message &p) {
-                return p.pending && p.author_id == m.author_id && p.content == m.content;
+                return p.pending && ((!nonce.empty() && p.nonce == nonce) ||
+                                     (p.author_id == m.author_id && p.content == m.content));
             });
             if (pending != ms.end())
                 *pending = m;
@@ -793,7 +887,7 @@ void Client::poll_events()
             for (Message &m : ms)
                 if (m.id == text(ev, "id") && ev.contains("content"))
                 {
-                    m.content = text(ev, "content");
+                    m.content = readable(text(ev, "content"), ev);
                     m.edited = true;
                 }
         }
@@ -802,8 +896,48 @@ void Client::poll_events()
             ms.erase(std::remove_if(ms.begin(), ms.end(), [&](const Message &m) { return m.id == text(ev, "id"); }),
                      ms.end());
         }
+        else if (type == "MESSAGE_REACTION_ADD" || type == "MESSAGE_REACTION_REMOVE")
+        {
+            const bool add = type == "MESSAGE_REACTION_ADD";
+            const json emoji = ev.contains("emoji") && ev["emoji"].is_object() ? ev["emoji"] : json::object();
+            const std::string emoji_id = text(emoji, "id");
+            const std::string name = emoji_id.empty() ? text(emoji, "name") : ":" + text(emoji, "name") + ":";
+            const bool mine = text(ev, "user_id") == snapshot_.me.id;
+            for (Message &m : ms)
+            {
+                if (m.id != text(ev, "message_id"))
+                    continue;
+                auto r = std::find_if(m.reactions.begin(), m.reactions.end(),
+                                      [&](const Reaction &x) { return x.emoji == name; });
+                if (add && r == m.reactions.end())
+                    r = m.reactions.insert(m.reactions.end(), Reaction{name, emoji_id, 0, false});
+                if (r == m.reactions.end())
+                    continue;
+                r->count += add ? 1 : -1;
+                if (mine)
+                    r->me = add;
+                if (r->count <= 0)
+                    m.reactions.erase(r);
+            }
+        }
     }
     publish();
+}
+
+// Inbox entries are unread while their channel still counts mentions of us;
+// the Mentions badge counts those, so it matches the page.
+void refresh_mentions(Snapshot &s)
+{
+    s.mention_count = 0;
+    for (Mention &mention : s.mentions)
+    {
+        mention.unread = false;
+        for (const Guild &g : s.guilds)
+            for (const Channel &c : g.channels)
+                if (c.id == mention.channel_id)
+                    mention.unread = c.unread > 0;
+        s.mention_count += mention.unread ? 1 : 0;
+    }
 }
 
 void Client::poll_mentions()
@@ -825,7 +959,10 @@ void Client::poll_mentions()
         mention.content = readable(text(m, "content"), m);
         mention.time_ms = snowflake_ms(mention.message_id);
         if (m.contains("author") && m["author"].is_object())
+        {
             mention.author_id = text(m["author"], "id");
+            mention.author = user_from(m["author"]);
+        }
         std::string where;
         for (const Guild &g : snapshot_.guilds)
             for (const Channel &c : g.channels)
@@ -837,6 +974,7 @@ void Client::poll_mentions()
         mention.context = where.empty() ? std::string("@you") : where;
         snapshot_.mentions.push_back(mention);
     }
+    refresh_mentions(snapshot_);
     publish();
 }
 
@@ -853,8 +991,8 @@ void Client::handle(const Request &request)
         {
             std::lock_guard<std::mutex> lock(mutex_);
             const auto it = snapshot_.messages.find(request.channel_id);
-            if (request.kind == Request::Kind::load_older && it != snapshot_.messages.end() && !it->second.empty())
-                oldest = it->second.front().id;
+            if (request.kind == Request::Kind::load_older && it != snapshot_.messages.end() && !it->second->empty())
+                oldest = it->second->front().id;
         }
         if (request.kind == Request::Kind::load_older)
         {
@@ -869,12 +1007,12 @@ void Client::handle(const Request &request)
             const int discord_status = r.is_discarded() ? 0 : static_cast<int>(r.value("status", 0.0));
             hui::sys::log("[CLIENT] history for %s failed (%d/%d)", request.channel_id.c_str(), reply.status,
                           discord_status);
+            std::lock_guard<std::mutex> lock(mutex_);
             if (discord_status == 403)
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
                 snapshot_.no_access.insert(request.channel_id);
-                publish();
-            }
+            else if (request.kind == Request::Kind::open_channel)
+                snapshot_.load_failed.insert(request.channel_id);
+            publish();
             return;
         }
         std::vector<Message> page;
@@ -889,7 +1027,8 @@ void Client::handle(const Request &request)
         std::string newest = page.empty() ? std::string() : page.back().id;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            std::vector<Message> &ms = snapshot_.messages[request.channel_id];
+            snapshot_.load_failed.erase(request.channel_id);
+            std::vector<Message> &ms = edit_messages(snapshot_, request.channel_id);
             if (request.kind == Request::Kind::load_older)
                 ms.insert(ms.begin(), page.begin(), page.end());
             else
@@ -902,10 +1041,45 @@ void Client::handle(const Request &request)
         break;
     }
     case Request::Kind::send: {
-        json body{{"channel", request.channel_id}, {"content", request.content}};
+        json body{{"channel", request.channel_id}, {"content", request.content}, {"nonce", request.nonce}};
+        if (!request.reply_to.empty())
+            body["reply_to"] = request.reply_to;
         const Reply reply = http(port_, "POST", "/api/send", body.dump());
+        const json r = json::parse(reply.body, nullptr, false);
+        const int discord_status = r.is_discarded() ? 0 : static_cast<int>(r.value("status", 0.0));
+        if (reply.status != 200 || discord_status < 200 || discord_status >= 300)
+        {
+            hui::sys::log("[CLIENT] send to %s failed (%d/%d)", request.channel_id.c_str(), reply.status,
+                          discord_status);
+            std::lock_guard<std::mutex> lock(mutex_);
+            for (Message &m : edit_messages(snapshot_, request.channel_id))
+                if (m.pending && m.nonce == request.nonce)
+                {
+                    m.pending = false;
+                    m.failed = true;
+                }
+            publish();
+        }
+        break;
+    }
+    case Request::Kind::react: {
+        json body{{"channel", request.channel_id}, {"message", request.message_id}, {"emoji", request.emoji}};
+        const Reply reply = http(port_, "POST", "/api/react", body.dump());
         if (reply.status != 200)
-            hui::sys::log("[CLIENT] send to %s failed (%d)", request.channel_id.c_str(), reply.status);
+            hui::sys::log("[CLIENT] react failed (%d)", reply.status);
+        break;
+    }
+    case Request::Kind::open_dm: {
+        const Reply reply = http(port_, "POST", "/api/dm", json{{"user", request.user_id}}.dump());
+        const json r = json::parse(reply.body, nullptr, false);
+        if (reply.status == 200 && !r.is_discarded() && r.contains("body") && r["body"].is_object())
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            snapshot_.dm_by_user[request.user_id] = text(r["body"], "id");
+            publish();
+        }
+        else
+            hui::sys::log("[CLIENT] open DM failed (%d)", reply.status);
         break;
     }
     }

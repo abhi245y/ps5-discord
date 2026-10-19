@@ -71,6 +71,8 @@ http_response http_request(const char *method, const char *path, const char *jso
     if (json)
         snprintf(body_headers, sizeof body_headers,
                  "Content-Type: application/json\r\nContent-Length: %zu\r\n", strlen(json));
+    else if (strcmp(method, "GET") != 0) // PUT/DELETE without a body still need a length
+        snprintf(body_headers, sizeof body_headers, "Content-Length: 0\r\n");
     int n = snprintf(head, sizeof head,
                      "%s %s%s HTTP/1.0\r\nHost: %s\r\nUser-Agent: %s\r\n%s"
                      "Origin: https://discord.com\r\nX-Discord-Locale: en-US\r\n"

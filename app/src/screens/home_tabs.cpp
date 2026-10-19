@@ -274,11 +274,10 @@ void Home::update_tab(const discord::Snapshot &s, const hui::InputFrame &input, 
         }
         else if (tab_ == HomeTab::friends)
         {
-            // Message: their DM, when one is known.
+            // Message: their DM, made first when there is none yet.
             const discord::User &u = s.friends[static_cast<std::size_t>(ref)];
-            for (const discord::Conversation &c : s.recent)
-                if (c.guild_id.empty() && c.user_id == u.id)
-                    open_ = HomeOpen{"", c.channel_id};
+            const auto dm = s.dm_by_user.find(u.id);
+            open_ = HomeOpen{"", dm == s.dm_by_user.end() ? std::string() : dm->second, u.id};
         }
         feedback.play(open_ ? hui::audio::Cue::open : hui::audio::Cue::error);
     }
@@ -360,7 +359,7 @@ void Home::draw_tab(const discord::Snapshot &s, DrawList &list) const
             const discord::Guild &g = s.guilds[static_cast<std::size_t>(items[i].ref)];
             list.rounded_rect(r, kCardRadius, kRaised);
             list.push_clip({r.x, r.y, r.w, kBannerH});
-            scene(list, ink_, g.art, {r.x, r.y, r.w, kBannerH + kCardRadius}, kCardRadius);
+            scene(list, ink_, g.art, {r.x, r.y, r.w, kBannerH + kCardRadius}, kCardRadius, g.banner_url);
             list.pop_clip();
             const float icx = r.x + 72.0f;
             const float icy = r.y + kBannerH + 8.0f;
@@ -402,7 +401,8 @@ void Home::draw_tab(const discord::Snapshot &s, DrawList &list) const
             list.push_opacity(m.unread ? 1.0f : 0.72f);
             if (m.unread)
                 list.circle(r.x + 32.0f, r.cy(), 8.0f, kCoral);
-            if (const discord::User *author = discord::find_user(s, m.author_id))
+            const discord::User *known = discord::find_user(s, m.author_id);
+            if (const discord::User *author = known ? known : (m.author.name.empty() ? nullptr : &m.author))
             {
                 discord::User face = *author;
                 face.voice_room.clear();
@@ -416,12 +416,10 @@ void Home::draw_tab(const discord::Snapshot &s, DrawList &list) const
                      r.y + 88.0f, 29.0f, kText);
             ui::text(list, ink_.fonts.regular, ago(s.now_ms, m.time_ms), r.x + r.w - 220.0f, r.y + 46.0f, 20.0f, kDim,
                      gfx::Align::right);
-            const Rect jump{r.x + r.w - 186.0f, r.cy() - 30.0f, 162.0f, 60.0f};
-            list.rounded_rect(jump, 30.0f, m.unread || focused ? kCoral : kRaisedHigh);
-            const Color on = m.unread || focused ? kOnCoral : kText;
-            ui::draw_button(list, ink_.fonts, ui::GlyphStyle::mono(on, Color::rgb(0, 0.0f)), ui::Button::cross,
-                            jump.x + 26.0f, jump.cy(), 28.0f);
-            ui::text(list, ink_.fonts.semibold, "Jump", jump.x + 68.0f, jump.cy() + 9.0f, 25.0f, on);
+            const Rect jump{r.x + r.w - 150.0f, r.cy() - 28.0f, 126.0f, 56.0f};
+            list.rounded_rect(jump, 28.0f, focused ? kCoral : kRaisedHigh);
+            ui::text(list, ink_.fonts.semibold, "Jump", jump.cx(), jump.cy() + 9.0f, 25.0f, focused ? kOnCoral : kText,
+                     gfx::Align::center);
             list.pop_opacity();
         }
     }

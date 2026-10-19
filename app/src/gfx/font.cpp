@@ -276,6 +276,17 @@ float Font::layout(std::string_view text, float x, float y, float size, Align al
 
 std::vector<std::string> Font::wrap(std::string_view text, float size, float max_width) const
 {
+    std::string key = std::to_string(static_cast<int>(size * 4)) + '|' + std::to_string(static_cast<int>(max_width)) +
+                      '|' + std::string(text);
+    if (const auto found = wrapped_.find(key); found != wrapped_.end())
+        return found->second;
+    if (wrapped_.size() > 2048) // ponytail: dropped wholesale; an LRU if it churns
+        wrapped_.clear();
+    return wrapped_.emplace(std::move(key), wrap_uncached(text, size, max_width)).first->second;
+}
+
+std::vector<std::string> Font::wrap_uncached(std::string_view text, float size, float max_width) const
+{
     std::vector<std::string> lines;
     std::string line;
     std::size_t index = 0;

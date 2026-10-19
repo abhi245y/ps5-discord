@@ -135,7 +135,7 @@ Snapshot sample_snapshot()
         m.mentions_me = mentions_me;
         return m;
     };
-    std::vector<Message> &general = s.messages["general"];
+    std::vector<Message> &general = edit_messages(s, "general");
     general = {
         msg("g0", "general", "rin", "anyone tried the new photo mode filters?", kNow - 70 * kMinute),
         msg("g1", "general", "zed", "yeah the film grain one is great for night shots", kNow - 66 * kMinute),
@@ -153,19 +153,19 @@ Snapshot sample_snapshot()
     general[5].attachments.push_back(shot);
     general[6].edited = true;
 
-    s.messages["gamenight"] = {
+    s.messages["gamenight"] = std::make_shared<std::vector<Message>>(std::vector<Message>{
         msg("n0", "gamenight", "mira", "Raid at 9, then whatever people want.", kNow - 50 * kMinute),
         msg("n1", "gamenight", "kenji", "@Starcraft can you bring the party code?", kNow - 35 * kMinute, true),
         msg("n2", "gamenight", "ana", "voting for the cave map after", kNow - 5 * kMinute),
         msg("n3", "gamenight", "kenji", "are you in?", kNow - 4 * kMinute, true),
-    };
-    s.messages["dm-theo"] = {
+    });
+    s.messages["dm-theo"] = std::make_shared<std::vector<Message>>(std::vector<Message>{
         msg("d0", "dm-theo", "theo", "Lobby is up for tonight. Starting around 9 if everyone is in.", kNow - 55 * kMinute),
         msg("d1", "dm-theo", "me", "I'll be there! Finishing dinner in a bit.", kNow - 54 * kMinute),
         msg("d2", "dm-theo", "theo", "We can try the new route on the left side. Looks super chill.", kNow - 50 * kMinute),
         msg("d3", "dm-theo", "me", "Looks amazing! Count me in.", kNow - 49 * kMinute),
         msg("d4", "dm-theo", "theo", "bring snacks", kNow - 42 * kMinute),
-    };
+    });
     return s;
 }
 
@@ -178,7 +178,7 @@ void apply_sample(Snapshot &s, const Request &r)
 {
     if (r.kind != Request::Kind::send)
         return; // history is all loaded already
-    std::vector<Message> &list = s.messages[r.channel_id];
+    std::vector<Message> &list = edit_messages(s, r.channel_id);
     Message m;
     m.id = "sent-" + std::to_string(list.size());
     m.channel_id = r.channel_id;

@@ -450,7 +450,7 @@ void Home::draw_recent(const discord::Snapshot &s, DrawList &list) const
         const std::string when = ago(s.now_ms, c.time_ms);
         const float when_w = ink_.fonts.regular.measure(when, 19.0f);
         ui::text(list, ink_.fonts.regular, when, r.x + r.w - 22.0f, r.y + 44.0f, 19.0f, kDim, gfx::Align::right);
-        const std::string title = c.guild_id.empty() ? std::string("DM") : c.title;
+        const std::string &title = c.title;
         ui::text(list, ink_.fonts.semibold, fit(ink_.fonts.semibold, title, 25.0f, r.w - 102.0f - when_w - 34.0f), tx,
                  r.y + 46.0f, 25.0f, kText);
         float badge_w = 0.0f;

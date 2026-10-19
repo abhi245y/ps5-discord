@@ -16,12 +16,18 @@ struct Request
         open_channel, // load history and subscribe to the guild
         load_older,   // the next page of history above what is loaded
         send,         // post content to channel_id
+        react,        // add emoji to message_id in channel_id
+        open_dm,      // find or create the DM with user_id (Snapshot::dm_by_user)
     };
     Kind kind = Kind::open_channel;
     std::string guild_id; // empty for a DM
     std::string channel_id;
     std::string content;
     std::string reply_to; // message id this answers, or empty
+    std::string message_id;
+    std::string emoji;    // a Unicode emoji, for react
+    std::string user_id;  // for open_dm
+    std::string nonce;    // set by the client for send: matches the gateway's echo
 };
 
 } // namespace discord

@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -185,6 +186,12 @@ static void api_send(int c, const char *body)
         cJSON_AddStringToObject(out, "nonce", nonce);
     cJSON_AddFalseToObject(out, "tts");
     cJSON_AddNumberToObject(out, "flags", 0);
+    const char *reply_to = cJSON_GetStringValue(cJSON_GetObjectItem(in, "reply_to"));
+    if (reply_to && is_id(reply_to)) {
+        cJSON *ref = cJSON_AddObjectToObject(out, "message_reference");
+        cJSON_AddStringToObject(ref, "channel_id", channel);
+        cJSON_AddStringToObject(ref, "message_id", reply_to);
+    }
     char *json = cJSON_PrintUnformatted(out), path[64];
     snprintf(path, sizeof path, "/channels/%s/messages", channel);
     cJSON_Delete(out);
@@ -193,10 +200,47 @@ static void api_send(int c, const char *body)
     free(json);
 }
 
+// Adds the account's reaction: {channel, message, emoji} (a Unicode emoji).
+static void api_react(int c, const char *body)
+{
+    cJSON *in = cJSON_Parse(body ? body : "");
+    const char *channel = cJSON_GetStringValue(cJSON_GetObjectItem(in, "channel"));
+    const char *message = cJSON_GetStringValue(cJSON_GetObjectItem(in, "message"));
+    const char *emoji = cJSON_GetStringValue(cJSON_GetObjectItem(in, "emoji"));
+    if (!channel || !is_id(channel) || !message || !is_id(message) || !emoji || !*emoji || strlen(emoji) > 32) {
+        cJSON_Delete(in);
+        reply(c, "400 Bad Request", "text/plain", "react", 5);
+        return;
+    }
+    char path[256];
+    int n = snprintf(path, sizeof path, "/channels/%s/messages/%s/reactions/", channel, message);
+    for (const unsigned char *e = (const unsigned char *)emoji; *e && n < (int)sizeof path - 16; e++)
+        n += snprintf(path + n, sizeof path - n, "%%%02X", *e);
+    snprintf(path + n, sizeof path - n, "/@me?location=Message");
+    cJSON_Delete(in);
+    reply_rest(c, http_request("PUT", path, NULL, chat_token()));
+}
+
+// Opens (or finds) the DM with a user: {user}; Discord answers with the channel.
+static void api_dm(int c, const char *body)
+{
+    cJSON *in = cJSON_Parse(body ? body : "");
+    const char *user = cJSON_GetStringValue(cJSON_GetObjectItem(in, "user"));
+    if (!user || !is_id(user)) {
+        cJSON_Delete(in);
+        reply(c, "400 Bad Request", "text/plain", "user", 4);
+        return;
+    }
+    char json[96];
+    snprintf(json, sizeof json, "{\"recipients\":[\"%s\"]}", user);
+    cJSON_Delete(in);
+    reply_rest(c, http_request("POST", "/users/@me/channels", json, chat_token()));
+}
+
 // local: the peer is on this console (the native app). Chat data is only served to it.
 static void handle(int c, int local)
 {
-    static char req[16384]; // one connection at a time
+    char req[16384]; // per connection: requests are served on their own threads
     size_t len = 0;
     req[0] = 0;
     char *body = NULL;
@@ -250,6 +294,10 @@ static void handle(int c, int local)
         api_image(c, query);
     } else if (post && strcmp(path, "/api/ack") == 0) {
         api_ack(c, body);
+    } else if (post && strcmp(path, "/api/react") == 0) {
+        api_react(c, body);
+    } else if (post && strcmp(path, "/api/dm") == 0) {
+        api_dm(c, body);
     } else if (post && strcmp(path, "/api/quit") == 0) {
         reply(c, "200 OK", "application/json", "{\"ok\":true}", 11);
         LOG("quit requested from the web UI");
@@ -262,6 +310,30 @@ static void handle(int c, int local)
 
 // ponytail: one connection at a time; an image fetch (~0.3 s) holds the next request.
 // Threads need mbedTLS threading (shared DRBG) first.
+struct conn {
+    int c, local;
+};
+
+static int busy; // connections being served, guarded by busy_lock
+static pthread_mutex_t busy_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void *serve_one(void *arg)
+{
+    struct conn *k = arg;
+    handle(k->c, k->local);
+    close(k->c);
+    free(k);
+    pthread_mutex_lock(&busy_lock);
+    busy--;
+    pthread_mutex_unlock(&busy_lock);
+    return NULL;
+}
+
+// Each connection on its own thread, so a slow one (an image from the CDN, a
+// history page) does not hold up the app's polling. Capped: past the cap the
+// accept loop serves it itself, which also slows accepting down.
+#define MAX_CONNECTIONS 8
+
 void web_serve(int fd)
 {
     for (;;) {
@@ -273,6 +345,31 @@ void web_serve(int fd)
         int local = peer.sin_family == AF_INET && ntohl(peer.sin_addr.s_addr) >> 24 == 127;
         struct timeval tv = {.tv_sec = 5};
         setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+        setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+        struct conn *k = malloc(sizeof *k);
+        pthread_mutex_lock(&busy_lock);
+        int room = busy < MAX_CONNECTIONS;
+        if (room && k)
+            busy++;
+        pthread_mutex_unlock(&busy_lock);
+        pthread_t t;
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+        pthread_attr_setstacksize(&attr, 512 * 1024);
+        if (room && k) {
+            k->c = c;
+            k->local = local;
+            if (pthread_create(&t, &attr, serve_one, k) == 0) {
+                pthread_attr_destroy(&attr);
+                continue;
+            }
+            pthread_mutex_lock(&busy_lock);
+            busy--;
+            pthread_mutex_unlock(&busy_lock);
+        }
+        pthread_attr_destroy(&attr);
+        free(k);
         handle(c, local);
         close(c);
     }

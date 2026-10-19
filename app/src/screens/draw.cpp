@@ -4,6 +4,10 @@
 #include "screens/draw.hpp"
 
 #include <algorithm>
+#include <string>
+#include <cstdint>
+#include <vector>
+#include <unordered_map>
 #include <cctype>
 #include <cstdio>
 
@@ -65,7 +69,7 @@ void art_circle(DrawList &list, const Ink &ink, discord::ArtIndex art, const std
 {
     const Rect r{cx - radius, cy - radius, radius * 2, radius * 2};
     if (!url.empty() && ink.art.remote)
-        if (const std::uint32_t tex = ink.art.remote(url))
+        if (const std::uint32_t tex = ink.art.remote(url).texture)
         {
             list.image(tex, r, gfx::kFullUv, Color::rgb(0xffffff), radius);
             return;
@@ -124,13 +128,17 @@ void avatar(DrawList &list, const Ink &ink, const discord::User &user, float cx,
         list.circle(bx - r * 0.45f, by - r * 0.45f, r * 0.62f, kGround);
 }
 
-void scene(DrawList &list, const Ink &ink, discord::ArtIndex art, const Rect &r, float radius)
+void scene(DrawList &list, const Ink &ink, discord::ArtIndex art, const Rect &r, float radius, const std::string &url)
 {
-    if (const std::uint32_t tex = texture(ink.art.scenes, art))
+    hui::app::ArtSet::Remote real;
+    if (!url.empty() && ink.art.remote)
+        real = ink.art.remote(url);
+    const std::uint32_t tex = real.texture ? real.texture : texture(ink.art.scenes, art);
+    if (tex)
     {
-        // Crop the art to the card's aspect, centred.
+        // Crop the picture to the card's aspect, centred.
         const float aspect = r.w / r.h;
-        constexpr float kArtAspect = 16.0f / 9.0f;
+        const float kArtAspect = real.texture && real.h > 0 ? static_cast<float>(real.w) / real.h : 16.0f / 9.0f;
         Rect uv = gfx::kFullUv;
         if (aspect > kArtAspect)
         {
@@ -224,16 +232,37 @@ std::string status_line(const discord::User &u)
 // Cuts text to max_width with an ellipsis.
 std::string fit(const hui::ui::FontRef &font, const std::string &text, float size, float max_width)
 {
+    // Called for every row every frame: remembered, and found by halving rather
+    // than trimming a letter at a time (that measured long mentions hundreds of times).
+    static std::unordered_map<std::string, std::string> memo;
+    std::string key = std::to_string(reinterpret_cast<std::uintptr_t>(font.font)) + '|' +
+                      std::to_string(static_cast<int>(size * 4)) + '|' + std::to_string(static_cast<int>(max_width)) +
+                      '|' + text;
+    if (const auto found = memo.find(key); found != memo.end())
+        return found->second;
+    if (memo.size() > 4096) // ponytail: dropped wholesale; an LRU if it churns
+        memo.clear();
+    std::string out;
     if (font.measure(text, size) <= max_width)
-        return text;
-    std::string out = text;
-    while (!out.empty() && font.measure(out + "…", size) > max_width)
-        out.pop_back();
-    while (!out.empty() && (static_cast<unsigned char>(out.back()) & 0xc0) == 0x80) // whole UTF-8 letters
-        out.pop_back();
-    if (!out.empty())
-        out.pop_back();
-    return out + "…";
+        out = text;
+    else
+    {
+        std::vector<std::size_t> cuts; // ends of whole UTF-8 letters
+        for (std::size_t i = 1; i <= text.size(); ++i)
+            if (i == text.size() || (static_cast<unsigned char>(text[i]) & 0xc0) != 0x80)
+                cuts.push_back(i);
+        std::size_t lo = 0, hi = cuts.size(); // letters kept: lo fits, hi does not
+        while (hi - lo > 1)
+        {
+            const std::size_t mid = (lo + hi) / 2;
+            if (font.measure(text.substr(0, cuts[mid - 1]) + "…", size) <= max_width)
+                lo = mid;
+            else
+                hi = mid;
+        }
+        out = (lo == 0 ? std::string() : text.substr(0, cuts[lo - 1])) + "…";
+    }
+    return memo.emplace(std::move(key), std::move(out)).first->second;
 }
 
 void row_label(DrawList &list, const Ink &ink, float baseline, const std::string &text, const std::string &count,
