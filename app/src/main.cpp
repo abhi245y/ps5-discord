@@ -108,6 +108,7 @@ hui::InputFrame remote_key(const std::string &key)
         {"l1", Action::page_prev, Direction::none}, {"r1", Action::page_next, Direction::none},
         {"l2", Action::jump_prev, Direction::none}, {"r2", Action::jump_next, Direction::none},
         {"options", Action::menu, Direction::none},
+        {"l3", Action::l3, Direction::none},         {"r3", Action::r3, Direction::none},
     };
     InputFrame input;
     input.connected = true;

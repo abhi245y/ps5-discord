@@ -17,7 +17,7 @@ namespace screens
 class Chat
 {
   public:
-    explicit Chat(const Ink &ink) : ink_(ink), keys_(ink) {}
+    explicit Chat(const Ink &ink);
 
     // guild_id empty: a DM channel.
     const std::string &channel() const
@@ -81,6 +81,7 @@ class Chat
     std::string editing_id_;      // the own message the keyboard is rewriting
     std::string draft_before_edit_;
     bool delete_armed_ = false;   // Delete pressed once: the next press deletes
+    float size_note_ = 0.0f;      // seconds the text-size note stays up
     std::string older_asked_for_; // the oldest id an older page was requested above
     int action_ = 0;  // focused entry in the action menu (actions, then reactions)
     int quick_ = 0;   // focused quick reply in compose mode

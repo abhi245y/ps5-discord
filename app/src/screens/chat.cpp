@@ -16,7 +16,9 @@
 #include <algorithm>
 #include <functional>
 #include <cmath>
+#include <cstdlib>
 
+#include "core/save_file.hpp"
 #include "screens/style.hpp"
 #include "ui/glyphs.hpp"
 
@@ -43,10 +45,25 @@ constexpr float kComposerH = 76.0f;
 constexpr float kListBottom = kComposerY - 14.0f;
 
 constexpr float kAvatarCol = 112.0f; // avatar column width
-constexpr float kTextSize = 27.0f;
-constexpr float kLineH = 37.0f;
-constexpr float kNameLine = 36.0f;
-constexpr float kReplyLine = 30.0f;
+// Message text size, switched with R3 (Small, Medium, Large) and kept across launches.
+// ponytail: file-scope, as there is one chat screen; a Settings field when settings get a page.
+float kTextSize = 27.0f;
+float kLineH = 37.0f;
+float kNameLine = 36.0f;
+float kReplyLine = 30.0f;
+int g_text_level = 1;
+constexpr const char *kTextSizePath = "/download0/hui/text_size";
+const char *const kTextLevelNames[] = {"Small", "Medium", "Large"};
+
+void apply_text_level(int level)
+{
+    static const float sizes[][4] = {{24.0f, 33.0f, 33.0f, 28.0f}, {27.0f, 37.0f, 36.0f, 30.0f}, {31.0f, 43.0f, 42.0f, 34.0f}};
+    g_text_level = std::clamp(level, 0, 2);
+    kTextSize = sizes[g_text_level][0];
+    kLineH = sizes[g_text_level][1];
+    kNameLine = sizes[g_text_level][2];
+    kReplyLine = sizes[g_text_level][3];
+}
 constexpr float kAttachH = 128.0f;
 constexpr float kReactH = 40.0f;
 constexpr float kPadTop = 10.0f;
@@ -125,6 +142,13 @@ std::vector<float> list_tops(const std::vector<const discord::Channel *> &all)
 }
 
 } // namespace
+
+Chat::Chat(const Ink &ink) : ink_(ink), keys_(ink)
+{
+    std::string saved;
+    if (hui::save::read_file(kTextSizePath, &saved, 8))
+        apply_text_level(std::atoi(saved.c_str()));
+}
 
 const std::vector<discord::Message> &Chat::messages(const discord::Snapshot &s) const
 {
@@ -257,6 +281,7 @@ Rect Chat::row_rect(const Row &row) const
 bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, float dt, hui::ui::Feedback &feedback,
                   std::vector<discord::Request> &requests)
 {
+    size_note_ = std::max(0.0f, size_note_ - dt);
     const std::vector<discord::Message> &ms = messages(s);
     const int count = static_cast<int>(ms.size());
     // An older page landed above: keep the focus on the same message.
@@ -528,6 +553,14 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
     }
 
     // Browsing.
+    if (input.is_pressed(Action::r3))
+    {
+        apply_text_level((g_text_level + 1) % 3);
+        hui::save::write_atomic(kTextSizePath, std::to_string(g_text_level));
+        size_note_ = 1.6f;
+        feedback.play(hui::audio::Cue::toggle);
+        return true;
+    }
     if (!dm() && input.is_pressed(Action::menu))
     {
         const std::vector<const discord::Channel *> all = chips(s);
@@ -1048,8 +1081,9 @@ void Chat::draw(const discord::Snapshot &s, DrawList &list) const
     if (focus_ >= 0)
         draw_actions(s, list, focused_rect);
 
-    ui::Hint hints[4] = {{ui::Button::cross, "Select"}, {ui::Button::circle, "Back"}, {ui::Button::triangle, "Type"}, {}};
-    int count = 3;
+    ui::Hint hints[5] = {{ui::Button::cross, "Select"}, {ui::Button::circle, "Back"}, {ui::Button::triangle, "Type"},
+                         {ui::Button::right_stick, "Text size"}, {}};
+    int count = 4;
     if (!dm())
         hints[count++] = {ui::Button::options, "Channels"};
     ui::HintLayout layout;
@@ -1062,6 +1096,16 @@ void Chat::draw(const discord::Snapshot &s, DrawList &list) const
         keys_.draw(list);
     if (mode_ == Mode::channels)
         draw_channel_list(s, list);
+    if (size_note_ > 0.0f)
+    {
+        const std::string note = std::string("Text size: ") + kTextLevelNames[g_text_level];
+        const float w = ink_.fonts.semibold.measure(note, 26.0f) + 60.0f;
+        const Rect r{960.0f - w * 0.5f, 470.0f, w, 64.0f};
+        list.push_opacity(std::min(1.0f, size_note_ * 3.0f));
+        list.rounded_rect(r, 32.0f, kRaisedHigh);
+        ui::text(list, ink_.fonts.semibold, note, r.cx(), r.cy() + 9.0f, 26.0f, kText, gfx::Align::center);
+        list.pop_opacity();
+    }
 }
 
 // Every channel of the server, under its categories (Options in a server).
