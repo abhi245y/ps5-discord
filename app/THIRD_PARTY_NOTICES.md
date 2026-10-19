@@ -171,3 +171,9 @@ No proprietary runtime module, encryption key, or game file is included.
 ps5-homebrew-dev-protocol (BlackBearReloaded, GPL-3.0-or-later), adapted from
 shsrv and websrv by John Törnblom (GPL-3.0-or-later). They are development
 tools only and are not part of the app.
+
+## Script fallback fonts
+
+`assets/fonts/NotoSansMalayalam-Regular.ttf` and `NotoSans{Devanagari,Tamil,Kannada,Telugu,Bengali}-VF.ttf`
+are Noto fonts by Google (SIL Open Font License 1.1, `NotoSansIndic-LICENSE.txt`). Japanese, Chinese,
+Korean, Arabic and Thai text uses the console's own system fonts at run time; none are shipped.
