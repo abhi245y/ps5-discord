@@ -188,6 +188,7 @@ struct Snapshot
     std::map<std::string, std::shared_ptr<std::vector<Message>>> messages;
     std::set<std::string> no_access; // channels Discord refused to read (403)
     std::set<std::string> load_failed; // history that did not load (network, core); retried on open
+    std::set<std::string> history_start; // channels loaded back to their first message
     std::map<std::string, std::string> dm_by_user; // one-to-one DM channel by the other person's id
     Voice voice;
     int friends_online = 0;

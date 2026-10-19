@@ -69,6 +69,24 @@ static void reply_json(int c, char *j)
 }
 
 // Proxy a Discord REST call; the UI gets {"status":N,"body":<Discord JSON>}.
+// One REST call; a 429 is retried once after the wait Discord names, if short.
+static http_response rest(const char *method, const char *path, const char *json)
+{
+    http_response res = http_request(method, path, json, chat_token());
+    if (res.status == 429) {
+        cJSON *body = cJSON_Parse(res.body ? res.body : "");
+        double wait = cJSON_GetNumberValue(cJSON_GetObjectItem(body, "retry_after"));
+        cJSON_Delete(body);
+        if (wait > 0 && wait <= 5.0) {
+            LOG("rate limited on %s %s, retrying in %.2f s", method, path, wait);
+            free(res.body);
+            usleep((useconds_t)(wait * 1e6) + 50000);
+            res = http_request(method, path, json, chat_token());
+        }
+    }
+    return res;
+}
+
 static void reply_rest(int c, http_response res)
 {
     const char *body = res.body && res.body[0] ? res.body : "null";
@@ -93,7 +111,7 @@ static void api_messages(int c, const char *query)
         snprintf(path, sizeof path, "/channels/%s/messages?limit=50&before=%s", channel, before);
     else
         snprintf(path, sizeof path, "/channels/%s/messages?limit=50", channel);
-    reply_rest(c, http_request("GET", path, NULL, chat_token()));
+    reply_rest(c, rest("GET", path, NULL));
 }
 
 // %XX and + decoding for query values.
@@ -115,7 +133,7 @@ static void url_decode(char *s)
 // Recent mentions of the account (Discord's inbox endpoint).
 static void api_mentions(int c)
 {
-    reply_rest(c, http_request("GET", "/users/@me/mentions?limit=25&roles=true&everyone=true", NULL, chat_token()));
+    reply_rest(c, rest("GET", "/users/@me/mentions?limit=25&roles=true&everyone=true", NULL));
 }
 
 // Avatars, icons and attachments for the app, which speaks no TLS. Only
@@ -164,7 +182,7 @@ static void api_ack(int c, const char *body)
     char path[96];
     snprintf(path, sizeof path, "/channels/%s/messages/%s/ack", channel, message);
     cJSON_Delete(in);
-    reply_rest(c, http_request("POST", path, "{\"token\":null}", chat_token()));
+    reply_rest(c, rest("POST", path, "{\"token\":null}"));
 }
 
 static void api_send(int c, const char *body)
@@ -196,7 +214,7 @@ static void api_send(int c, const char *body)
     snprintf(path, sizeof path, "/channels/%s/messages", channel);
     cJSON_Delete(out);
     cJSON_Delete(in);
-    reply_rest(c, http_request("POST", path, json, chat_token()));
+    reply_rest(c, rest("POST", path, json));
     free(json);
 }
 
@@ -218,7 +236,7 @@ static void api_react(int c, const char *body)
         n += snprintf(path + n, sizeof path - n, "%%%02X", *e);
     snprintf(path + n, sizeof path - n, "/@me?location=Message");
     cJSON_Delete(in);
-    reply_rest(c, http_request("PUT", path, NULL, chat_token()));
+    reply_rest(c, rest("PUT", path, NULL));
 }
 
 // Opens (or finds) the DM with a user: {user}; Discord answers with the channel.
@@ -234,7 +252,7 @@ static void api_dm(int c, const char *body)
     char json[96];
     snprintf(json, sizeof json, "{\"recipients\":[\"%s\"]}", user);
     cJSON_Delete(in);
-    reply_rest(c, http_request("POST", "/users/@me/channels", json, chat_token()));
+    reply_rest(c, rest("POST", "/users/@me/channels", json));
 }
 
 // local: the peer is on this console (the native app). Chat data is only served to it.

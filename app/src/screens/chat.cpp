@@ -253,7 +253,27 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
 {
     const std::vector<discord::Message> &ms = messages(s);
     const int count = static_cast<int>(ms.size());
+    // An older page landed above: keep the focus on the same message.
+    if (count > 0 && !front_id_.empty() && ms.front().id != front_id_ && focus_ >= 0)
+        for (int i = 0; i < count; ++i)
+            if (ms[static_cast<std::size_t>(i)].id == front_id_)
+            {
+                focus_ += i;
+                break;
+            }
+    front_id_ = count > 0 ? ms.front().id : std::string();
     focus_ = std::min(focus_, count - 1);
+    // Near the top of what is loaded: fetch the page above before it is needed.
+    if (focus_ >= 0 && focus_ < 8 && count > 0 && !s.history_start.count(channel_id_) &&
+        older_asked_for_ != ms.front().id)
+    {
+        older_asked_for_ = ms.front().id;
+        discord::Request r;
+        r.kind = discord::Request::Kind::load_older;
+        r.guild_id = guild_id_;
+        r.channel_id = channel_id_;
+        requests.push_back(r);
+    }
 
     if (mode_ == Mode::actions)
     {
@@ -491,14 +511,6 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
         if (count == 0 || focus_ == 0)
         {
             feedback.play(hui::audio::Cue::error, 1.0f, 0.0f, 0.5f);
-            if (count > 0 && focus_ == 0)
-            {
-                discord::Request r;
-                r.kind = discord::Request::Kind::load_older;
-                r.guild_id = guild_id_;
-                r.channel_id = channel_id_;
-                requests.push_back(r);
-            }
         }
         else
         {
@@ -938,6 +950,21 @@ void Chat::draw(const discord::Snapshot &s, DrawList &list) const
         if (focused)
             focused_rect = r;
         draw_message(s, list, row, r, focused);
+    }
+    if (!rows.empty())
+    {
+        // Above the oldest message: the channel's start, or more to come.
+        const Rect first = row_rect(rows.front());
+        if (first.y - 60.0f > top - 40.0f)
+        {
+            std::string name = "this conversation";
+            for (const discord::Channel *c : chips(s))
+                if (c->id == channel_id_)
+                    name = "#" + c->name;
+            const bool start = s.history_start.count(channel_id_) > 0;
+            ui::text(list, ink_.fonts.regular, start ? "This is the start of " + name + "." : "Loading older messages…",
+                     kMargin + kAvatarCol, first.y - 22.0f, 22.0f, kFaint);
+        }
     }
     if (rows.empty())
         ui::text(list, ink_.fonts.regular,

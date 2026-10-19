@@ -89,6 +89,14 @@ void Keyboard::open(const std::string &title)
     blink_ = 0.0f;
 }
 
+bool Keyboard::full() const
+{
+    std::size_t letters = 0;
+    for (const unsigned char c : text_)
+        letters += (c & 0xc0) != 0x80;
+    return letters >= 2000;
+}
+
 void Keyboard::erase()
 {
     while (!text_.empty() && (static_cast<unsigned char>(text_.back()) & 0xc0) == 0x80)
@@ -102,6 +110,11 @@ void Keyboard::erase()
 
 void Keyboard::press(int row, int col, hui::ui::Feedback &feedback)
 {
+    if (full() && !(row == kKeyRows && (col == 0 || col == 4)))
+    {
+        feedback.play(hui::audio::Cue::error); // Discord's limit; Shift and Erase still work
+        return;
+    }
     if (row < kKeyRows)
     {
         text_ += shifted(kRows[row][col], shift_);
@@ -176,9 +189,23 @@ Keyboard::Result Keyboard::update(const hui::InputFrame &input, float dt, hui::u
     if (input.is_pressed(Action::west))
     {
         erase();
+        erase_held_ = 0.0f;
         feedback.play(hui::audio::Cue::erase);
     }
-    if (input.is_pressed(Action::north))
+    else if (input.is_held(Action::west) && !text_.empty())
+    {
+        // Held: after a beat, erase a letter every few frames.
+        const float before = erase_held_;
+        erase_held_ += dt;
+        if (erase_held_ > 0.45f && std::floor(before / 0.06f) != std::floor(erase_held_ / 0.06f))
+        {
+            erase();
+            feedback.play(hui::audio::Cue::tick, 0.9f, 0.0f, 0.6f);
+        }
+    }
+    if (input.is_pressed(Action::north) && full())
+        feedback.play(hui::audio::Cue::error);
+    else if (input.is_pressed(Action::north))
     {
         text_ += ' ';
         feedback.play(hui::audio::Cue::type, 0.9f);

@@ -47,6 +47,8 @@ class Keyboard
     int col_ = 0;
     bool shift_ = false;
     float blink_ = 0.0f;
+    float erase_held_ = 0.0f; // Square held: erasing repeats after a moment
+    bool full() const;        // at Discord's 2000-character limit
 };
 
 } // namespace screens

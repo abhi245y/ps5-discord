@@ -83,6 +83,7 @@ class Client
     long events_next_ = -1; // -1: skip the backlog on first contact
     std::atomic<std::int64_t> last_chat_ms_{0}; // the events thread zeroes it to ask for a refresh
     std::int64_t last_mentions_ms_ = 0;
+    bool prefetched_ = false; // recent conversations' history asked for once after sign-in
     std::atomic<bool> ready_{false}; // read by the image thread too
 };
 

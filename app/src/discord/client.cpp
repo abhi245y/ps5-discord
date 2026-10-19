@@ -856,6 +856,21 @@ void Client::poll_chat()
     std::lock_guard<std::mutex> lock(mutex_);
     next.messages = std::move(snapshot_.messages);
     snapshot_ = std::move(next);
+    if (!prefetched_)
+    {
+        // Warm the conversations people open first, so they show at once.
+        prefetched_ = true;
+        int queued = 0;
+        for (const Conversation &c : snapshot_.recent)
+            if (queued < 6 && !snapshot_.messages.count(c.channel_id))
+            {
+                Request r;
+                r.kind = Request::Kind::prefetch;
+                r.channel_id = c.channel_id;
+                queue_.push_back(r);
+                ++queued;
+            }
+    }
     publish();
 }
 
@@ -1015,6 +1030,7 @@ void Client::handle(const Request &request)
     switch (request.kind)
     {
     case Request::Kind::open_channel:
+    case Request::Kind::prefetch:
     case Request::Kind::load_older: {
         std::string path = "/api/messages?channel=" + request.channel_id;
         if (!request.guild_id.empty())
@@ -1060,6 +1076,8 @@ void Client::handle(const Request &request)
         {
             std::lock_guard<std::mutex> lock(mutex_);
             snapshot_.load_failed.erase(request.channel_id);
+            if (page.size() < 50) // Discord's page size: a short page reached the start
+                snapshot_.history_start.insert(request.channel_id);
             std::vector<Message> &ms = edit_messages(snapshot_, request.channel_id);
             if (request.kind == Request::Kind::load_older)
                 ms.insert(ms.begin(), page.begin(), page.end());

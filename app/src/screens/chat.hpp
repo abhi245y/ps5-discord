@@ -73,6 +73,8 @@ class Chat
     std::string channel_id_;
     Mode mode_ = Mode::browse;
     int focus_ = -1;  // focused message index; -1 is the composer
+    std::string front_id_;        // oldest loaded message last frame: an older page shifts focus
+    std::string older_asked_for_; // the oldest id an older page was requested above
     int action_ = 0;  // focused entry in the action menu (actions, then reactions)
     int quick_ = 0;   // focused quick reply in compose mode
     std::string reply_to_; // message id the composer answers
