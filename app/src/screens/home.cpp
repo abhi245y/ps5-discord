@@ -133,14 +133,11 @@ Rect Home::item_rect(const discord::Snapshot &s, int zone, int index) const
         float x = kMargin + title_w + 40.0f + 6.0f;
         for (int i = 0; i < index; ++i)
         {
-            float w = ink_.fonts.semibold.measure(kTabNames[i], 25.0f) + 52.0f;
-            if (i == static_cast<int>(HomeTab::mentions))
-                w += 50.0f;
-            x += w + 4.0f;
+            x += ink_.fonts.semibold.measure(kTabNames[i], 25.0f) + 52.0f + 4.0f; // Mentions is last
         }
         float w = ink_.fonts.semibold.measure(kTabNames[index], 25.0f) + 52.0f;
         if (index == static_cast<int>(HomeTab::mentions) && s.mention_count > 0)
-            w += 50.0f;
+            w += count_badge_width(ink_, s.mention_count) + 2.0f;
         return {x, kHeaderY + 6.0f, w, kHeaderH - 12.0f};
     }
     case kFriends: {
@@ -148,6 +145,8 @@ Rect Home::item_rect(const discord::Snapshot &s, int zone, int index) const
         return {cx - kAvatarR - 12.0f, kAvatarCy - kAvatarR - 12.0f, (kAvatarR + 12.0f) * 2, (kAvatarR + 12.0f) * 2};
     }
     case kRooms:
+        if (s.live_rooms.empty()) // the one empty card spans the row
+            return {kMargin, kRoomY, kRowWidth, kRoomH};
         return {kMargin + (kRoomW + kGap) * index - scroll_[kRooms].value, kRoomY, kRoomW, kRoomH};
     case kRecent:
         return {kMargin + (kRecentW + kGap) * index - scroll_[kRecent].value, kRecentY, kRecentW, kRecentH};
@@ -311,7 +310,7 @@ void Home::draw_header(const discord::Snapshot &s, DrawList &list) const
         const float tx = r.x + 26.0f;
         const float tw = ui::text(list, ink_.fonts.semibold, kTabNames[i], tx, r.cy() + 9.0f, 25.0f, on ? kText : kDim);
         if (i == static_cast<int>(HomeTab::mentions) && s.mention_count > 0)
-            count_badge(list, ink_, s.mention_count, tx + tw + 50.0f, r.cy(), 34.0f);
+            count_badge(list, ink_, s.mention_count, tx + tw + 12.0f + count_badge_width(ink_, s.mention_count), r.cy());
     }
 
     voice_pill(list, ink_, s.voice, kHeaderY, kHeaderH);
@@ -321,6 +320,13 @@ void Home::draw_friends(const discord::Snapshot &s, DrawList &list) const
 {
     const std::vector<const discord::User *> people = ordered_friends(s);
     row_label(list, ink_, kFriendsLabel, "Friends online", std::to_string(s.friends_online));
+    if (people.empty())
+    {
+        ui::text(list, ink_.fonts.regular,
+                 s.friends.empty() ? "Friends you add on Discord show up here." : "None of your friends are online.",
+                 kMargin, kAvatarCy + 10.0f, kBodySize, kDim);
+        return;
+    }
     const int shown = std::min<int>(kFriendsShown, static_cast<int>(people.size()));
     for (int i = 0; i < row_count(s, kFriends); ++i)
     {
@@ -354,11 +360,8 @@ void Home::draw_rooms(const discord::Snapshot &s, DrawList &list) const
     row_label(list, ink_, kRoomsLabel, "Live rooms", std::to_string(s.live_rooms.size()));
     if (s.live_rooms.empty())
     {
-        const Rect r{kMargin, kRoomY, kRowWidth, kRoomH};
-        list.rounded_rect(r, kCardRadius, kRaised);
-        ui::text(list, ink_.fonts.semibold, "No one is in voice right now", r.x + 48.0f, r.y + 100.0f, 34.0f, kText);
-        ui::text(list, ink_.fonts.regular, "Rooms with people in them show up here.", r.x + 48.0f, r.y + 146.0f, kBodySize,
-                 kDim);
+        empty_note(list, ink_, {kMargin, kRoomY, kRowWidth, kRoomH}, "No one is in voice right now",
+                   "Rooms with people in them show up here.");
         return;
     }
     for (int i = 0; i < static_cast<int>(s.live_rooms.size()); ++i)

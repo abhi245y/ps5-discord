@@ -47,6 +47,10 @@ void speaking_bars(DrawList &list, float cx, float cy, float height, Color color
 
 // A coral count pill ("7", "99+") whose right edge is at right; returns its width.
 float count_badge(DrawList &list, const Ink &ink, int count, float right, float cy, float height = 34.0f);
+// The width count_badge will take, for laying out around it.
+float count_badge_width(const Ink &ink, int count, float height = 34.0f);
+// A raised card saying why a row or page is empty.
+void empty_note(DrawList &list, const Ink &ink, const Rect &r, const std::string &title, const std::string &body);
 
 // "now", "4m ago", "2h ago", "3d ago".
 std::string ago(std::int64_t now_ms, std::int64_t then_ms);

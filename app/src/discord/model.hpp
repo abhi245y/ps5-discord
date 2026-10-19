@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -158,6 +159,7 @@ struct Snapshot
     int login_qr_size = 0;
     bool login_scanned = false; // waiting for approval on the phone
     std::int64_t now_ms = 0; // for "12m ago"
+    int utc_offset_minutes = 0; // the console's time zone, for clock times
     User me;
     std::vector<User> friends; // everyone the Home rows can show
     std::vector<Room> live_rooms;
@@ -166,6 +168,7 @@ struct Snapshot
     std::vector<Mention> mentions;
     // Loaded history by channel id, oldest first (DM channels included).
     std::map<std::string, std::vector<Message>> messages;
+    std::set<std::string> no_access; // channels Discord refused to read (403)
     Voice voice;
     int friends_online = 0;
     int unread_total = 0;

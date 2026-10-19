@@ -14,6 +14,7 @@
 #include "screens/chat.hpp"
 
 #include <algorithm>
+#include <functional>
 #include <cmath>
 
 #include "screens/style.hpp"
@@ -73,10 +74,10 @@ const char *const kReactions[] = {"\xE2\x9D\xA4\xEF\xB8\x8F", "\xF0\x9F\x91\x8D"
                                   "\xF0\x9F\x98\xAE", "\xF0\x9F\x94\xA5"};
 constexpr int kReactionCount = 5;
 
-std::string clock_time(std::int64_t ms)
+std::string clock_time(std::int64_t ms, int utc_offset_minutes)
 {
-    // ponytail: UTC until the console's time zone is read (sceSystemServiceParamGetInt 4/5, as spot5).
-    const std::int64_t minutes = (ms / 60000) % (24 * 60);
+    const std::int64_t day = 24 * 60;
+    const std::int64_t minutes = ((ms / 60000 + utc_offset_minutes) % day + day) % day;
     int h = static_cast<int>(minutes / 60);
     const int m = static_cast<int>(minutes % 60);
     const char *suffix = h >= 12 ? "PM" : "AM";
@@ -400,17 +401,37 @@ void Chat::draw_header(const discord::Snapshot &s, DrawList &list) const
     ui::text(list, ink_.fonts.display, "#" + channel_name, x, 84.0f, 60.0f, Color::rgb(0xb9bfdc));
     voice_pill(list, ink_, s.voice, kHeaderY, kHeaderH);
 
-    // Channel chips.
-    float cx = kMargin;
-    for (const discord::Channel *c : chips(s))
+    constexpr float kChipGap = 16.0f;
+    // Channel chips: the run starts late enough that the open channel is in it.
+    const std::vector<const discord::Channel *> all = chips(s);
+    std::vector<float> widths;
+    std::size_t current = 0;
+    for (std::size_t i = 0; i < all.size(); ++i)
     {
-        const float tw = ink_.fonts.semibold.measure(c->name, 26.0f);
+        const discord::Channel *c = all[i];
         const float badge = c->unread > 0 ? ink_.fonts.semibold.measure(count_text(c->unread), 22.0f) + 46.0f : 0.0f;
-        const float w = tw + 96.0f + badge;
-        if (cx + w > kRight)
+        widths.push_back(ink_.fonts.semibold.measure(c->name, 26.0f) + 96.0f + badge + kChipGap);
+        if (c->id == channel_id_)
+            current = i;
+    }
+    std::size_t first = 0;
+    const auto run = [&](std::size_t from) {
+        float w = 0.0f;
+        for (std::size_t i = from; i <= current && i < widths.size(); ++i)
+            w += widths[i];
+        return w;
+    };
+    while (first < current && run(first) + 92.0f > kRight - kMargin)
+        ++first;
+    float cx = kMargin;
+    for (std::size_t i = first; i < all.size(); ++i)
+    {
+        const discord::Channel *c = all[i];
+        const float w = widths[i] - kChipGap;
+        if (cx + w + (i + 1 < all.size() ? 92.0f : 0.0f) > kRight)
         {
             list.rounded_rect({cx, kChipsY, 92.0f, kChipH}, 16.0f, kRaised);
-            ui::text(list, ink_.fonts.semibold, "+" + std::to_string(chips(s).size()), cx + 46.0f, kChipsY + 41.0f, 26.0f,
+            ui::text(list, ink_.fonts.semibold, "+" + std::to_string(all.size() - i), cx + 46.0f, kChipsY + 41.0f, 26.0f,
                      kText, gfx::Align::center);
             break;
         }
@@ -423,7 +444,7 @@ void Chat::draw_header(const discord::Snapshot &s, DrawList &list) const
             count_badge(list, ink_, c->unread, r.x + r.w - 22.0f, r.cy(), 36.0f);
         if (on)
             list.rounded_rect({r.x + 22.0f, r.y + r.h - 5.0f, r.w - 44.0f, 4.0f}, 2.0f, kCoral);
-        cx += w + 16.0f;
+        cx += w + kChipGap;
     }
 }
 
@@ -479,8 +500,16 @@ void Chat::draw_message(const discord::Snapshot &s, DrawList &list, const Row &r
             face.voice_room.clear();
             avatar(list, ink_, face, acx, y + 40.0f, 44.0f);
         }
+        else
+        {
+            // Server members outside the friends list: their initial on stable art.
+            discord::User face;
+            face.name = author_name(s, m);
+            face.art = static_cast<discord::ArtIndex>(std::hash<std::string>{}(m.author_id) % 12);
+            avatar(list, ink_, face, acx, y + 40.0f, 44.0f, false);
+        }
         const std::string name = mine ? std::string("You") : author_name(s, m);
-        const std::string when = clock_time(m.time_ms);
+        const std::string when = clock_time(m.time_ms, s.utc_offset_minutes);
         if (dm() && mine)
         {
             const float tw = ink_.fonts.regular.measure(when, 22.0f);
@@ -682,7 +711,9 @@ void Chat::draw(const discord::Snapshot &s, DrawList &list) const
         draw_message(s, list, row, r, focused);
     }
     if (rows.empty())
-        ui::text(list, ink_.fonts.regular, "No messages yet. Say hi.", 960.0f, 520.0f, 30.0f, kDim, gfx::Align::center);
+        ui::text(list, ink_.fonts.regular,
+                 s.no_access.count(channel_id_) ? "You can't read this channel." : "No messages yet. Say hi.", 960.0f,
+                 520.0f, 30.0f, kDim, gfx::Align::center);
     list.pop_clip();
     // Header after the list so scrolled history slides under it, fading out.
     list.rounded_rect({0, 0, 1920, top}, 0.0f, kGround);

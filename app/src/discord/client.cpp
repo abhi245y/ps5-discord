@@ -162,12 +162,59 @@ User user_from(const json &u)
     return user;
 }
 
+// Discord markup as people read it: <:name:id> and <a:name:id> become :name:,
+// <@id> becomes @name (from the message's mentions), <@&id> @role, <#id> #channel.
+std::string readable(const std::string &content, const json &m)
+{
+    std::string out;
+    out.reserve(content.size());
+    for (std::size_t i = 0; i < content.size();)
+    {
+        const std::size_t close = content[i] == '<' ? content.find('>', i) : std::string::npos;
+        if (close == std::string::npos || close - i > 96)
+        {
+            out += content[i++];
+            continue;
+        }
+        const std::string tag = content.substr(i + 1, close - i - 1);
+        std::string shown;
+        if (tag.rfind(":", 0) == 0 || tag.rfind("a:", 0) == 0)
+        {
+            const std::size_t start = tag.find(':') + 1;
+            const std::size_t end = tag.find(':', start);
+            if (end != std::string::npos)
+                shown = ":" + tag.substr(start, end - start) + ":";
+        }
+        else if (tag.rfind("@&", 0) == 0)
+            shown = "@role";
+        else if (tag.rfind("@", 0) == 0)
+        {
+            const std::string id = tag.substr(tag.rfind("@!", 0) == 0 ? 2 : 1);
+            shown = "@user";
+            if (m.contains("mentions") && m["mentions"].is_array())
+                for (const json &u : m["mentions"])
+                    if (text(u, "id") == id)
+                        shown = "@" + user_from(u).name;
+        }
+        else if (tag.rfind("#", 0) == 0)
+            shown = "#channel";
+        if (shown.empty())
+        {
+            out += content[i++];
+            continue;
+        }
+        out += shown;
+        i = close + 1;
+    }
+    return out;
+}
+
 Message message_from(const json &m, const std::string &me_id)
 {
     Message out;
     out.id = text(m, "id");
     out.channel_id = text(m, "channel_id");
-    out.content = text(m, "content");
+    out.content = readable(text(m, "content"), m);
     out.time_ms = snowflake_ms(out.id);
     if (m.contains("author") && m["author"].is_object())
     {
@@ -181,7 +228,7 @@ Message message_from(const json &m, const std::string &me_id)
     if (m.contains("referenced_message") && m["referenced_message"].is_object())
     {
         const json &r = m["referenced_message"];
-        out.reply_text = text(r, "content");
+        out.reply_text = readable(text(r, "content"), r);
         if (r.contains("author") && r["author"].is_object())
             out.reply_author = user_from(r["author"]).name;
     }
@@ -655,7 +702,7 @@ void Client::poll_mentions()
         Mention mention;
         mention.message_id = text(m, "id");
         mention.channel_id = text(m, "channel_id");
-        mention.content = text(m, "content");
+        mention.content = readable(text(m, "content"), m);
         mention.time_ms = snowflake_ms(mention.message_id);
         if (m.contains("author") && m["author"].is_object())
             mention.author_id = text(m["author"], "id");
@@ -699,7 +746,15 @@ void Client::handle(const Request &request)
         const json r = json::parse(reply.body, nullptr, false);
         if (reply.status != 200 || r.is_discarded() || !r.contains("body") || !r["body"].is_array())
         {
-            hui::sys::log("[CLIENT] history for %s failed (%d)", request.channel_id.c_str(), reply.status);
+            const int discord_status = r.is_discarded() ? 0 : static_cast<int>(r.value("status", 0.0));
+            hui::sys::log("[CLIENT] history for %s failed (%d/%d)", request.channel_id.c_str(), reply.status,
+                          discord_status);
+            if (discord_status == 403)
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                snapshot_.no_access.insert(request.channel_id);
+                publish();
+            }
             return;
         }
         std::vector<Message> page;

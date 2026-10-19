@@ -159,11 +159,24 @@ void speaking_bars(DrawList &list, float cx, float cy, float height, Color color
     }
 }
 
+float count_badge_width(const Ink &ink, int count, float height)
+{
+    return std::max(height, ink.fonts.semibold.measure(count_text(count), height * 0.62f) + height * 0.6f);
+}
+
+void empty_note(DrawList &list, const Ink &ink, const Rect &r, const std::string &title, const std::string &body)
+{
+    list.rounded_rect(r, kCardRadius, kRaised);
+    const float top = r.cy() - 14.0f;
+    hui::ui::text(list, ink.fonts.semibold, title, r.x + 48.0f, top, 34.0f, kText);
+    hui::ui::text(list, ink.fonts.regular, body, r.x + 48.0f, top + 46.0f, kBodySize, kDim);
+}
+
 float count_badge(DrawList &list, const Ink &ink, int count, float right, float cy, float height)
 {
     const std::string text = count_text(count);
     const float size = height * 0.62f;
-    const float w = std::max(height, ink.fonts.semibold.measure(text, size) + height * 0.6f);
+    const float w = count_badge_width(ink, count, height);
     list.rounded_rect({right - w, cy - height * 0.5f, w, height}, height * 0.5f, kCoral);
     hui::ui::text(list, ink.fonts.semibold, text, right - w * 0.5f, cy + size * 0.36f, size, kText,
                   hui::gfx::Align::center);

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -118,6 +119,19 @@ void pill_button(DrawList &list, const Ink &ink, const Rect &r, const char *text
     ui::text(list, ink.fonts.semibold, text, tx, r.cy() + 8.0f, 23.0f, ink_color, gfx::Align::center);
 }
 
+// 213515 -> "213.5K": member counts of big servers.
+std::string compact(int n)
+{
+    char out[16];
+    if (n >= 1000000)
+        std::snprintf(out, sizeof out, "%.1fM", n / 1e6);
+    else if (n >= 10000)
+        std::snprintf(out, sizeof out, "%.1fK", n / 1e3);
+    else
+        std::snprintf(out, sizeof out, "%d", n);
+    return out;
+}
+
 } // namespace
 
 std::vector<Home::TabItem> Home::layout_tab(const discord::Snapshot &s) const
@@ -164,8 +178,8 @@ Rect Home::tab_focus_rect(const discord::Snapshot &s) const
 {
     const std::vector<TabItem> items = layout_tab(s);
     const int t = static_cast<int>(tab_);
-    if (items.empty())
-        return {kMargin, kPageTop, 0, 0};
+    if (items.empty()) // nothing to focus on the page: stay on its chip
+        return item_rect(s, kChips, t);
     Rect r = items[static_cast<std::size_t>(std::clamp(tab_focus_[t], 0, static_cast<int>(items.size()) - 1))].rect;
     r.y -= tab_scroll_[t].value;
     return r;
@@ -292,7 +306,14 @@ void Home::draw_tab(const discord::Snapshot &s, DrawList &list) const
     const bool content_focus = zone_ != kChips;
     list.push_clip({0, kPageTop - 20.0f, 1920, kPageBottom - kPageTop + 40.0f});
 
-    if (tab_ == HomeTab::friends)
+    const Rect empty{kMargin, kPageTop + 10.0f, kRowWidth, 200.0f};
+    if (tab_ == HomeTab::friends && items.empty())
+        empty_note(list, ink_, empty, s.friends.empty() ? "No friends yet" : "No friends online",
+                   s.friends.empty() ? "Friends you add on Discord show up here."
+                                     : "Friends who come online show up here.");
+    else if (tab_ == HomeTab::mentions && items.empty())
+        empty_note(list, ink_, empty, "No mentions", "Messages that mention you show up here.");
+    else if (tab_ == HomeTab::friends)
     {
         for (const Section &section : friend_sections(s))
             row_label(list, ink_, section.y - 22.0f - scroll, group_name(section.group), std::to_string(section.count));
@@ -350,10 +371,14 @@ void Home::draw_tab(const discord::Snapshot &s, DrawList &list) const
             int live = 0;
             for (const discord::Room &room : s.live_rooms)
                 live += room.guild_id == g.id ? 1 : 0;
+            // Member presence is not tracked per server yet; the member count stands in.
             const std::string line = std::to_string(live) + (live == 1 ? " live room · " : " live rooms · ") +
-                                     std::to_string(g.online) + " online";
+                                     (g.online > 0 ? std::to_string(g.online) + " online"
+                                                   : compact(g.members) + " members");
+            const float badge = g.unread > 0 ? count_badge_width(ink_, g.unread, 44.0f) + 30.0f : 0.0f;
             list.circle(r.x + 156.0f, r.y + kBannerH + 88.0f, 6.0f, kOnline);
-            ui::text(list, ink_.fonts.regular, line, r.x + 172.0f, r.y + kBannerH + 96.0f, 23.0f, kDim);
+            ui::text(list, ink_.fonts.regular, fit(ink_.fonts.regular, line, 23.0f, r.w - 196.0f - badge),
+                     r.x + 172.0f, r.y + kBannerH + 96.0f, 23.0f, kDim);
             if (g.unread > 0)
                 count_badge(list, ink_, g.unread, r.x + r.w - 26.0f, r.y + kBannerH + 66.0f, 44.0f);
         }

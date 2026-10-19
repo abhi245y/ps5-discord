@@ -74,6 +74,20 @@ constexpr int kShotWidth = 960;
 constexpr int kShotHeight = 540;
 constexpr double kPressSeconds = 0.35;
 
+extern "C" int sceSystemServiceParamGetInt(int id, int *value);
+
+// The console's offset from UTC (Settings > Date and Time), in minutes:
+// system parameter 4 is the zone's offset, 5 is summer time (as spot5).
+int console_utc_minutes()
+{
+    int zone = 0;
+    int summer = 0;
+    const int zone_rc = sceSystemServiceParamGetInt(4, &zone);
+    const int summer_rc = sceSystemServiceParamGetInt(5, &summer);
+    hui::sys::log("[HUI] time zone offset=%d summer=%d", zone, summer);
+    return (zone_rc == 0 ? zone : 0) + (summer_rc == 0 && summer ? 60 : 0);
+}
+
 // One remote key ("press" request) as the pad would have produced it.
 hui::InputFrame remote_key(const std::string &key)
 {
@@ -233,6 +247,7 @@ int main()
     // a sample account stands in only for the scripted tour run.
     discord::Snapshot snapshot;
     discord::Client client;
+    const int utc_offset = console_utc_minutes();
 
     ps5::Pad pad;
     pad.open();
@@ -351,6 +366,7 @@ int main()
 
         if (!tour) // the tour runs on the sample account
             client.take(snapshot);
+        snapshot.utc_offset_minutes = utc_offset;
         shell.update(input, dt);
         if (shell.take_settings_changed())
         {

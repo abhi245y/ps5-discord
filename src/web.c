@@ -114,7 +114,7 @@ static void url_decode(char *s)
 // Recent mentions of the account (Discord's inbox endpoint).
 static void api_mentions(int c)
 {
-    reply_rest(c, http_request("GET", "/users/@me/mentions?limit=25&roles=false&everyone=false", NULL, chat_token()));
+    reply_rest(c, http_request("GET", "/users/@me/mentions?limit=25&roles=true&everyone=true", NULL, chat_token()));
 }
 
 // Avatars, icons and attachments for the app, which speaks no TLS. Only
