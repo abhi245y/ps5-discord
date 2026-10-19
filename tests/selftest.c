@@ -111,6 +111,18 @@ static void test_chat(void)
     t = chat_tree_json();
     assert(strstr(t, "\"last_message_id\":\"30\"")); // the channel moved to the top
     free(t);
+
+    cJSON *g = cJSON_Parse("{\"id\":\"40\",\"name\":\"New\",\"owner_id\":\"1\",\"members\":[{\"user\":{\"id\":\"1\"},"
+                           "\"roles\":[]}],\"channels\":[{\"id\":\"41\",\"name\":\"lobby\",\"type\":0}]}");
+    chat_dispatch("GUILD_CREATE", g);
+    t = chat_tree_json();
+    assert(strstr(t, "\"name\":\"New\"") && strstr(t, "lobby")); // a server created live shows up
+    free(t);
+    chat_dispatch("GUILD_DELETE", g);
+    cJSON_Delete(g);
+    t = chat_tree_json();
+    assert(!strstr(t, "lobby"));
+    free(t);
 }
 
 int main(void)

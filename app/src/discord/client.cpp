@@ -20,8 +20,18 @@
 #include <map>
 #include <vector>
 
-#include "nlohmann/json.hpp"
 #include "platform/ps5/system.hpp"
+
+// The console's libc parses some numbers differently from what nlohmann's
+// lexer asserts (it aborted the app on a channel's history). Log and go on:
+// at worst one number is read short, never a crash.
+// ponytail: find the exact number form and fix the libc call, then drop this.
+static void json_assert_failed(const char *what, int line)
+{
+    hui::sys::log("[CLIENT] json assert at json.hpp:%d: %s", line, what);
+}
+#define JSON_ASSERT(x) ((x) ? (void)0 : json_assert_failed(#x, __LINE__))
+#include "nlohmann/json.hpp"
 
 namespace discord
 {
@@ -557,7 +567,7 @@ void Client::fetch_images()
         Image image;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (image_queue_.empty())
+            if (image_queue_.empty() || !queue_.empty()) // screens' requests go first
                 return;
             image.url = image_queue_.front();
             image_queue_.pop_front();
