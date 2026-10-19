@@ -305,6 +305,18 @@ void voice_pill(DrawList &list, const Ink &ink, const discord::Voice &voice, flo
         mic_off(list, right - 38.0f, pill.cy(), 30.0f, kDim);
 }
 
+std::string compact(int n)
+{
+    char out[16];
+    if (n >= 1000000)
+        std::snprintf(out, sizeof out, "%.1fM", n / 1e6);
+    else if (n >= 10000)
+        std::snprintf(out, sizeof out, "%.1fK", n / 1e3);
+    else
+        std::snprintf(out, sizeof out, "%d", n);
+    return out;
+}
+
 std::string count_text(int count)
 {
     return count > 99 ? std::string("99+") : std::to_string(count);

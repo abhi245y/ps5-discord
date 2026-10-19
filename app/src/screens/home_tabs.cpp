@@ -124,19 +124,6 @@ void pill_button(DrawList &list, const Ink &ink, const Rect &r, const char *text
     ui::text(list, ink.fonts.semibold, text, tx, r.cy() + 8.0f, 23.0f, ink_color, gfx::Align::center);
 }
 
-// 213515 -> "213.5K": member counts of big servers.
-std::string compact(int n)
-{
-    char out[16];
-    if (n >= 1000000)
-        std::snprintf(out, sizeof out, "%.1fM", n / 1e6);
-    else if (n >= 10000)
-        std::snprintf(out, sizeof out, "%.1fK", n / 1e3);
-    else
-        std::snprintf(out, sizeof out, "%d", n);
-    return out;
-}
-
 } // namespace
 
 std::vector<Home::TabItem> Home::layout_tab(const discord::Snapshot &s) const
@@ -268,16 +255,8 @@ void Home::update_tab(const discord::Snapshot &s, const hui::InputFrame &input, 
         }
         else if (tab_ == HomeTab::servers)
         {
-            // The liveliest channel you can talk in (else the liveliest at all);
-            // Options in the chat lists the rest.
-            const discord::Guild &g = s.guilds[static_cast<std::size_t>(ref)];
-            const discord::Channel *pick = nullptr;
-            for (const discord::Channel &c : g.channels)
-                if (c.kind != discord::ChannelKind::voice &&
-                    (!pick || (c.can_send && !pick->can_send) || (c.can_send == pick->can_send && c.last_ms > pick->last_ms)))
-                    pick = &c;
-            if (pick)
-                open_ = HomeOpen{g.id, pick->id, {}};
+            // The server's own page: its rooms and channels.
+            open_ = HomeOpen{s.guilds[static_cast<std::size_t>(ref)].id, {}, {}};
         }
         else if (tab_ == HomeTab::friends)
         {

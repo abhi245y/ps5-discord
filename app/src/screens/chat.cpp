@@ -905,6 +905,8 @@ void Chat::draw_message(const discord::Snapshot &s, DrawList &list, const Row &r
         {
             discord::User face = *u;
             face.voice_room.clear();
+            if (face.avatar_url.empty())
+                face.avatar_url = m.author_avatar_url;
             avatar(list, ink_, face, acx, y + 34.0f, 36.0f);
         }
         else

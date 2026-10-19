@@ -54,10 +54,10 @@ class Chat
     const std::vector<discord::Message> &messages(const discord::Snapshot &snapshot) const;
     std::vector<Row> layout(const discord::Snapshot &snapshot) const;
     float row_height(const discord::Snapshot &snapshot, int index, bool grouped) const;
-    Rect row_rect(const Row &row) const;
+    Rect row_rect(const Row &row) const; // on screen, scroll applied
     std::pair<float, float> focus_range(const Row &row) const; // scroll values that keep the row in view
     int reaction_lines(const discord::Message &m, float width) const;
-    float reaction_width(const discord::Reaction &r) const; // on screen, scroll applied
+    float reaction_width(const discord::Reaction &r) const;
     bool can_send(const discord::Snapshot &s) const;
     bool start_typing(const discord::Snapshot &s, hui::ui::Feedback &feedback);
     const discord::User *dm_person(const discord::Snapshot &s) const;

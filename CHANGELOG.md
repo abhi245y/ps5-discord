@@ -15,8 +15,11 @@ All notable changes to this project are documented here. The format follows
 - App: replies, reactions, edit and delete of your own messages, DMs opened from a friend.
 - App: on-screen keyboard (Triangle) with an emoji row, held keys repeating, the 2000-character
   limit and a draft per channel; quick replies stay a Cross away.
-- App: channel list on Options, servers open on their liveliest channel, history pages load
-  ahead of the focus, a marker at the start of a channel.
+- App: a page for each server (banner, voice rooms with who is in them, text channels by
+  activity); Join is marked "soon" until voice lands. Channel list on Options, history pages
+  load ahead of the focus, a marker at the start of a channel.
+- App: colour emoji in reactions (server emoji and Twemoji), wrapping onto more lines; role
+  and channel names in mentions; markdown links, headings and escapes read as Discord shows them.
 - App: toast and chime for a live DM or mention; text size on R3 (Small, Medium, Large).
 - App: Malayalam, Devanagari, Tamil, Kannada, Telugu and Bengali fonts; the console's own
   Japanese, Chinese, Korean, Arabic and Thai fonts.
@@ -30,6 +33,8 @@ All notable changes to this project are documented here. The format follows
 - Core: guild subscription (gateway op 37) when a guild is opened.
 
 ### Fixed
+- App: a message taller than the screen no longer jitters when focused; Up/Down read through it.
+- App: server members in chat show their own picture, not placeholder art.
 - Core: heartbeats could be starved while the gateway delivered a steady stream of events.
 - App: SIGPIPE crash when the core closed a connection; abort in the JSON parser (the runtime
   libc reported an empty decimal point; decimals parsed short).

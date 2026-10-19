@@ -14,6 +14,7 @@
 #include "screens/draw.hpp"
 #include "screens/chat.hpp"
 #include "screens/home.hpp"
+#include "screens/server.hpp"
 #include "screens/signin.hpp"
 #include "screens/style.hpp"
 
@@ -97,7 +98,7 @@ class DiscordApp final : public app::Concept
 {
   public:
     explicit DiscordApp(app::Context &context)
-        : context_(context), ink_{context.fonts, context.art}, home_(ink_), chat_(ink_)
+        : context_(context), ink_{context.fonts, context.art}, home_(ink_), server_(ink_), chat_(ink_)
     {
     }
 
@@ -140,16 +141,38 @@ class DiscordApp final : public app::Concept
                     open = HomeOpen{"", dm->second, waiting_dm_};
                     waiting_dm_.clear();
                 }
-            if (open)
+            if (open && open->channel_id.empty())
+            {
+                server_.open(open->guild_id);
+                route_ = Route::server;
+                fade_.snap(0.0f);
+            }
+            else if (open)
             {
                 chat_.open(context_.snapshot, open->guild_id, open->channel_id, requests);
                 route_ = Route::chat;
+                from_server_ = false;
+                fade_.snap(0.0f);
+            }
+        }
+        else if (route_ == Route::server)
+        {
+            if (!server_.update(context_.snapshot, input, dt, feedback))
+            {
+                route_ = Route::home;
+                fade_.snap(0.0f);
+            }
+            else if (const std::optional<std::string> channel = server_.take_open())
+            {
+                chat_.open(context_.snapshot, server_.guild(), *channel, requests);
+                route_ = Route::chat;
+                from_server_ = true;
                 fade_.snap(0.0f);
             }
         }
         else if (!chat_.update(context_.snapshot, input, dt, feedback, requests))
         {
-            route_ = Route::home;
+            route_ = from_server_ ? Route::server : Route::home; // Back returns where the chat was opened from
             fade_.snap(0.0f);
         }
         // A new live DM or mention: a toast and a chime, unless it is in the open chat.
@@ -184,6 +207,8 @@ class DiscordApp final : public app::Concept
             draw_waiting(frame.scene, ink_, context_.snapshot, time_);
         else if (route_ == Route::home)
             home_.draw(context_.snapshot, frame.scene);
+        else if (route_ == Route::server)
+            server_.draw(context_.snapshot, frame.scene);
         else
             chat_.draw(context_.snapshot, frame.scene);
         frame.scene.pop_opacity();
@@ -200,13 +225,16 @@ class DiscordApp final : public app::Concept
     enum class Route
     {
         home,
+        server,
         chat,
     };
     app::Context &context_;
     Ink ink_;
     Home home_;
+    Server server_;
     Chat chat_;
     Route route_ = Route::home;
+    bool from_server_ = false; // the open chat came from a server's page
     std::string waiting_dm_; // a friend whose new DM is being made, opened when it lands
     static constexpr float kToastSeconds = 5.0f;
     std::uint64_t notice_seen_ = 0; // notices only come from live messages, so any new one is news
