@@ -11,6 +11,8 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cerrno>
+#include <cstring>
 #include <chrono>
 #include <cstdio>
 #include <map>
@@ -78,24 +80,35 @@ struct Reply
     std::string body;
 };
 
+// Logs a failed exchange once per distinct cause, so a dead core does not flood klog.
+Reply failed(Reply reply, const char *stage, int fd = -1)
+{
+    static std::string last; // only the client thread calls this
+    const std::string cause = std::string(stage) + " " + std::strerror(errno);
+    if (cause != last)
+        hui::sys::log("[CLIENT] core %s", cause.c_str());
+    last = cause;
+    if (fd >= 0)
+        close(fd);
+    return reply;
+}
+
 Reply http(int port, const char *method, const std::string &path, const std::string &body = {})
 {
     Reply reply;
     const int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0)
-        return reply;
+        return failed(reply, "socket");
     timeval timeout{8, 0};
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof timeout);
     sockaddr_in to{};
+    to.sin_len = sizeof to; // as spot5 does for its loopback helper
     to.sin_family = AF_INET;
     to.sin_port = htons(static_cast<std::uint16_t>(port));
     to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     if (connect(fd, reinterpret_cast<sockaddr *>(&to), sizeof to) != 0)
-    {
-        close(fd);
-        return reply;
-    }
+        return failed(reply, "connect", fd);
     char head[512];
     const int n = std::snprintf(head, sizeof head,
                                 "%s %s HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
@@ -107,10 +120,7 @@ Reply http(int port, const char *method, const std::string &path, const std::str
     {
         const ssize_t w = send(fd, request.data() + sent, request.size() - sent, 0);
         if (w <= 0)
-        {
-            close(fd);
-            return reply;
-        }
+            return failed(reply, "send", fd);
         sent += static_cast<std::size_t>(w);
     }
     std::string raw;
@@ -120,7 +130,7 @@ Reply http(int port, const char *method, const std::string &path, const std::str
     close(fd);
     const std::size_t split = raw.find("\r\n\r\n");
     if (split == std::string::npos || std::sscanf(raw.c_str(), "HTTP/%*s %d", &reply.status) != 1)
-        return reply;
+        return failed(reply, raw.empty() ? "recv (empty)" : "recv (no HTTP head)");
     reply.body = raw.substr(split + 4);
     return reply;
 }
@@ -516,6 +526,8 @@ void Client::poll_state()
     std::lock_guard<std::mutex> lock(mutex_);
     if (reply.status != 200)
     {
+        if (reply.status > 0)
+            hui::sys::log("[CLIENT] /api/state answered %d", reply.status);
         snapshot_.connection = Connection::starting;
         snapshot_.status_message = "Waiting for the ps5-discord core. Send its payload to elfldr (port 9021).";
         ready_ = false;
