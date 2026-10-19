@@ -11,6 +11,7 @@
 #include <cJSON.h>
 
 #include "../src/chat.h"
+#include "../src/ratelimit.h"
 #include "../src/ws.h"
 #include "../src/zstream.h"
 
@@ -143,9 +144,24 @@ static void test_chat(void)
     free(t);
 }
 
+static void test_ratelimit(void)
+{
+    char limited[] = "{\"message\":\"You are being rate limited.\",\"retry_after\":0.75,\"global\":false}";
+    char too_long[] = "{\"retry_after\":30}";
+    char ok[] = "{\"id\":\"1\"}";
+    http_response a = {.status = 429, .body = limited}, b = {.status = 429, .body = too_long},
+                  c = {.status = 200, .body = ok}, d = {.status = 429, .body = ok};
+    assert(ratelimit_retry_after(&a, 5.0) == 0.75); // retried after Discord's wait
+    assert(ratelimit_retry_after(&b, 5.0) == 0);    // too long to hold the request
+    assert(ratelimit_retry_after(&c, 5.0) == 0);    // not limited
+    assert(ratelimit_retry_after(&d, 5.0) == 0);    // limited without a wait: not retried
+    assert(ratelimit_retry_after(NULL, 5.0) == 0);
+}
+
 int main(void)
 {
     test_chat();
+    test_ratelimit();
     test_ws_frame();
     test_zstream();
     puts("selftest ok");

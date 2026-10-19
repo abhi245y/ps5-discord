@@ -16,6 +16,7 @@
 #include "gateway.h"
 #include "http.h"
 #include "log.h"
+#include "ratelimit.h"
 #include "status.h"
 
 extern const unsigned char web_index_html[];
@@ -73,16 +74,12 @@ static void reply_json(int c, char *j)
 static http_response rest(const char *method, const char *path, const char *json)
 {
     http_response res = http_request(method, path, json, chat_token());
-    if (res.status == 429) {
-        cJSON *body = cJSON_Parse(res.body ? res.body : "");
-        double wait = cJSON_GetNumberValue(cJSON_GetObjectItem(body, "retry_after"));
-        cJSON_Delete(body);
-        if (wait > 0 && wait <= 5.0) {
-            LOG("rate limited on %s %s, retrying in %.2f s", method, path, wait);
-            free(res.body);
-            usleep((useconds_t)(wait * 1e6) + 50000);
-            res = http_request(method, path, json, chat_token());
-        }
+    const double wait = ratelimit_retry_after(&res, 5.0);
+    if (wait > 0) {
+        LOG("rate limited on %s %s, retrying in %.2f s", method, path, wait);
+        free(res.body);
+        usleep((useconds_t)(wait * 1e6) + 50000);
+        res = http_request(method, path, json, chat_token());
     }
     return res;
 }
