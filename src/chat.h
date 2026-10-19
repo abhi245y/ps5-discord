@@ -12,4 +12,6 @@ void chat_dispatch(const char *type, cJSON *d);
 
 // {"me", "guilds", "dms", "users", "friends", "presence", "voice", "reads", "my_voice"}; caller frees
 char *chat_tree_json(void);
+// A key pressed (or repeating) on the console's keyboard: a "KEY" event for the app.
+void chat_key(int usage, int mods, int led);
 char *chat_events_json(long since, int wait_ms); // {"next":N, "events":[...]}; waits up to wait_ms for one; caller frees

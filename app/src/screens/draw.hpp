@@ -11,6 +11,7 @@
 #include "discord/model.hpp"
 #include "gfx/draw_list.hpp"
 #include "ui/fonts.hpp"
+#include "ui/glyphs.hpp"
 
 namespace screens
 {
@@ -76,6 +77,9 @@ void voice_pill(DrawList &list, const Ink &ink, const discord::Voice &voice, flo
 
 // 213515 -> "213.5K": member counts of big servers.
 std::string compact(int n);
+
+// Controller glyphs for hint rows: each face button ringed in its own colour.
+hui::ui::GlyphStyle hint_glyphs();
 
 // Up to 99, then "99+".
 std::string count_text(int count);

@@ -41,6 +41,7 @@ struct GlyphStyle
     gfx::Color ink;           // lettering and symbols
     gfx::Color label;         // the text beside a glyph in a hint row
     bool tinted_faces = true; // face symbols in their DualSense colours
+    bool tinted_rims = false; // and a rim in the same colour round each face button
 
     static GlyphStyle dark();
     static GlyphStyle light();

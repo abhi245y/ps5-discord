@@ -25,6 +25,7 @@
 #include "platform/ps5/audio_out.hpp"
 #include "platform/ps5/display_egl.hpp"
 #include "platform/ps5/ime.hpp"
+#include "platform/ps5/usb_keyboard.hpp"
 #include "platform/ps5/pad.hpp"
 #include "platform/ps5/system.hpp"
 #include "ui/fonts.hpp"
@@ -319,6 +320,7 @@ int main()
     int remote_hold = 0;         // frames the held remote key stays down
     bool remote_fast = false;    // "press fast,...": 0.1 s apart (bursts, for rate-limit tests)
     std::string remote_hold_key;
+    std::string remote_typed; // "type" text, as a hardware keyboard would give it
     const auto poll_request = [&]()
     {
         std::string request;
@@ -343,6 +345,12 @@ int main()
             std::string text = argument;
             std::replace(text.begin(), text.end(), '_', ' ');
             client.test_notice(text);
+        }
+        else if (std::strcmp(verb, "type") == 0)
+        {
+            // _ space, | Enter, < Backspace: the request line has no spaces.
+            for (const char c : std::string(argument))
+                remote_typed += c == '_' ? ' ' : c == '|' ? '\n' : c == '<' ? '\b' : c;
         }
         else if (std::strcmp(verb, "shot") == 0)
         {
@@ -396,6 +404,18 @@ int main()
         const std::size_t count = pad.read(samples);
         InputFrame input = tracker.update(std::span<const PadSample>(samples, count),
                                           static_cast<std::uint64_t>(now));
+        // A keyboard plugged into the console types and navigates (read by the core).
+        if (!tour)
+            for (const discord::KeyPress &k : client.take_keys())
+                ps5::apply_key(input, {k.usage, k.mods, k.led});
+        if (!remote_typed.empty())
+        {
+            // One key a frame, as typing would arrive.
+            input.typed += remote_typed.front();
+            if (remote_typed.front() == '\n')
+                input.pressed |= action_bit(Action::confirm);
+            remote_typed.erase(remote_typed.begin());
+        }
         if (tour)
             input = tour->step(dt);
         else if (remote_hold > 0)

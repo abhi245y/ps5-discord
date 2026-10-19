@@ -34,6 +34,14 @@ void face(gfx::DrawList &list, const GlyphStyle &style, Button button, float cx,
         list.ring(cx, cy, half, 1.5f, style.edge);
     const float inner = half * 0.52f;
     const auto colour = [&](gfx::Color tint) { return style.tinted_faces ? tint : style.ink; };
+    if (style.tinted_rims)
+    {
+        const gfx::Color tint = button == Button::cross    ? kCross
+                                : button == Button::circle ? kCircle
+                                : button == Button::square ? kSquare
+                                                           : kTriangle;
+        list.ring(cx, cy, half - stroke * 0.35f, stroke * 0.7f, colour(tint));
+    }
     switch (button)
     {
     case Button::cross:

@@ -84,7 +84,7 @@ void draw_sign_in(DrawList &list, const Ink &ink, const discord::Snapshot &s, fl
     layout.size = 34.0f;
     layout.text_size = 23.0f;
     layout.cy = kHintsBaseline;
-    ui::draw_hints(list, ink.fonts, ui::GlyphStyle::dark(), hints, 1, 1920.0f - kMargin, true, layout);
+    ui::draw_hints(list, ink.fonts, hint_glyphs(), hints, 1, 1920.0f - kMargin, true, layout);
 }
 
 void draw_waiting(DrawList &list, const Ink &ink, const discord::Snapshot &s, float time)

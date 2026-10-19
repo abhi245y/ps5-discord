@@ -130,6 +130,16 @@ struct Reaction
     bool me = false; // this account reacted
 };
 
+// A server emoji in a message's text. The text holds kEmojiMark (an em space,
+// about an emoji wide) where each one goes, in order.
+// ponytail: an em space someone typed reads as an emoji slot; nobody types one.
+inline constexpr const char *kEmojiMark = "\xE2\x80\x83";
+struct Emoji
+{
+    std::string id;
+    std::string name;
+};
+
 struct Message
 {
     std::string id;
@@ -148,7 +158,26 @@ struct Message
     std::string reply_text;
     std::vector<Attachment> attachments;
     std::vector<Reaction> reactions;
+    std::vector<Emoji> emojis; // server emoji in content, in order
 };
+
+// The text with each server emoji as :name: (previews, toasts), or as Discord's
+// <:name:id> markup (raw: to edit the message).
+inline std::string plain_text(const Message &m, bool raw = false)
+{
+    std::string out = m.content;
+    std::size_t at = 0;
+    for (const Emoji &e : m.emojis)
+    {
+        at = out.find(kEmojiMark, at);
+        if (at == std::string::npos)
+            break;
+        const std::string shown = raw ? "<:" + e.name + ":" + e.id + ">" : ":" + e.name + ":";
+        out.replace(at, 3, shown);
+        at += shown.size();
+    }
+    return out;
+}
 
 struct Voice // the account's own voice connection
 {

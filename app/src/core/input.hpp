@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <span>
 
 namespace hui
@@ -104,6 +105,9 @@ struct InputFrame
     float trigger_r = 0.0f;
     bool connected = false;
     bool focus_lost = false; // disconnected or the system took the input
+    // Text from a hardware keyboard this frame (UTF-8); '\b' erases, '\n' is
+    // Enter, '\r' Shift+Enter, '\x1b' Escape.
+    std::string typed;
 
     bool is_pressed(Action action) const
     {

@@ -317,6 +317,14 @@ std::string compact(int n)
     return out;
 }
 
+hui::ui::GlyphStyle hint_glyphs()
+{
+    hui::ui::GlyphStyle g = hui::ui::GlyphStyle::dark();
+    g.body = Color::rgb(0x16181d, 0.9f);
+    g.tinted_rims = true;
+    return g;
+}
+
 std::string count_text(int count)
 {
     return count > 99 ? std::string("99+") : std::to_string(count);

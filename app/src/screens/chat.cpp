@@ -310,6 +310,46 @@ std::vector<Chat::Row> Chat::layout(const discord::Snapshot &s) const
     return rows;
 }
 
+float Chat::draw_line(DrawList &list, const discord::Message &m, const std::string &line, float x, float baseline,
+                      std::size_t &emoji) const
+{
+    // Text runs between server emoji; each emoji is its picture in the slot the
+    // mark took when the line was wrapped.
+    const Color ink = Color::rgb(0xdfe2e8);
+    const float slot = ink_.fonts.regular.measure(discord::kEmojiMark, kTextSize);
+    const float size = kTextSize * 1.15f;
+    float cx = x;
+    std::size_t from = 0;
+    while (true)
+    {
+        const std::size_t at = line.find(discord::kEmojiMark, from);
+        const std::string run = line.substr(from, at == std::string::npos ? std::string::npos : at - from);
+        if (!run.empty())
+            cx += ui::text(list, ink_.fonts.regular, run, cx, baseline, kTextSize, ink);
+        if (at == std::string::npos)
+            break;
+        const std::string url = emoji < m.emojis.size()
+                                    ? "https://cdn.discordapp.com/emojis/" + m.emojis[emoji].id + ".png?size=48"
+                                    : std::string();
+        ++emoji;
+        const hui::app::ArtSet::Remote pic = ink_.art.remote && !url.empty() ? ink_.art.remote(url) : hui::app::ArtSet::Remote{};
+        const Rect box{cx + (slot - size) * 0.5f, baseline - kTextSize * 0.82f - (size - kTextSize) * 0.5f, size, size};
+        if (pic.texture)
+        {
+            const float aspect = pic.h > 0 ? static_cast<float>(pic.w) / pic.h : 1.0f;
+            const float iw = aspect >= 1.0f ? size : size * aspect;
+            const float ih = aspect >= 1.0f ? size / aspect : size;
+            list.image(pic.texture, {box.x + (size - iw) * 0.5f, box.y + (size - ih) * 0.5f, iw, ih}, gfx::kFullUv,
+                       Color::rgb(0xffffff), 4.0f);
+        }
+        else
+            list.rounded_rect(box, 6.0f, kRaisedHigh); // loading
+        cx += slot;
+        from = at + 3;
+    }
+    return cx - x;
+}
+
 std::pair<float, float> Chat::focus_range(const Row &row) const
 {
     // Scroll values that keep a row in view. A row taller than the view
@@ -425,7 +465,7 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
             const discord::Message &m = ms[static_cast<std::size_t>(focus_)];
             editing_id_ = m.id;
             draft_before_edit_ = keys_.text();
-            keys_.open("Editing your message", m.content);
+            keys_.open("Editing your message", discord::plain_text(m, true));
             mode_ = Mode::keys;
             feedback.play(hui::audio::Cue::open);
         }
@@ -506,9 +546,10 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
         }
         // Keep the focused row inside the panel.
         const std::vector<float> tops = list_tops(all);
-        const float row_y = 140.0f + (list_index_ < n ? tops[static_cast<std::size_t>(list_index_)] : 0.0f);
-        if (row_y - list_scroll_.target < 140.0f)
-            list_scroll_.target = row_y - 140.0f;
+        // Room above the focused row for its category heading.
+        const float row_y = 150.0f + (list_index_ < n ? tops[static_cast<std::size_t>(list_index_)] : 0.0f);
+        if (row_y - list_scroll_.target < 184.0f)
+            list_scroll_.target = std::max(0.0f, row_y - 184.0f);
         if (row_y - list_scroll_.target > 900.0f)
             list_scroll_.target = row_y - 900.0f;
         list_scroll_.update(dt, 16.0f);
@@ -595,6 +636,23 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
         return true;
     }
 
+    // Typing on a hardware keyboard while reading: the keyboard opens with it.
+    if ((mode_ == Mode::browse || mode_ == Mode::compose) && !input.typed.empty())
+    {
+        std::string text;
+        for (const char c : input.typed)
+            if (c != '\b' && c != '\n' && c != '\r' && c != '\x1b')
+                text += c;
+        if (!text.empty() && !can_send(s))
+            feedback.play(hui::audio::Cue::error);
+        else if (!text.empty())
+        {
+            start_typing(s, feedback);
+            if (mode_ == Mode::keys)
+                keys_.set_text(keys_.text() + text);
+            return true;
+        }
+    }
     if (mode_ == Mode::compose)
     {
         if (input.is_pressed(Action::north) && start_typing(s, feedback))
@@ -791,7 +849,7 @@ void Chat::draw_header(const discord::Snapshot &s, DrawList &list) const
         // Profile on Options. ponytail: Call returns with voice (docs/voice.md).
         const Rect profile{kRight - 220.0f, kHeaderY + 4.0f, 220.0f, 64.0f};
         list.rounded_rect(profile, 32.0f, kRaised);
-        ui::draw_button(list, ink_.fonts, ui::GlyphStyle::dark(), ui::Button::options, profile.x + 40.0f, profile.cy(),
+        ui::draw_button(list, ink_.fonts, hint_glyphs(), ui::Button::options, profile.x + 40.0f, profile.cy(),
                         34.0f);
         ui::text(list, ink_.fonts.semibold, "Profile", profile.x + 84.0f, profile.cy() + 9.0f, 26.0f, kText);
         return;
@@ -951,6 +1009,7 @@ void Chat::draw_message(const discord::Snapshot &s, DrawList &list, const Row &r
     {
         float line_y = y + 27.0f;
         float last_end = text_x, last_y = line_y;
+        std::size_t emoji = 0; // the next of m.emojis
         for (const std::string &line : ink_.fonts.regular.font->wrap(m.content, kTextSize, width))
         {
             float lx = text_x;
@@ -965,7 +1024,7 @@ void Chat::draw_message(const discord::Snapshot &s, DrawList &list, const Row &r
                 while (!rest.empty() && rest.front() == ' ')
                     rest.erase(rest.begin());
             }
-            const float w = ui::text(list, ink_.fonts.regular, rest, lx, line_y, kTextSize, Color::rgb(0xdfe2e8));
+            const float w = draw_line(list, m, rest, lx, line_y, emoji);
             last_end = lx + w;
             last_y = line_y;
             line_y += kLineH;
@@ -1084,7 +1143,7 @@ void Chat::draw_composer(const discord::Snapshot &s, DrawList &list) const
     ui::text(list, ink_.fonts.regular, composing ? std::string("Pick a quick reply, or press Triangle to type") : placeholder,
              bar.x + 112.0f, bar.cy() + 10.0f, 28.0f, kDim);
 
-    ui::GlyphStyle glyphs = ui::GlyphStyle::dark();
+    ui::GlyphStyle glyphs = hint_glyphs();
     const ui::Hint inline_hints[] = {{ui::Button::triangle, "Type"}};
     ui::HintLayout layout;
     layout.size = 36.0f;
@@ -1106,7 +1165,7 @@ void Chat::draw_composer(const discord::Snapshot &s, DrawList &list) const
         for (const discord::Message &m : messages(s))
             if (m.id == reply_to_)
             {
-                const std::string text = "Replying to " + author_name(s, m) + ": " + m.content;
+                const std::string text = "Replying to " + author_name(s, m) + ": " + discord::plain_text(m);
                 const float w = std::min(980.0f, ink_.fonts.regular.measure(text, 24.0f) + 80.0f);
                 const Rect chip{kMargin + 260.0f, y - 70.0f, w, 56.0f};
                 list.rounded_rect(chip, 28.0f, kRaisedHigh);
@@ -1150,7 +1209,7 @@ void Chat::draw_actions(const discord::Snapshot &s, DrawList &list, const Rect &
     {
         const Rect row{panel.x + 16.0f, panel.y + 16.0f + 72.0f * i, w - 32.0f, 64.0f};
         if (kActions[i].button != ui::Button::none)
-            ui::draw_button(list, ink_.fonts, ui::GlyphStyle::dark(), kActions[i].button, row.x + 20.0f, row.cy(), 36.0f);
+            ui::draw_button(list, ink_.fonts, hint_glyphs(), kActions[i].button, row.x + 20.0f, row.cy(), 36.0f);
         const bool arming = i == 3 && delete_armed_;
         ui::text(list, ink_.fonts.semibold, arming ? "Press again to delete" : kActions[i].label, row.x + 82.0f,
                  row.cy() + 10.0f, 28.0f, i == 3 ? kCoral : kText);
@@ -1231,7 +1290,7 @@ void Chat::draw(const discord::Snapshot &s, DrawList &list) const
     layout.text_size = 23.0f;
     layout.cy = kHintsBaseline;
     layout.item_gap = 38.0f;
-    ui::draw_hints(list, ink_.fonts, ui::GlyphStyle::dark(), hints, count, kRight, true, layout);
+    ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints, count, kRight, true, layout);
     if (mode_ == Mode::keys)
         keys_.draw(list);
     if (mode_ == Mode::channels)
@@ -1260,7 +1319,7 @@ void Chat::draw(const discord::Snapshot &s, DrawList &list) const
             layout.size = 30.0f;
             layout.text_size = 22.0f;
             layout.cy = card.y + card.h - 40.0f;
-            ui::draw_hints(list, ink_.fonts, ui::GlyphStyle::dark(), hints, 1, card.x + card.w - 30.0f, true, layout);
+            ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints, 1, card.x + card.w - 30.0f, true, layout);
         }
     if (size_note_ > 0.0f)
     {
@@ -1283,15 +1342,17 @@ void Chat::draw_channel_list(const discord::Snapshot &s, DrawList &list) const
     list.rounded_rect(panel, 0.0f, kRaised);
     const discord::Guild *g = discord::find_guild(s, guild_id_);
     ui::text(list, ink_.fonts.display, fit(ink_.fonts.display, g ? g->name : std::string(), 40.0f, 540.0f), kMargin,
-             92.0f, 40.0f, kText);
-    list.push_clip({0, 120.0f, 640, 880.0f});
+             86.0f, 40.0f, kText);
+    // A rule under the title; the list scrolls beneath it with room to spare.
+    list.rounded_rect({kMargin, 116.0f, 640.0f - 2 * kMargin, 2.0f}, 1.0f, kLine);
+    list.push_clip({0, 124.0f, 640, 876.0f});
     const std::vector<const discord::Channel *> all = chips(s);
     const std::vector<float> tops = list_tops(all);
     std::string category = "\x01"; // none drawn yet
     for (int i = 0; i < static_cast<int>(all.size()); ++i)
     {
         const discord::Channel &c = *all[static_cast<std::size_t>(i)];
-        const float y = 140.0f + tops[static_cast<std::size_t>(i)] - list_scroll_.value;
+        const float y = 150.0f + tops[static_cast<std::size_t>(i)] - list_scroll_.value;
         if (c.category != category)
         {
             category = c.category;
@@ -1323,7 +1384,7 @@ void Chat::draw_channel_list(const discord::Snapshot &s, DrawList &list) const
     layout.size = 30.0f;
     layout.text_size = 22.0f;
     layout.cy = kHintsBaseline;
-    ui::draw_hints(list, ink_.fonts, ui::GlyphStyle::dark(), hints, 2, 640.0f - kMargin, true, layout);
+    ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints, 2, 640.0f - kMargin, true, layout);
 }
 
 } // namespace screens

@@ -4,6 +4,7 @@
 #
 #   tools/remote.py shot <name> [out.png]   live frame, saved next to out (needs Pillow for .png)
 #   tools/remote.py press down,down,cross   keys, one every 0.35 s
+#   tools/remote.py type hello_there|        text as a USB keyboard gives it
 #   tools/remote.py quit
 # The app reads /app0/dev/request.txt (the install folder) and writes its
 # pictures to its own storage, which a PC can read while the title runs.
@@ -74,6 +75,9 @@ elif verb == "press" and len(sys.argv) == 3:
     request("press", sys.argv[2])
     # Let the app read and play the keys before a next request replaces the file.
     time.sleep(1.2 + 0.35 * len(sys.argv[2].split(",")))
+elif verb == "type" and len(sys.argv) == 3:  # as a keyboard: _ space, | Enter, < Backspace
+    request("type", sys.argv[2])
+    time.sleep(1.2 + len(sys.argv[2]) / 60)
 elif verb == "notice" and len(sys.argv) == 3:
     request("notice", sys.argv[2].replace(" ", "_"))
 elif verb == "quit":

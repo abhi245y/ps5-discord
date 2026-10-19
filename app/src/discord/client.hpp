@@ -36,6 +36,15 @@ struct Image
     std::vector<std::uint8_t> rgba;
 };
 
+// A key from the console's keyboard, as the core read it (USB HID usage code,
+// modifier bits, lock lights).
+struct KeyPress
+{
+    std::uint16_t usage = 0;
+    std::uint32_t mods = 0;
+    std::uint32_t led = 0;
+};
+
 class Client
 {
   public:
@@ -52,6 +61,8 @@ class Client
     // Queues a CDN image (avatar, icon) for download; take_images hands back the results.
     void want_image(const std::string &url);
     std::vector<Image> take_images();
+    // Keys typed on the console's keyboard since the last call, oldest first.
+    std::vector<KeyPress> take_keys();
     // Development: raises a notice as if a DM had arrived (the toast's path, from the PC).
     void test_notice(const std::string &text);
 
@@ -82,6 +93,7 @@ class Client
     std::deque<Request> queue_;
     std::deque<std::string> image_queue_; // guarded by mutex_
     std::vector<Image> images_;           // guarded by mutex_
+    std::vector<KeyPress> keys_;          // guarded by mutex_
     long events_next_ = -1; // -1: skip the backlog on first contact
     std::atomic<std::int64_t> last_chat_ms_{0}; // the events thread zeroes it to ask for a refresh
     std::int64_t last_mentions_ms_ = 0;

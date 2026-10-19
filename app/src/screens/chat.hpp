@@ -58,6 +58,9 @@ class Chat
     std::pair<float, float> focus_range(const Row &row) const; // scroll values that keep the row in view
     int reaction_lines(const discord::Message &m, float width) const;
     float reaction_width(const discord::Reaction &r) const;
+    // One wrapped line of a message, server emoji as pictures; emoji counts them across lines.
+    float draw_line(DrawList &list, const discord::Message &m, const std::string &line, float x, float baseline,
+                    std::size_t &emoji) const;
     bool can_send(const discord::Snapshot &s) const;
     bool start_typing(const discord::Snapshot &s, hui::ui::Feedback &feedback);
     const discord::User *dm_person(const discord::Snapshot &s) const;

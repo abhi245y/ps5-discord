@@ -198,7 +198,9 @@ std::string name_of(const std::string &id, const std::string &fallback)
 
 // Discord markup as people read it: <:name:id> and <a:name:id> become :name:,
 // <@id> becomes @name (from the message's mentions), <@&id> @role, <#id> #channel.
-std::string readable(const std::string &content, const json &m)
+// emojis: when given, server emoji become kEmojiMark (drawn as pictures) and
+// are listed there in order; else they read as :name:.
+std::string readable(const std::string &content, const json &m, std::vector<Emoji> *emojis = nullptr)
 {
     std::string out;
     out.reserve(content.size());
@@ -217,7 +219,14 @@ std::string readable(const std::string &content, const json &m)
             const std::size_t start = tag.find(':') + 1;
             const std::size_t end = tag.find(':', start);
             if (end != std::string::npos)
+            {
                 shown = ":" + tag.substr(start, end - start) + ":";
+                if (emojis && end + 1 < tag.size())
+                {
+                    emojis->push_back({tag.substr(end + 1), tag.substr(start, end - start)});
+                    shown = kEmojiMark;
+                }
+            }
         }
         else if (tag.rfind("@&", 0) == 0)
             shown = "@" + name_of(tag.substr(2), "role");
@@ -311,7 +320,7 @@ Message message_from(const json &m, const std::string &me_id)
     Message out;
     out.id = text(m, "id");
     out.channel_id = text(m, "channel_id");
-    out.content = readable(text(m, "content"), m);
+    out.content = readable(text(m, "content"), m, &out.emojis);
     out.time_ms = snowflake_ms(out.id);
     // Messages without text of their own: say what they are.
     const int type = static_cast<int>(m.value("type", 0.0));
@@ -759,6 +768,14 @@ void Client::want_image(const std::string &url)
     image_queue_.push_back(url);
 }
 
+std::vector<KeyPress> Client::take_keys()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<KeyPress> out;
+    out.swap(keys_);
+    return out;
+}
+
 std::vector<Image> Client::take_images()
 {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -980,6 +997,13 @@ bool Client::poll_events()
     {
         const std::string type = text(ev, "t");
         const std::string channel = text(ev, "channel_id");
+        if (type == "KEY")
+        {
+            keys_.push_back({static_cast<std::uint16_t>(ev.value("usage", 0.0)),
+                             static_cast<std::uint32_t>(ev.value("mods", 0.0)),
+                             static_cast<std::uint32_t>(ev.value("led", 0.0))});
+            continue;
+        }
         if (type == "MESSAGE_CREATE")
         {
             // A DM or a mention from someone else becomes a notice, open channel or not.
@@ -998,7 +1022,7 @@ bool Client::poll_events()
                         for (const Channel &c : g.channels)
                             if (c.id == channel)
                                 n.title += " in #" + c.name;
-                n.text = m.content.empty() && !m.attachments.empty() ? "sent an attachment" : m.content;
+                n.text = m.content.empty() && !m.attachments.empty() ? "sent an attachment" : plain_text(m);
             }
         }
         if (snapshot_.messages.find(channel) == snapshot_.messages.end())
@@ -1026,7 +1050,8 @@ bool Client::poll_events()
             for (Message &m : ms)
                 if (m.id == text(ev, "id") && ev.contains("content"))
                 {
-                    m.content = readable(text(ev, "content"), ev);
+                    m.emojis.clear();
+                    m.content = readable(text(ev, "content"), ev, &m.emojis);
                     m.edited = true;
                 }
         }

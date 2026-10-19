@@ -508,7 +508,7 @@ void Home::draw(const discord::Snapshot &s, DrawList &list) const
     layout.text_size = 23.0f;
     layout.cy = kHintsBaseline;
     layout.item_gap = 38.0f;
-    ui::draw_hints(list, ink_.fonts, ui::GlyphStyle::dark(), hints, 3, kRight, true, layout);
+    ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints, 3, kRight, true, layout);
 }
 
 } // namespace screens

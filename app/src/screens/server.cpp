@@ -295,7 +295,7 @@ void Server::draw(const discord::Snapshot &s, DrawList &list) const
         {
             const discord::Message &m = it->second->back();
             const discord::User *u = discord::find_user(s, m.author_id);
-            line = (u ? u->name : m.author_name) + ": " + m.content;
+            line = (u ? u->name : m.author_name) + ": " + discord::plain_text(m);
         }
         for (char &ch : line)
             if (ch == '\n')
@@ -320,7 +320,7 @@ void Server::draw(const discord::Snapshot &s, DrawList &list) const
     layout.text_size = 23.0f;
     layout.cy = kHintsBaseline;
     layout.item_gap = 38.0f;
-    ui::draw_hints(list, ink_.fonts, ui::GlyphStyle::dark(), hints, 2, kRight, true, layout);
+    ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints, 2, kRight, true, layout);
 }
 
 } // namespace screens

@@ -152,6 +152,32 @@ void Keyboard::press(int row, int col, hui::ui::Feedback &feedback)
 Keyboard::Result Keyboard::update(const hui::InputFrame &input, float dt, hui::ui::Feedback &feedback)
 {
     blink_ += dt;
+    // A hardware keyboard: its text goes straight in; Enter sends, Shift+Enter
+    // breaks the line, Escape closes. The on-screen keys sit still meanwhile.
+    if (!input.typed.empty())
+    {
+        for (const char c : input.typed)
+        {
+            if (c == '\n')
+            {
+                if (text_.find_first_not_of(" \n") == std::string::npos)
+                {
+                    feedback.play(hui::audio::Cue::error);
+                    continue;
+                }
+                return Result::send;
+            }
+            if (c == '\x1b')
+                return Result::cancel;
+            if (c == '\b')
+                erase();
+            else if (!full())
+                text_ += c == '\r' ? '\n' : c;
+        }
+        blink_ = 0.0f;
+        feedback.play(hui::audio::Cue::tick, 1.0f, 0.0f, 0.4f);
+        return Result::none;
+    }
     if (input.nav == Direction::left || input.nav == Direction::right)
     {
         const int step = input.nav == Direction::right ? 1 : -1;
@@ -291,7 +317,7 @@ void Keyboard::draw(DrawList &list) const
     layout.size = 30.0f;
     layout.text_size = 22.0f;
     layout.cy = kHintsBaseline;
-    ui::draw_hints(list, ink_.fonts, ui::GlyphStyle::dark(), hints, 6, 1920.0f - kMargin, true, layout);
+    ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints, 6, 1920.0f - kMargin, true, layout);
 }
 
 } // namespace screens
