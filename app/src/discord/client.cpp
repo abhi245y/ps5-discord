@@ -4,6 +4,7 @@
 #include "discord/client.hpp"
 
 #include <arpa/inet.h>
+#include <csignal>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -421,6 +422,8 @@ Client::~Client()
 // pthread rather than std::thread, as spot5 does on the console.
 void Client::start()
 {
+    // The core may close a connection mid-request; that is an error to retry, not SIGPIPE.
+    std::signal(SIGPIPE, SIG_IGN);
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setstacksize(&attr, 1u << 20); // JSON parsing of a large account
