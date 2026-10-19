@@ -501,15 +501,14 @@ void Home::draw(const discord::Snapshot &s, DrawList &list) const
     const ui::Hint hints[] = {
         {ui::Button::cross, "Select"},
         {ui::Button::circle, "Back"},
-        {ui::Button::square, "Voice"},
         {ui::Button::l1, "Tabs", ui::Button::r1},
-    };
+    }; // ponytail: Square for voice returns with the voice milestone
     ui::HintLayout layout;
     layout.size = 34.0f;
     layout.text_size = 23.0f;
     layout.cy = kHintsBaseline;
     layout.item_gap = 38.0f;
-    ui::draw_hints(list, ink_.fonts, ui::GlyphStyle::dark(), hints, 4, kRight, true, layout);
+    ui::draw_hints(list, ink_.fonts, ui::GlyphStyle::dark(), hints, 3, kRight, true, layout);
 }
 
 } // namespace screens

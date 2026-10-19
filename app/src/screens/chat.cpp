@@ -401,6 +401,16 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
         return true;
     }
 
+    if (mode_ == Mode::profile)
+    {
+        if (input.is_pressed(Action::back) || input.is_pressed(Action::menu) || input.is_pressed(Action::confirm))
+        {
+            mode_ = Mode::browse;
+            feedback.play(hui::audio::Cue::modal_close);
+        }
+        return true;
+    }
+
     if (mode_ == Mode::channels)
     {
         const std::vector<const discord::Channel *> all = chips(s);
@@ -557,6 +567,12 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
     }
 
     // Browsing.
+    if (dm() && input.is_pressed(Action::menu) && dm_person(s))
+    {
+        mode_ = Mode::profile;
+        feedback.play(hui::audio::Cue::modal_open);
+        return true;
+    }
     if (input.is_pressed(Action::r3))
     {
         apply_text_level((g_text_level + 1) % 3);
@@ -678,19 +694,19 @@ void Chat::draw_header(const discord::Snapshot &s, DrawList &list) const
             avatar(list, ink_, *other, kMargin + 56.0f, kHeaderY + 40.0f, 54.0f);
             ui::text(list, ink_.fonts.display, other->name, kMargin + 136.0f, kHeaderY + 50.0f, 56.0f, kText);
             const std::string line = status_line(*other);
-            list.circle(kMargin + 146.0f, kHeaderY + 86.0f, 7.0f, kOnline);
+            const Color dot = other->presence == discord::Presence::online ? kOnline
+                              : other->presence == discord::Presence::idle ? kIdle
+                              : other->presence == discord::Presence::dnd  ? kCoral
+                                                                            : kFaint;
+            list.circle(kMargin + 146.0f, kHeaderY + 86.0f, 7.0f, dot);
             ui::text(list, ink_.fonts.regular, line, kMargin + 164.0f, kHeaderY + 95.0f, 25.0f, kDim);
         }
-        // Profile and Call, left of the voice pill's place.
-        const float call_w = 170.0f;
-        const Rect call{kRight - call_w, kHeaderY + 4.0f, call_w, 64.0f};
-        list.rounded_rect(call, 32.0f, kCoral);
-        speaking_bars(list, call.x + 44.0f, call.cy(), 26.0f, kOnCoral);
-        ui::text(list, ink_.fonts.semibold, "Call", call.x + 70.0f, call.cy() + 9.0f, 26.0f, kOnCoral);
-        const Rect profile{call.x - 200.0f, call.y, 180.0f, 64.0f};
+        // Profile on Options. ponytail: Call returns with voice (docs/voice.md).
+        const Rect profile{kRight - 220.0f, kHeaderY + 4.0f, 220.0f, 64.0f};
         list.rounded_rect(profile, 32.0f, kRaised);
-        ui::text(list, ink_.fonts.semibold, "Profile", profile.cx(), profile.cy() + 9.0f, 26.0f, kText,
-                 gfx::Align::center);
+        ui::draw_button(list, ink_.fonts, ui::GlyphStyle::dark(), ui::Button::options, profile.x + 40.0f, profile.cy(),
+                        34.0f);
+        ui::text(list, ink_.fonts.semibold, "Profile", profile.x + 84.0f, profile.cy() + 9.0f, 26.0f, kText);
         return;
     }
 
@@ -949,13 +965,13 @@ void Chat::draw_composer(const discord::Snapshot &s, DrawList &list) const
              bar.x + 112.0f, bar.cy() + 10.0f, 28.0f, kDim);
 
     ui::GlyphStyle glyphs = ui::GlyphStyle::dark();
-    const ui::Hint inline_hints[] = {{ui::Button::triangle, "Type"}, {ui::Button::square, dm() ? "Call" : "Voice"}};
+    const ui::Hint inline_hints[] = {{ui::Button::triangle, "Type"}};
     ui::HintLayout layout;
     layout.size = 36.0f;
     layout.text_size = 25.0f;
     layout.cy = bar.cy();
     layout.item_gap = 34.0f;
-    ui::draw_hints(list, ink_.fonts, glyphs, inline_hints, 2, bar.x + bar.w - 30.0f, true, layout);
+    ui::draw_hints(list, ink_.fonts, glyphs, inline_hints, 1, bar.x + bar.w - 30.0f, true, layout);
 
     if (focus_ < 0 || composing)
         focus_outline(list, bar, 22.0f, 1.0f);
@@ -1100,6 +1116,32 @@ void Chat::draw(const discord::Snapshot &s, DrawList &list) const
         keys_.draw(list);
     if (mode_ == Mode::channels)
         draw_channel_list(s, list);
+    if (mode_ == Mode::profile)
+        if (const discord::User *u = dm_person(s))
+        {
+            // The person's card: face, name, what they are up to.
+            list.rounded_rect({0, 0, 1920, 1080}, 0.0f, Color::rgb(0x0d0e12, 0.6f));
+            const Rect card{660.0f, 250.0f, 600.0f, 520.0f};
+            list.shadow(card, 28.0f, 50.0f, Color::rgb(0, 0.5f));
+            list.rounded_rect(card, 28.0f, kRaised);
+            list.rounded_rect({card.x, card.y, card.w, 150.0f}, 28.0f, kRaisedHigh);
+            list.circle(card.cx(), card.y + 150.0f, 92.0f, kRaised);
+            avatar(list, ink_, *u, card.cx(), card.y + 150.0f, 84.0f);
+            ui::text(list, ink_.fonts.display, fit(ink_.fonts.display, u->name, 46.0f, card.w - 60.0f), card.cx(),
+                     card.y + 310.0f, 46.0f, kText, gfx::Align::center);
+            if (!u->voice_room.empty())
+                ui::text(list, ink_.fonts.semibold, "In voice: " + u->voice_room, card.cx(), card.y + 362.0f, 26.0f,
+                         kOnline, gfx::Align::center);
+            else
+                ui::text(list, ink_.fonts.regular, fit(ink_.fonts.regular, status_line(*u), 26.0f, card.w - 60.0f),
+                         card.cx(), card.y + 362.0f, 26.0f, kDim, gfx::Align::center);
+            const ui::Hint hints[] = {{ui::Button::circle, "Close"}};
+            ui::HintLayout layout;
+            layout.size = 30.0f;
+            layout.text_size = 22.0f;
+            layout.cy = card.y + card.h - 40.0f;
+            ui::draw_hints(list, ink_.fonts, ui::GlyphStyle::dark(), hints, 1, card.x + card.w - 30.0f, true, layout);
+        }
     if (size_note_ > 0.0f)
     {
         const std::string note = std::string("Text size: ") + kTextLevelNames[g_text_level];

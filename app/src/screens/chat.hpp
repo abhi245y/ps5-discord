@@ -47,6 +47,7 @@ class Chat
         typing,  // the system keyboard is up over the app
         keys,    // the app's own keyboard is up
         channels, // the server's channel list is open (Options)
+        profile,  // the DM person's card is open (Options in a DM)
     };
 
     const std::vector<discord::Message> &messages(const discord::Snapshot &snapshot) const;
