@@ -51,6 +51,11 @@ void draw_sign_in(DrawList &list, const Ink &ink, const discord::Snapshot &s, fl
         ui::text(list, ink.fonts.regular,
                  s.login_scanned ? "Scanned. Approve the login on your phone." : "Waiting for scan…",
                  status.x + 120.0f, status.cy() + 12.0f, 33.0f, kDim);
+    // Always shown: Discord can demand a captcha after approval, and the app cannot show one.
+    ui::paragraph(list, ink.fonts.regular,
+                  "Back at the QR code after approving? Discord may want a captcha, which this app cannot show. "
+                  "Sign in once on discord.com in a browser, wait a while, then scan again.",
+                  left, 906.0f, 25.0f, 940.0f, 33.0f, kDim, 2);
     ui::text(list, ink.fonts.regular, "Unofficial client  ·  your password never touches this console", left, 1000.0f,
              25.0f, kFaint);
 
