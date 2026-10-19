@@ -19,7 +19,7 @@ ZLIB := .deps/src/zlib-1.3.2
 CJSON := .deps/src/cJSON-1.7.18
 QRGEN := .deps/src/QR-Code-generator-1.8.0/c
 
-APP_SRC := src/main.c src/log.c src/status.c src/web.c src/gateway.c src/remote_auth.c src/http.c src/props.c src/ws.c src/tls.c src/zstream.c
+APP_SRC := src/main.c src/log.c src/status.c src/web.c src/chat.c src/gateway.c src/remote_auth.c src/http.c src/props.c src/ws.c src/tls.c src/zstream.c
 ZLIB_SRC := $(addprefix $(ZLIB)/,adler32.c crc32.c inffast.c inflate.c inftrees.c zutil.c)
 DEP_SRC = $(wildcard $(MBED)/library/*.c) $(ZLIB_SRC) $(CJSON)/cJSON.c $(QRGEN)/qrcodegen.c
 INCLUDES := -Isrc -I$(MBED)/include -I$(ZLIB) -I$(CJSON) -I$(QRGEN)
@@ -54,7 +54,7 @@ build/ps5-discord.elf: $(PS5_OBJ)
 
 build/ps5/%.o: %.c
 	@mkdir -p $(@D)
-	@PS5_PAYLOAD_SDK=$(abspath $(SDK)) $(PS5_CC) $(if $(filter .deps/%,$<),-w) $(PS5_CFLAGS) -c $< -o $@
+	@PS5_PAYLOAD_SDK=$(abspath $(SDK)) $(PS5_CC) $(if $(filter .deps/%,$<),-w) $(PS5_CFLAGS) -MMD -MP -c $< -o $@
 
 host: build/host/ps5-discord
 build/host/ps5-discord: $(HOST_OBJ)
@@ -63,11 +63,11 @@ build/host/ps5-discord: $(HOST_OBJ)
 
 build/host/%.o: %.c
 	@mkdir -p $(@D)
-	@$(HOST_CC) $(if $(filter .deps/%,$<),-w) $(HOST_CFLAGS) -c $< -o $@
+	@$(HOST_CC) $(if $(filter .deps/%,$<),-w) $(HOST_CFLAGS) -MMD -MP -c $< -o $@
 
 test: build/host/selftest
 	./build/host/selftest
-build/host/selftest: tests/selftest.c src/ws.c src/tls.c src/zstream.c src/log.c src/status.c \
+build/host/selftest: tests/selftest.c src/ws.c src/tls.c src/zstream.c src/log.c src/status.c src/chat.c \
 		$(CJSON)/cJSON.c $(QRGEN)/qrcodegen.c $(ZLIB_SRC) \
 		$(ZLIB)/deflate.c $(ZLIB)/trees.c $(wildcard $(MBED)/library/*.c) build/ca_bundle.c
 	@mkdir -p $(@D)
@@ -83,3 +83,6 @@ stop:
 
 clean:
 	rm -rf build
+
+# Header dependencies written by -MMD.
+-include $(PS5_OBJ:.o=.d) $(HOST_OBJ:.o=.d)

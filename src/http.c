@@ -11,7 +11,7 @@
 #define API_HOST "discord.com"
 #define API_BASE "/api/v9"
 
-http_response http_post_json(const char *path, const char *json, const char *token)
+http_response http_request(const char *method, const char *path, const char *json, const char *token)
 {
     http_response res = {.status = -1};
     tls_conn c;
@@ -24,16 +24,18 @@ http_response http_post_json(const char *path, const char *json, const char *tok
     if (token)
         snprintf(auth, sizeof auth, "Authorization: %s\r\n", token);
     // ponytail: HTTP/1.0 so the reply is never chunked and ends at close; keep-alive when REST grows.
-    char head[2048];
+    char head[2048], body_headers[96] = "";
+    if (json)
+        snprintf(body_headers, sizeof body_headers,
+                 "Content-Type: application/json\r\nContent-Length: %zu\r\n", strlen(json));
     int n = snprintf(head, sizeof head,
-                     "POST %s%s HTTP/1.0\r\nHost: %s\r\nUser-Agent: %s\r\n"
-                     "Content-Type: application/json\r\nContent-Length: %zu\r\n"
+                     "%s %s%s HTTP/1.0\r\nHost: %s\r\nUser-Agent: %s\r\n%s"
                      "Origin: https://discord.com\r\nX-Discord-Locale: en-US\r\n"
                      "X-Super-Properties: %s\r\n%s\r\n",
-                     API_BASE, path, API_HOST, USER_AGENT, strlen(json), props ? props : "", auth);
+                     method, API_BASE, path, API_HOST, USER_AGENT, body_headers, props ? props : "", auth);
     free(props);
     if (n <= 0 || (size_t)n >= sizeof head || tls_write_all(&c, head, (size_t)n) != 0 ||
-        tls_write_all(&c, json, strlen(json)) != 0) {
+        (json && tls_write_all(&c, json, strlen(json)) != 0)) {
         tls_close(&c);
         return res;
     }

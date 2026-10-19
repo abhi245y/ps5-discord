@@ -4,9 +4,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <cJSON.h>
+
+#include "chat.h"
+#include "gateway.h"
+#include "http.h"
 #include "log.h"
 #include "status.h"
 
@@ -30,28 +37,143 @@ static void reply(int c, const char *status, const char *type, const void *body,
     }
 }
 
-static void handle(int c)
+// Snowflake check: IDs go into Discord API paths, so digits only.
+static int is_id(const char *s)
 {
-    char req[2048];
+    size_t n = strspn(s, "0123456789");
+    return n > 0 && n < 24 && s[n] == 0;
+}
+
+// Value of key in a query string ("a=1&b=2") into out; 0 when found.
+static int query_get(const char *q, const char *key, char *out, size_t cap)
+{
+    size_t klen = strlen(key);
+    for (const char *p = q; p && *p; p = strchr(p, '&') ? strchr(p, '&') + 1 : NULL) {
+        if (strncmp(p, key, klen) == 0 && p[klen] == '=') {
+            size_t n = strcspn(p + klen + 1, "&");
+            if (n >= cap)
+                return -1;
+            memcpy(out, p + klen + 1, n);
+            out[n] = 0;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static void reply_json(int c, char *j)
+{
+    reply(c, j ? "200 OK" : "503 Service Unavailable", "application/json", j ? j : "null", j ? strlen(j) : 4);
+    free(j);
+}
+
+// Proxy a Discord REST call; the UI gets {"status":N,"body":<Discord JSON>}.
+static void reply_rest(int c, http_response res)
+{
+    const char *body = res.body && res.body[0] ? res.body : "null";
+    size_t cap = strlen(body) + 48;
+    char *out = malloc(cap);
+    if (out)
+        snprintf(out, cap, "{\"status\":%d,\"body\":%s}", res.status, body);
+    free(res.body);
+    reply_json(c, out);
+}
+
+static void api_messages(int c, const char *query)
+{
+    char channel[32], guild[32], before[32], path[128];
+    if (query_get(query, "channel", channel, sizeof channel) != 0 || !is_id(channel)) {
+        reply(c, "400 Bad Request", "text/plain", "channel", 7);
+        return;
+    }
+    if (query_get(query, "guild", guild, sizeof guild) == 0 && is_id(guild))
+        gateway_subscribe(guild);
+    if (query_get(query, "before", before, sizeof before) == 0 && is_id(before))
+        snprintf(path, sizeof path, "/channels/%s/messages?limit=50&before=%s", channel, before);
+    else
+        snprintf(path, sizeof path, "/channels/%s/messages?limit=50", channel);
+    reply_rest(c, http_request("GET", path, NULL, chat_token()));
+}
+
+static void api_send(int c, const char *body)
+{
+    cJSON *in = cJSON_Parse(body ? body : "");
+    const char *channel = cJSON_GetStringValue(cJSON_GetObjectItem(in, "channel"));
+    const char *content = cJSON_GetStringValue(cJSON_GetObjectItem(in, "content"));
+    const char *nonce = cJSON_GetStringValue(cJSON_GetObjectItem(in, "nonce"));
+    // Byte cap only; Discord enforces its 2000 character limit itself.
+    if (!channel || !is_id(channel) || !content || !*content || strlen(content) > 8000) {
+        cJSON_Delete(in);
+        reply(c, "400 Bad Request", "text/plain", "message", 7);
+        return;
+    }
+    cJSON *out = cJSON_CreateObject();
+    cJSON_AddStringToObject(out, "mobile_network_type", "unknown");
+    cJSON_AddStringToObject(out, "content", content);
+    if (nonce && is_id(nonce))
+        cJSON_AddStringToObject(out, "nonce", nonce);
+    cJSON_AddFalseToObject(out, "tts");
+    cJSON_AddNumberToObject(out, "flags", 0);
+    char *json = cJSON_PrintUnformatted(out), path[64];
+    snprintf(path, sizeof path, "/channels/%s/messages", channel);
+    cJSON_Delete(out);
+    cJSON_Delete(in);
+    reply_rest(c, http_request("POST", path, json, chat_token()));
+    free(json);
+}
+
+// local: the peer is on this console (the native app). Chat data is only served to it.
+static void handle(int c, int local)
+{
+    static char req[16384]; // one connection at a time
     size_t len = 0;
     req[0] = 0;
-    while (len < sizeof req - 1 && !strstr(req, "\r\n\r\n")) { // no memmem in the PS5 libc
+    char *body = NULL;
+    while (len < sizeof req - 1) { // no memmem in the PS5 libc, so strstr on a NUL-terminated buffer
+        if ((body = strstr(req, "\r\n\r\n"))) {
+            body += 4;
+            const char *cl = strstr(req, "Content-Length:");
+            size_t want = cl && cl < body ? strtoul(cl + 15, NULL, 10) : 0;
+            if ((size_t)(req + len - body) >= want)
+                break;
+        }
         ssize_t r = recv(c, req + len, sizeof req - 1 - len, 0);
         if (r <= 0)
             return;
         len += (size_t)r;
         req[len] = 0;
     }
-    char method[8], path[256];
-    if (sscanf(req, "%7s %255s", method, path) != 2) {
+    char method[8], target[512];
+    if (sscanf(req, "%7s %511s", method, target) != 2) {
         reply(c, "400 Bad Request", "text/plain", "bad request", 11);
-    } else if (strcmp(method, "GET") == 0 && strcmp(path, "/") == 0) {
+        return;
+    }
+    char *query = strchr(target, '?');
+    if (query)
+        *query++ = 0;
+    const char *path = target;
+    int get = strcmp(method, "GET") == 0, post = strcmp(method, "POST") == 0;
+    if (!local && strncmp(path, "/api/", 5) == 0 && strcmp(path, "/api/state") != 0 &&
+        strcmp(path, "/api/quit") != 0) {
+        reply(c, "403 Forbidden", "text/plain", "local only", 10);
+        return;
+    }
+
+    if (get && strcmp(path, "/") == 0) {
         reply(c, "200 OK", "text/html; charset=utf-8", web_index_html, web_index_html_len - 1);
-    } else if (strcmp(method, "GET") == 0 && strcmp(path, "/api/state") == 0) {
-        char *j = status_json();
-        reply(c, "200 OK", "application/json", j ? j : "{}", j ? strlen(j) : 2);
-        free(j);
-    } else if (strcmp(method, "POST") == 0 && strcmp(path, "/api/quit") == 0) {
+    } else if (get && strcmp(path, "/api/state") == 0) {
+        reply_json(c, status_json());
+    } else if (get && strcmp(path, "/api/chat") == 0) {
+        reply_json(c, chat_tree_json());
+    } else if (get && strcmp(path, "/api/events") == 0) {
+        char since[24] = "0";
+        query_get(query, "since", since, sizeof since);
+        reply_json(c, chat_events_json(strtol(since, NULL, 10)));
+    } else if (get && strcmp(path, "/api/messages") == 0) {
+        api_messages(c, query);
+    } else if (post && strcmp(path, "/api/send") == 0) {
+        api_send(c, body);
+    } else if (post && strcmp(path, "/api/quit") == 0) {
         reply(c, "200 OK", "application/json", "{\"ok\":true}", 11);
         LOG("quit requested from the web UI");
         close(c);
@@ -64,12 +186,15 @@ static void handle(int c)
 void web_serve(int fd)
 {
     for (;;) {
-        int c = accept(fd, NULL, NULL);
+        struct sockaddr_in peer;
+        socklen_t plen = sizeof peer;
+        int c = accept(fd, (struct sockaddr *)&peer, &plen);
         if (c < 0)
             continue;
+        int local = peer.sin_family == AF_INET && ntohl(peer.sin_addr.s_addr) >> 24 == 127;
         struct timeval tv = {.tv_sec = 5};
         setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
-        handle(c);
+        handle(c, local);
         close(c);
     }
 }
