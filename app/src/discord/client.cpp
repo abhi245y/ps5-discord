@@ -17,15 +17,15 @@
 #include <cstring>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <map>
 #include <vector>
 
 #include "platform/ps5/system.hpp"
 
-// The console's libc parses some numbers differently from what nlohmann's
-// lexer asserts (it aborted the app on a channel's history). Log and go on:
-// at worst one number is read short, never a crash.
-// ponytail: find the exact number form and fix the libc call, then drop this.
+// A failed internal check is logged instead of aborting the app. The one seen
+// (json.hpp:8661, decimals read short) came from the libc's empty decimal
+// point, fixed by localeconv() in runtime_shims.c; this stays as a safety net.
 static void json_assert_failed(const char *what, int line)
 {
     hui::sys::log("[CLIENT] json assert at json.hpp:%d: %s", line, what);

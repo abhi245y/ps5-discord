@@ -153,3 +153,36 @@ int pclose(FILE *stream)
     errno = ENOSYS;
     return -1;
 }
+
+/* ps5-discord: the clean-room libc answers localeconv() with an empty decimal
+ * point, and nlohmann's JSON lexer swaps '.' for it before strtod: 1.5 parsed
+ * as 1.0 (json.hpp:8661 asserted). This is the "C" locale, as the standard says. */
+#include <limits.h>
+#include <locale.h>
+
+struct lconv *localeconv(void)
+{
+    static char dot[] = ".", none[] = "";
+    static struct lconv c;
+    if (!c.decimal_point) {
+        c.decimal_point = dot;
+        c.thousands_sep = none;
+        c.grouping = none;
+        c.int_curr_symbol = none;
+        c.currency_symbol = none;
+        c.mon_decimal_point = none;
+        c.mon_thousands_sep = none;
+        c.mon_grouping = none;
+        c.positive_sign = none;
+        c.negative_sign = none;
+        c.int_frac_digits = CHAR_MAX;
+        c.frac_digits = CHAR_MAX;
+        c.p_cs_precedes = CHAR_MAX;
+        c.p_sep_by_space = CHAR_MAX;
+        c.n_cs_precedes = CHAR_MAX;
+        c.n_sep_by_space = CHAR_MAX;
+        c.p_sign_posn = CHAR_MAX;
+        c.n_sign_posn = CHAR_MAX;
+    }
+    return &c;
+}
