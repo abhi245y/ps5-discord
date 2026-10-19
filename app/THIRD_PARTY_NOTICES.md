@@ -51,8 +51,7 @@ project adds.
 
 | Typeface | Files | Copyright | Licence |
 | --- | --- | --- | --- |
-| Nunito Sans Regular, Bold | `third_party/fonts/NunitoSans-*.ttf` (static instances cut from the variable font with fontTools) | (c) 2016 The Nunito Sans Project Authors | SIL Open Font License 1.1 (`NunitoSans-LICENSE.txt`) |
-| MuseoModerno Bold | `third_party/fonts/MuseoModerno-Bold.ttf` (static instance cut from the variable font) | (c) 2020 The MuseoModerno Project Authors | SIL Open Font License 1.1 (`MuseoModerno-LICENSE.txt`) |
+| Nunito Sans Regular, Bold, ExtraBold | `third_party/fonts/NunitoSans-*.ttf` (static instances cut from the variable font with fontTools) | (c) 2016 The Nunito Sans Project Authors | SIL Open Font License 1.1 (`NunitoSans-LICENSE.txt`) |
 | DejaVu Sans Mono | `third_party/fonts/DejaVuSansMono.ttf` | (c) 2003 Bitstream, Inc.; DejaVu changes are public domain | Bitstream Vera licence (`DejaVu-LICENSE.txt`) |
 | Press Start 2P | `third_party/fonts/PressStart2P-Regular.ttf` | (c) 2012 The Press Start 2P Project Authors | SIL Open Font License 1.1 (`PressStart2P-LICENSE.txt`) |
 | Patrick Hand | `third_party/fonts/PatrickHand-Regular.ttf` | (c) 2010-2012 Patrick Wagesreiter | SIL Open Font License 1.1 (`PatrickHand-LICENSE.txt`) |

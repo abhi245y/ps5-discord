@@ -19,6 +19,14 @@ const User *find_user(const Snapshot &snapshot, const std::string &id)
     return nullptr;
 }
 
+const Guild *find_guild(const Snapshot &snapshot, const std::string &id)
+{
+    for (const Guild &guild : snapshot.guilds)
+        if (guild.id == id)
+            return &guild;
+    return nullptr;
+}
+
 namespace
 {
 
@@ -115,7 +123,76 @@ Snapshot sample_snapshot()
         {"m5", "general", "jo", "@you in #general · Night Shift", "I'll be on in 10", kNow - 120 * kMinute, false},
     };
     s.mention_count = 3; // unread mentions, as the Mentions chip counts them
+
+    auto msg = [](const char *id, const char *channel, const char *author, const char *content, std::int64_t time,
+                  bool mentions_me = false) {
+        Message m;
+        m.id = id;
+        m.channel_id = channel;
+        m.author_id = author;
+        m.content = content;
+        m.time_ms = time;
+        m.mentions_me = mentions_me;
+        return m;
+    };
+    std::vector<Message> &general = s.messages["general"];
+    general = {
+        msg("g0", "general", "rin", "anyone tried the new photo mode filters?", kNow - 70 * kMinute),
+        msg("g1", "general", "zed", "yeah the film grain one is great for night shots", kNow - 66 * kMinute),
+        msg("g2", "general", "mira", "Lobby is up for tonight. Starting around 9 if everyone is in.", kNow - 26 * kMinute),
+        msg("g3", "general", "theo", "In. Bringing snacks and bad aim.", kNow - 24 * kMinute),
+        msg("g4", "general", "kenji", "@Starcraft are you in for the raid?", kNow - 23 * kMinute, true),
+        msg("g5", "general", "ana", "", kNow - 21 * kMinute),
+        msg("g6", "general", "mira", "Deal. Party code in a minute.", kNow - 20 * kMinute),
+    };
+    Attachment shot;
+    shot.name = "screenshot.png";
+    shot.size_text = "1.8 MB";
+    shot.image = true;
+    shot.art = 0;
+    general[5].attachments.push_back(shot);
+    general[6].edited = true;
+
+    s.messages["gamenight"] = {
+        msg("n0", "gamenight", "mira", "Raid at 9, then whatever people want.", kNow - 50 * kMinute),
+        msg("n1", "gamenight", "kenji", "@Starcraft can you bring the party code?", kNow - 35 * kMinute, true),
+        msg("n2", "gamenight", "ana", "voting for the cave map after", kNow - 5 * kMinute),
+        msg("n3", "gamenight", "kenji", "are you in?", kNow - 4 * kMinute, true),
+    };
+    s.messages["dm-theo"] = {
+        msg("d0", "dm-theo", "theo", "Lobby is up for tonight. Starting around 9 if everyone is in.", kNow - 55 * kMinute),
+        msg("d1", "dm-theo", "me", "I'll be there! Finishing dinner in a bit.", kNow - 54 * kMinute),
+        msg("d2", "dm-theo", "theo", "We can try the new route on the left side. Looks super chill.", kNow - 50 * kMinute),
+        msg("d3", "dm-theo", "me", "Looks amazing! Count me in.", kNow - 49 * kMinute),
+        msg("d4", "dm-theo", "theo", "bring snacks", kNow - 42 * kMinute),
+    };
     return s;
+}
+
+} // namespace discord
+
+namespace discord
+{
+
+void apply_sample(Snapshot &s, const Request &r)
+{
+    if (r.kind != Request::Kind::send)
+        return; // history is all loaded already
+    std::vector<Message> &list = s.messages[r.channel_id];
+    Message m;
+    m.id = "sent-" + std::to_string(list.size());
+    m.channel_id = r.channel_id;
+    m.author_id = s.me.id;
+    m.content = r.content;
+    m.time_ms = s.now_ms;
+    for (const Message &original : list)
+        if (original.id == r.reply_to)
+        {
+            const User *author = find_user(s, original.author_id);
+            m.reply_author = author ? author->name : original.author_name;
+            m.reply_text = original.content;
+        }
+    list.push_back(m);
 }
 
 } // namespace discord

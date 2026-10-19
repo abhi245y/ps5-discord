@@ -20,6 +20,7 @@
 #include "app/tour.hpp"
 #include "core/save_file.hpp"
 #include "app/art.hpp"
+#include "app/text_engine.hpp"
 #include "discord/sample.hpp"
 #include "gfx/gl_program.hpp"
 #include "gfx/renderer.hpp"
@@ -176,14 +177,19 @@ int main(int argc, char **argv)
         !load_font(renderer, assets + "/fonts/nunito-sans-regular.huifont", &regular, &fonts.regular) ||
         !load_font(renderer, assets + "/fonts/nunito-sans-bold.huifont", &semibold,
                    &fonts.semibold) ||
-        !load_font(renderer, assets + "/fonts/museomoderno-bold.huifont", &display,
+        !load_font(renderer, assets + "/fonts/nunito-sans-extrabold.huifont", &display,
                    &fonts.display) ||
         !load_font(renderer, assets + "/fonts/dejavu-sans-mono.huifont", &mono, &fonts.mono) ||
         !load_font(renderer, assets + "/fonts/press-start-2p.huifont", &pixel, &fonts.pixel) ||
         !load_font(renderer, assets + "/fonts/patrick-hand.huifont", &hand, &fonts.hand))
         return 1;
+    hui::gfx::Shaper shaper;
+    hui::app::attach_text_engine(shaper, renderer, assets + "/fonts", {&regular, &semibold, &display, &mono});
     const hui::app::ArtSet art = hui::app::load_art(renderer, assets + "/art");
-    const discord::Snapshot snapshot = discord::sample_snapshot();
+    discord::Snapshot snapshot = discord::sample_snapshot();
+    const std::function<void(const discord::Request &)> submit = [&snapshot](const discord::Request &r) {
+        discord::apply_sample(snapshot, r);
+    };
 
     // HUI_ICON=<file.png>: draw the 512x512 launcher icon with the kit and stop.
     if (const char *icon_path = std::getenv("HUI_ICON"))
@@ -250,7 +256,7 @@ int main(int argc, char **argv)
     hui::save::ensure_directory(output);
     hui::save::ensure_directory(data_root);
     std::remove((data_root + "/settings.bin").c_str());
-    hui::app::Shell shell(fonts, snapshot, art, data_root, renderer.glass_texture());
+    hui::app::Shell shell(fonts, snapshot, art, submit, data_root, renderer.glass_texture());
     shell.set_version("host");
 
     constexpr float kDt = 1.0f / 60.0f;
@@ -264,6 +270,7 @@ int main(int argc, char **argv)
     const auto render = [&](const std::string &name)
     {
         shell.compose(renderer);
+            shaper.upload(renderer.batch());
         glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
         glClearColor(0, 0, 0, 1);
         glClear(GL_COLOR_BUFFER_BIT);
@@ -308,6 +315,7 @@ int main(int argc, char **argv)
         const auto record = [&]()
         {
             shell.compose(renderer);
+            shaper.upload(renderer.batch());
             glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
             glClearColor(0, 0, 0, 1);
             glClear(GL_COLOR_BUFFER_BIT);

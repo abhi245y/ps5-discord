@@ -23,7 +23,7 @@ while read -r source output size range; do
 done <<'FONTS'
 NunitoSans-Regular.ttf nunito-sans-regular 56 8
 NunitoSans-Bold.ttf nunito-sans-bold 56 8
-MuseoModerno-Bold.ttf museomoderno-bold 64 8
+NunitoSans-ExtraBold.ttf nunito-sans-extrabold 64 8
 DejaVuSansMono.ttf dejavu-sans-mono 52 8
 PressStart2P-Regular.ttf press-start-2p 32 4
 PatrickHand-Regular.ttf patrick-hand 56 8

@@ -4,6 +4,8 @@
 #pragma once
 
 #include <array>
+#include <optional>
+#include <string>
 #include <vector>
 
 #include "app/concept.hpp"
@@ -22,6 +24,13 @@ enum class HomeTab : int
     count,
 };
 
+// Where Home asks the app to go after Cross.
+struct HomeOpen
+{
+    std::string guild_id; // empty for a DM
+    std::string channel_id;
+};
+
 class Home
 {
   public:
@@ -35,6 +44,13 @@ class Home
     HomeTab tab() const
     {
         return tab_;
+    }
+    // The channel Cross picked during the last update, once.
+    std::optional<HomeOpen> take_open()
+    {
+        std::optional<HomeOpen> out = std::move(open_);
+        open_.reset();
+        return out;
     }
 
   private:
@@ -89,6 +105,7 @@ class Home
     bool placed_ = false;
     std::array<int, static_cast<int>(HomeTab::count)> tab_focus_{};
     std::array<hui::tween::Spring, static_cast<int>(HomeTab::count)> tab_scroll_{};
+    std::optional<HomeOpen> open_;
 };
 
 } // namespace screens

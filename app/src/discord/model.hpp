@@ -8,6 +8,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -103,6 +104,31 @@ struct Mention
     bool unread = true;
 };
 
+struct Attachment
+{
+    std::string name; // "screenshot.png"
+    std::string url;  // through the core's image proxy; empty in samples
+    std::string size_text; // "1.8 MB"
+    bool image = false;
+    ArtIndex art = 0; // stand-in thumbnail while the image loads (and in samples)
+};
+
+struct Message
+{
+    std::string id;
+    std::string channel_id;
+    std::string author_id;
+    std::string author_name; // as sent, for authors not in the friends list
+    std::string content;
+    std::int64_t time_ms = 0;
+    bool mentions_me = false;
+    bool edited = false;
+    bool pending = false; // sent from this console, not yet echoed by the gateway
+    std::string reply_author; // the message this one answers, when it is a reply
+    std::string reply_text;
+    std::vector<Attachment> attachments;
+};
+
 struct Voice // the account's own voice connection
 {
     bool connected = false;
@@ -132,6 +158,8 @@ struct Snapshot
     std::vector<Conversation> recent;
     std::vector<Guild> guilds;
     std::vector<Mention> mentions;
+    // Loaded history by channel id, oldest first (DM channels included).
+    std::map<std::string, std::vector<Message>> messages;
     Voice voice;
     int friends_online = 0;
     int unread_total = 0;
@@ -139,5 +167,6 @@ struct Snapshot
 };
 
 const User *find_user(const Snapshot &snapshot, const std::string &id);
+const Guild *find_guild(const Snapshot &snapshot, const std::string &id);
 
 } // namespace discord

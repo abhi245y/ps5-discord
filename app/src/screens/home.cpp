@@ -79,14 +79,6 @@ std::vector<const discord::User *> ordered_friends(const discord::Snapshot &s)
     return out;
 }
 
-void mic_off(DrawList &list, float cx, float cy, float s, Color c)
-{
-    list.rounded_rect({cx - s * 0.18f, cy - s * 0.5f, s * 0.36f, s * 0.62f}, s * 0.18f, c);
-    list.arc(cx, cy - s * 0.05f, s * 0.34f, s * 0.07f, 0.0f, 3.14159f, c);
-    list.line(cx, cy + s * 0.3f, cx, cy + s * 0.48f, s * 0.07f, c);
-    list.line(cx - s * 0.42f, cy - s * 0.5f, cx + s * 0.42f, cy + s * 0.42f, s * 0.08f, c);
-}
-
 } // namespace
 
 // ---- focus -------------------------------------------------------------------
@@ -267,7 +259,13 @@ void Home::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
         {
             if (zone_ == kChips)
                 tab_ = static_cast<HomeTab>(index_[kChips]);
-            feedback.play(hui::audio::Cue::select);
+            else if (zone_ == kRecent && index_[kRecent] < static_cast<int>(s.recent.size()))
+            {
+                const discord::Conversation &c = s.recent[static_cast<std::size_t>(index_[kRecent])];
+                open_ = HomeOpen{c.guild_id, c.channel_id};
+            }
+            // ponytail: Join on a live room comes with voice (0.4.0).
+            feedback.play(open_ ? hui::audio::Cue::open : hui::audio::Cue::select);
         }
 
     }
@@ -316,21 +314,7 @@ void Home::draw_header(const discord::Snapshot &s, DrawList &list) const
             count_badge(list, ink_, s.mention_count, tx + tw + 50.0f, r.cy(), 34.0f);
     }
 
-    // Voice pill on the right: where you are, and whether you are muted.
-    if (s.voice.connected)
-    {
-        std::string text = "In " + s.voice.room_name + " · " + std::to_string(s.voice.member_count);
-        if (s.voice.muted)
-            text += " · muted";
-        const float tw = ink_.fonts.regular.measure(text, 24.0f);
-        const float w = tw + 120.0f;
-        const Rect pill{kRight - w, kHeaderY, w, kHeaderH};
-        list.rounded_rect(pill, pill.h * 0.5f, kRaised);
-        list.circle(pill.x + 36.0f, pill.cy(), 9.0f, kCoral);
-        ui::text(list, ink_.fonts.regular, text, pill.x + 60.0f, pill.cy() + 9.0f, 24.0f, kText);
-        if (s.voice.muted)
-            mic_off(list, kRight - 38.0f, pill.cy(), 30.0f, kDim);
-    }
+    voice_pill(list, ink_, s.voice, kHeaderY, kHeaderH);
 }
 
 void Home::draw_friends(const discord::Snapshot &s, DrawList &list) const

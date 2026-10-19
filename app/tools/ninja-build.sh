@@ -18,7 +18,7 @@ ninja_begin() {
     jobs=${BUILD_JOBS:-$(nproc 2>/dev/null || printf '2')}
     [[ $jobs =~ ^[1-9][0-9]*$ ]] || { echo 'BUILD_JOBS must be positive' >&2; exit 2; }
     compiler_cache=()
-    if [[ ${USE_CCACHE:-1} != 0 ]]; then
+    if [[ ${USE_CCACHE:-0} != 0 ]]; then # ps5-discord: off unless asked for
         command -v ccache >/dev/null || { echo 'Install ccache or set USE_CCACHE=0' >&2; exit 2; }
         compiler_cache=(ccache)
     fi

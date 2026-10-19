@@ -31,7 +31,7 @@ struct Fonts
 {
     FontRef regular;  // Nunito Sans Regular: body text
     FontRef semibold; // Nunito Sans Bold: names, labels, buttons
-    FontRef display;  // MuseoModerno Bold: page titles
+    FontRef display;  // Nunito Sans ExtraBold: page titles
     FontRef mono;     // DejaVu Sans Mono: numbers that must not jump, terminals
     FontRef pixel;    // Press Start 2P: an 8x8 bitmap face (the Pixel theme)
     FontRef hand;     // Patrick Hand: handwriting (the Sketch theme)

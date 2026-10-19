@@ -31,7 +31,7 @@ inline const Color kMentionTint = Color::rgb(0x3a2724); // a mention card's grou
 // Layout.
 inline constexpr float kMargin = 72.0f;      // left and right screen edges
 inline constexpr float kTitleBaseline = 84.0f;
-inline constexpr float kTitleSize = 64.0f;   // MuseoModerno Bold
+inline constexpr float kTitleSize = 64.0f;   // Nunito Sans ExtraBold
 inline constexpr float kLabelSize = 30.0f;   // row headings, Nunito Sans Bold
 inline constexpr float kNameSize = 26.0f;
 inline constexpr float kBodySize = 25.0f;

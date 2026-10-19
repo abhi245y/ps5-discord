@@ -17,6 +17,7 @@
 #include "core/settings.hpp"
 #include "core/version.hpp"
 #include "app/art.hpp"
+#include "app/text_engine.hpp"
 #include "discord/sample.hpp"
 #include "gfx/canvas.hpp"
 #include "gfx/renderer.hpp"
@@ -177,7 +178,7 @@ int main()
     if (!renderer.init() ||
         !load_font(renderer, "nunito-sans-regular.huifont", &regular, &fonts.regular) ||
         !load_font(renderer, "nunito-sans-bold.huifont", &semibold, &fonts.semibold) ||
-        !load_font(renderer, "museomoderno-bold.huifont", &display_font, &fonts.display) ||
+        !load_font(renderer, "nunito-sans-extrabold.huifont", &display_font, &fonts.display) ||
         !load_font(renderer, "dejavu-sans-mono.huifont", &mono, &fonts.mono) ||
         !load_font(renderer, "press-start-2p.huifont", &pixel, &fonts.pixel) ||
         !load_font(renderer, "patrick-hand.huifont", &hand, &fonts.hand))
@@ -185,6 +186,9 @@ int main()
         sys::log("[HUI] fatal: renderer init failed");
         sys::park();
     }
+    gfx::Shaper shaper;
+    app::attach_text_engine(shaper, renderer, std::string(kAssets) + "/fonts",
+                            {&regular, &semibold, &display_font, &mono});
     const app::ArtSet art = app::load_art(renderer, std::string(kAssets) + "/art");
     // ponytail: sample account until the core client lands (M3).
     discord::Snapshot snapshot = discord::sample_snapshot();
@@ -206,7 +210,11 @@ int main()
     for (const std::string &error : bank.errors)
         sys::log("[HUI] sound rejected %s", error.c_str());
 
-    app::Shell shell(fonts, snapshot, art, kDataRoot, renderer.glass_texture());
+    // ponytail: requests change the sample account until the core client lands (M3).
+    const std::function<void(const discord::Request &)> submit = [&snapshot](const discord::Request &r) {
+        discord::apply_sample(snapshot, r);
+    };
+    app::Shell shell(fonts, snapshot, art, submit, kDataRoot, renderer.glass_texture());
     const std::string version = read_content_version("/app0/sce_sys/param.json");
     shell.set_version(version);
     sys::log("[HUI] version %s designs=%zu", version.empty() ? "unknown" : version.c_str(),
@@ -307,6 +315,7 @@ int main()
         music.pump(dt);
 
         shell.compose(renderer);
+        shaper.upload(renderer.batch());
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);

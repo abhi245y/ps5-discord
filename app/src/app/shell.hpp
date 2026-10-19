@@ -30,7 +30,8 @@ namespace hui::app
 class Shell
 {
   public:
-    Shell(const ui::Fonts &fonts, const discord::Snapshot &snapshot, const ArtSet &art, std::string data_root,
+    Shell(const ui::Fonts &fonts, const discord::Snapshot &snapshot, const ArtSet &art,
+                 const std::function<void(const discord::Request &)> &submit, std::string data_root,
           std::uint32_t glass_texture);
 
     static Settings load_settings(const std::string &data_root);

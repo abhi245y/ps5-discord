@@ -8,12 +8,14 @@
 #include "core/input.hpp"
 #include "core/settings.hpp"
 #include "discord/model.hpp"
+#include "discord/request.hpp"
 #include "gfx/backdrop_spec.hpp"
 #include "gfx/draw_list.hpp"
 #include "ui/feedback.hpp"
 #include "ui/fonts.hpp"
 
 #include <array>
+#include <functional>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -68,6 +70,9 @@ struct Context
     // The account as last received (replaced between frames, never during one).
     const discord::Snapshot &snapshot;
     const ArtSet &art;
+    // Hands a screen's request to the client (console) or applies it to the
+    // sample account (host snapshots).
+    const std::function<void(const discord::Request &)> &submit;
     const Telemetry &telemetry;
     // Live settings. A design that edits them sets settings_changed; the app
     // applies the change (volumes, button swap, ...) and saves it.

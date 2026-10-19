@@ -235,7 +235,39 @@ void Home::update_tab(const discord::Snapshot &s, const hui::InputFrame &input, 
         }
     }
     if (input.is_pressed(Action::confirm) && !items.empty())
-        feedback.play(hui::audio::Cue::select);
+    {
+        const int ref = items[static_cast<std::size_t>(focus)].ref;
+        if (tab_ == HomeTab::mentions)
+        {
+            const discord::Mention &m = s.mentions[static_cast<std::size_t>(ref)];
+            std::string guild;
+            for (const discord::Guild &g : s.guilds)
+                for (const discord::Channel &c : g.channels)
+                    if (c.id == m.channel_id)
+                        guild = g.id;
+            open_ = HomeOpen{guild, m.channel_id};
+        }
+        else if (tab_ == HomeTab::servers)
+        {
+            // ponytail: the first text channel until the server page (framework frame 05) lands.
+            const discord::Guild &g = s.guilds[static_cast<std::size_t>(ref)];
+            for (const discord::Channel &c : g.channels)
+                if (c.kind != discord::ChannelKind::voice)
+                {
+                    open_ = HomeOpen{g.id, c.id};
+                    break;
+                }
+        }
+        else if (tab_ == HomeTab::friends)
+        {
+            // Message: their DM, when one is known.
+            const discord::User &u = s.friends[static_cast<std::size_t>(ref)];
+            for (const discord::Conversation &c : s.recent)
+                if (c.guild_id.empty() && c.user_id == u.id)
+                    open_ = HomeOpen{"", c.channel_id};
+        }
+        feedback.play(open_ ? hui::audio::Cue::open : hui::audio::Cue::error);
+    }
 
     // Keep the focused item between the header and the hints.
     hui::tween::Spring &scroll = tab_scroll_[t];

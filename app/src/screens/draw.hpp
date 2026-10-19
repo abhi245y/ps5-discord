@@ -61,6 +61,12 @@ std::string status_line(const discord::User &user);
 void row_label(DrawList &list, const Ink &ink, float baseline, const std::string &text, const std::string &count,
                bool count_hot = false);
 
+// A crossed-out microphone centred on (cx, cy), s across.
+void mic_off(DrawList &list, float cx, float cy, float s, Color c);
+
+// The pill at the top right of every screen while in voice: room, count, muted.
+void voice_pill(DrawList &list, const Ink &ink, const discord::Voice &voice, float y, float h);
+
 // Up to 99, then "99+".
 std::string count_text(int count);
 

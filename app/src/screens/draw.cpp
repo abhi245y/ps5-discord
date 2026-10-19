@@ -229,6 +229,32 @@ void row_label(DrawList &list, const Ink &ink, float baseline, const std::string
 }
 
 
+void mic_off(DrawList &list, float cx, float cy, float s, Color c)
+{
+    list.rounded_rect({cx - s * 0.18f, cy - s * 0.5f, s * 0.36f, s * 0.62f}, s * 0.18f, c);
+    list.arc(cx, cy - s * 0.05f, s * 0.34f, s * 0.07f, 0.0f, 3.14159f, c);
+    list.line(cx, cy + s * 0.3f, cx, cy + s * 0.48f, s * 0.07f, c);
+    list.line(cx - s * 0.42f, cy - s * 0.5f, cx + s * 0.42f, cy + s * 0.42f, s * 0.08f, c);
+}
+
+void voice_pill(DrawList &list, const Ink &ink, const discord::Voice &voice, float y, float h)
+{
+    if (!voice.connected)
+        return;
+    std::string text = "In " + voice.room_name + " · " + std::to_string(voice.member_count);
+    if (voice.muted)
+        text += " · muted";
+    const float right = 1920.0f - style::kMargin;
+    const float tw = ink.fonts.regular.measure(text, 24.0f);
+    const float w = tw + (voice.muted ? 120.0f : 84.0f);
+    const Rect pill{right - w, y, w, h};
+    list.rounded_rect(pill, pill.h * 0.5f, kRaised);
+    list.circle(pill.x + 36.0f, pill.cy(), 9.0f, kCoral);
+    hui::ui::text(list, ink.fonts.regular, text, pill.x + 60.0f, pill.cy() + 9.0f, 24.0f, kText);
+    if (voice.muted)
+        mic_off(list, right - 38.0f, pill.cy(), 30.0f, kDim);
+}
+
 std::string count_text(int count)
 {
     return count > 99 ? std::string("99+") : std::to_string(count);
