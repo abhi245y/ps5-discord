@@ -6,11 +6,17 @@
 
 #include "platform/ps5/ime.hpp"
 
-#include <algorithm>
-#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <unistd.h>
 
 #include "platform/ps5/system.hpp"
 
@@ -47,69 +53,92 @@ struct ImeDialogResult
 extern "C"
 {
     int sceSysmoduleLoadModule(std::uint16_t id);
-    int sceSysmoduleGetModuleHandleInternal(std::uint32_t id, int *handle);
     int sceKernelLoadStartModule(const char *path, std::size_t argc, const void *argv, std::uint32_t flags,
                                  void *option, int *result);
     int sceKernelDlsym(int handle, const char *symbol, void **address);
-    int sceKernelGetModuleList2(int *handles, std::size_t capacity, std::size_t *count);
+    const char *sceKernelGetFsSandboxRandomWord();
+}
+
+// Asks the core where sym sits in this process (0 if it could not say). A
+// native title's own dlsym finds nothing on 13.00; the core reads the app's
+// library table through the kernel.
+std::uintptr_t core_dlsym(const char *lib, const char *sym)
+{
+    const int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0)
+        return 0;
+    timeval timeout{3, 0};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
+    sockaddr_in to{};
+    to.sin_len = sizeof to;
+    to.sin_family = AF_INET;
+    to.sin_port = htons(9041);
+    to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    char buf[512];
+    const int n = std::snprintf(buf, sizeof buf, "GET /api/dlsym?pid=%d&lib=%s&sym=%s HTTP/1.0\r\n\r\n",
+                                static_cast<int>(getpid()), lib, sym);
+    std::string raw;
+    if (connect(fd, reinterpret_cast<sockaddr *>(&to), sizeof to) == 0 && send(fd, buf, n, 0) == n)
+        for (ssize_t r; (r = recv(fd, buf, sizeof buf, 0)) > 0;)
+            raw.append(buf, static_cast<std::size_t>(r));
+    close(fd);
+    const std::size_t at = raw.find("\"addr\":");
+    return at == std::string::npos ? 0 : std::strtoull(raw.c_str() + at + 7, nullptr, 10);
+}
+
+// One function: this process's dlsym first, then the core.
+template <typename F> void resolve(int handle, const char *lib, const char *sym, F &out)
+{
+    void *p = nullptr;
+    if (handle < 0 || sceKernelDlsym(handle, sym, &p) != 0 || !p)
+        p = reinterpret_cast<void *>(core_dlsym(lib, sym));
+    out = reinterpret_cast<F>(p);
 }
 
 // The dialog's functions, resolved at run time: a native title does not get
 // libSceImeDialog loaded for it (calling the bare import jumped to 0).
 struct ImeApi
 {
+    int (*common_init)() = nullptr; // sceCommonDialogInitialize, needed before any dialog
     int (*init)(const ImeDialogParam *, void *) = nullptr;
     int (*status)() = nullptr; // 1: running, 2: finished
     int (*result)(ImeDialogResult *) = nullptr;
     int (*term)() = nullptr;
     bool ok() const
     {
-        return init && status && result && term;
+        return common_init && init && status && result && term;
     }
 };
 
+// Kept once found; looked for again on the next open until then (the core may
+// not be up yet).
 const ImeApi &ime_api()
 {
-    static const ImeApi api = [] {
-        ImeApi a;
-        constexpr std::uint16_t kImeDialogModule = 0x0096; // SCE_SYSMODULE_IME_DIALOG
-        int handle = -1;
-        const int load_rc = sceSysmoduleLoadModule(kImeDialogModule);
-        const int handle_rc = sceSysmoduleGetModuleHandleInternal(kImeDialogModule, &handle);
-        hui::sys::log("[IME] module load=0x%08x handle_rc=0x%08x handle=0x%x", static_cast<unsigned>(load_rc),
-                      static_cast<unsigned>(handle_rc), static_cast<unsigned>(handle));
-        // The export may live in a module other than the one the ID names: try
-        // that handle, then the library by path, then everything loaded.
-        std::array<int, 256> handles{};
-        std::size_t count = 0;
-        if (handle >= 0)
-            handles[count++] = handle;
-        const int by_path = sceKernelLoadStartModule("/system/common/lib/libSceImeDialog.sprx", 0, nullptr, 0,
-                                                     nullptr, nullptr);
-        hui::sys::log("[IME] by path handle=0x%x", static_cast<unsigned>(by_path));
-        if (by_path >= 0)
-            handles[count++] = by_path;
-        std::size_t listed = 0;
-        if (sceKernelGetModuleList2(handles.data() + count, handles.size() - count, &listed) == 0)
-            count += std::min(listed, handles.size() - count);
-        for (std::size_t i = 0; i < count && !a.ok(); ++i)
-        {
-            ImeApi t;
-            sceKernelDlsym(handles[i], "sceImeDialogInit", reinterpret_cast<void **>(&t.init));
-            sceKernelDlsym(handles[i], "sceImeDialogGetStatus", reinterpret_cast<void **>(&t.status));
-            sceKernelDlsym(handles[i], "sceImeDialogGetResult", reinterpret_cast<void **>(&t.result));
-            sceKernelDlsym(handles[i], "sceImeDialogTerm", reinterpret_cast<void **>(&t.term));
-            if (t.ok())
-            {
-                a = t;
-                hui::sys::log("[IME] resolved in handle 0x%x (%zu of %zu)", static_cast<unsigned>(handles[i]), i,
-                              count);
-            }
-        }
-        if (!a.ok())
-            hui::sys::log("[IME] not found in %zu modules", count);
-        return a;
-    }();
+    static ImeApi api;
+    if (api.ok())
+        return api;
+    constexpr std::uint16_t kImeDialogModule = 0x0096; // SCE_SYSMODULE_IME_DIALOG
+    const int sys_rc = sceSysmoduleLoadModule(kImeDialogModule);
+    // System libraries sit under the title's sandbox, not /system.
+    const std::string dir = std::string("/") + sceKernelGetFsSandboxRandomWord() + "/common/lib/";
+    const int common = sceKernelLoadStartModule((dir + "libSceCommonDialog.sprx").c_str(), 0, nullptr, 0, nullptr,
+                                                nullptr);
+    const int ime = sceKernelLoadStartModule((dir + "libSceImeDialog.sprx").c_str(), 0, nullptr, 0, nullptr, nullptr);
+    ImeApi a;
+    resolve(common, "libSceCommonDialog.sprx", "sceCommonDialogInitialize", a.common_init);
+    resolve(ime, "libSceImeDialog.sprx", "sceImeDialogInit", a.init);
+    resolve(ime, "libSceImeDialog.sprx", "sceImeDialogGetStatus", a.status);
+    resolve(ime, "libSceImeDialog.sprx", "sceImeDialogGetResult", a.result);
+    resolve(ime, "libSceImeDialog.sprx", "sceImeDialogTerm", a.term);
+    hui::sys::log("[IME] sysmodule=0x%08x common=0x%x ime=0x%x found=%d%d%d%d%d", static_cast<unsigned>(sys_rc),
+                  static_cast<unsigned>(common), static_cast<unsigned>(ime), !!a.common_init, !!a.init, !!a.status,
+                  !!a.result, !!a.term);
+    if (a.ok())
+    {
+        const int rc = a.common_init();
+        hui::sys::log("[IME] common dialog init=0x%08x", static_cast<unsigned>(rc));
+        api = a;
+    }
     return api;
 }
 

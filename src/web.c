@@ -19,6 +19,10 @@
 #include "ratelimit.h"
 #include "status.h"
 
+#ifdef __PROSPERO__
+#include <ps5/kernel.h>
+#endif
+
 extern const unsigned char web_index_html[];
 extern const size_t web_index_html_len;
 
@@ -282,6 +286,29 @@ static void api_dm(int c, const char *body)
     reply_rest(c, rest("POST", "/users/@me/channels", json));
 }
 
+// Where a system library's function sits in the app. A title's own dlsym finds
+// nothing on 13.00, so the app asks the core, which reads the app's library
+// table through the kernel; the app then calls the address itself.
+static void api_dlsym(int c, const char *query)
+{
+    char pid[12], lib[64], sym[64];
+    if (query_get(query, "pid", pid, sizeof pid) != 0 || !is_id(pid) || query_get(query, "lib", lib, sizeof lib) != 0 ||
+        strncmp(lib, "libSce", 6) != 0 || query_get(query, "sym", sym, sizeof sym) != 0 || strncmp(sym, "sce", 3) != 0) {
+        reply(c, "400 Bad Request", "text/plain", "pid lib sym", 11);
+        return;
+    }
+    long addr = 0;
+#ifdef __PROSPERO__
+    uint32_t handle = 0;
+    if (kernel_dynlib_handle(atoi(pid), lib, &handle) == 0)
+        addr = (long)kernel_dynlib_dlsym(atoi(pid), handle, sym);
+    LOG("dlsym %s %s in %s: 0x%lx", lib, sym, pid, addr);
+#endif
+    char json[48];
+    snprintf(json, sizeof json, "{\"addr\":%ld}", addr > 0 ? addr : 0);
+    reply(c, "200 OK", "application/json", json, strlen(json));
+}
+
 // local: the peer is on this console (the native app). Chat data is only served to it.
 static void handle(int c, int local)
 {
@@ -349,6 +376,8 @@ static void handle(int c, int local)
         api_change(c, body, 0);
     } else if (post && strcmp(path, "/api/delete") == 0) {
         api_change(c, body, 1);
+    } else if (get && strcmp(path, "/api/dlsym") == 0) {
+        api_dlsym(c, query);
     } else if (post && strcmp(path, "/api/quit") == 0) {
         reply(c, "200 OK", "application/json", "{\"ok\":true}", 11);
         LOG("quit requested from the web UI");
