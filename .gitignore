@@ -10,6 +10,8 @@ build/
 
 # other agents' workspaces
 discord-ps5-lounge/
+.deps/
+token.txt
 
 # local notes and agent files, never committed
 docs/
