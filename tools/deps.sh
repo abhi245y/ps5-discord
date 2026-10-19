@@ -32,4 +32,8 @@ fetch https://github.com/DaveGamble/cJSON/archive/refs/tags/v1.7.18.tar.gz \
     3aa806844a03442c00769b83e99970be70fbef03735ff898f4811dd03b9f5ee5 "$deps/cJSON-1.7.18.tar.gz"
 [[ -d $deps/src/cJSON-1.7.18 ]] || tar -xzf "$deps/cJSON-1.7.18.tar.gz" -C "$deps/src"
 
+fetch https://github.com/nayuki/QR-Code-generator/archive/refs/tags/v1.8.0.tar.gz \
+    2ec0a4d33d6f521c942eeaf473d42d5fe139abcfa57d2beffe10c5cf7d34ae60 "$deps/qrcodegen-1.8.0.tar.gz"
+[[ -d $deps/src/QR-Code-generator-1.8.0 ]] || tar -xzf "$deps/qrcodegen-1.8.0.tar.gz" -C "$deps/src"
+
 echo "deps ready in $deps"

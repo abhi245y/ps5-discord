@@ -10,6 +10,8 @@ typedef struct {
 } tls_conn;
 
 int tls_global_init(void); // once per process; 0 on success
+// Process CSPRNG (seeded by tls_global_init), mbedTLS f_rng signature.
+int tls_random(void *unused, unsigned char *out, size_t len);
 int tls_connect(tls_conn *c, const char *host, const char *port);
 // Wait until data is readable or timeout_ms passes: 1 readable, 0 timeout, <0 error.
 int tls_wait(tls_conn *c, int timeout_ms);

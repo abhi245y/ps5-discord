@@ -10,17 +10,14 @@
 #include <cJSON.h>
 
 #include "log.h"
+#include "props.h"
 #include "ws.h"
 #include "zstream.h"
 
 #define GATEWAY_URL "wss://gateway.discord.gg"
 #define GATEWAY_QUERY "/?encoding=json&v=9&compress=zlib-stream"
-// Same values the web client sent in build 641004 (docs/gateway.md). Bump with the web build.
+// Same value the web client sent in build 641004 (docs/gateway.md).
 #define CAPABILITIES 1734653
-#define CLIENT_BUILD 641004
-#define BROWSER_VERSION "152.0.0.0"
-#define USER_AGENT "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" \
-                   BROWSER_VERSION " Safari/537.36"
 
 enum { OP_DISPATCH = 0, OP_HEARTBEAT = 1, OP_IDENTIFY = 2, OP_RESUME = 6, OP_RECONNECT = 7,
        OP_INVALID_SESSION = 9, OP_HELLO = 10, OP_HEARTBEAT_ACK = 11 };
@@ -75,20 +72,7 @@ static int send_identify(gateway *g)
     cJSON *d = cJSON_CreateObject();
     cJSON_AddStringToObject(d, "token", g->token);
     cJSON_AddNumberToObject(d, "capabilities", CAPABILITIES);
-    cJSON *p = cJSON_AddObjectToObject(d, "properties");
-    cJSON_AddStringToObject(p, "os", "Linux");
-    cJSON_AddStringToObject(p, "browser", "Chrome");
-    cJSON_AddStringToObject(p, "device", "");
-    cJSON_AddStringToObject(p, "system_locale", "en-US");
-    cJSON_AddFalseToObject(p, "has_client_mods");
-    cJSON_AddStringToObject(p, "browser_user_agent", USER_AGENT);
-    cJSON_AddStringToObject(p, "browser_version", BROWSER_VERSION);
-    cJSON_AddStringToObject(p, "os_version", "");
-    cJSON_AddStringToObject(p, "referrer", "");
-    cJSON_AddStringToObject(p, "referring_domain", "");
-    cJSON_AddStringToObject(p, "release_channel", "stable");
-    cJSON_AddNumberToObject(p, "client_build_number", CLIENT_BUILD);
-    cJSON_AddNullToObject(p, "client_event_source");
+    cJSON_AddItemToObject(d, "properties", props_create());
     cJSON *pr = cJSON_AddObjectToObject(d, "presence");
     cJSON_AddStringToObject(pr, "status", "unknown");
     cJSON_AddNumberToObject(pr, "since", 0);

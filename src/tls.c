@@ -48,6 +48,12 @@ int tls_global_init(void)
     return 0;
 }
 
+int tls_random(void *unused, unsigned char *out, size_t len)
+{
+    (void)unused;
+    return mbedtls_ctr_drbg_random(&drbg, out, len);
+}
+
 int tls_connect(tls_conn *c, const char *host, const char *port)
 {
     int ret;

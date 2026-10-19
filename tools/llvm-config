@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Stand-in for llvm-config, which the payload SDK wrappers call for --bindir.
+# Fedora ships clang without llvm-devel; the tools live next to the real clang.
+# The SDK prepends its own bin/ (with a clang wrapper) to PATH, so skip any
+# directory holding prospero-clang or the wrapper would exec itself forever.
+bindir=
+IFS=: read -ra dirs <<< "$PATH"
+for d in "${dirs[@]}"; do
+    [[ -x $d/clang && ! -e $d/prospero-clang ]] || continue
+    bindir=$(dirname "$(readlink -f "$d/clang")")
+    break
+done
+[[ -n $bindir ]] || { echo "llvm-config shim: no clang in PATH" >&2; exit 1; }
+case $1 in
+    --bindir) echo "$bindir" ;;
+    --version) "$bindir/clang" --version | sed -n 's/.*version \([0-9.]*\).*/\1/p' ;;
+    *) echo "llvm-config shim: unsupported $*" >&2; exit 1 ;;
+esac
