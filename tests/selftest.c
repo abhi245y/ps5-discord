@@ -118,6 +118,16 @@ static void test_chat(void)
     t = chat_tree_json();
     assert(strstr(t, "\"name\":\"New\"") && strstr(t, "lobby")); // a server created live shows up
     free(t);
+    cJSON *ch = cJSON_Parse("{\"id\":\"42\",\"guild_id\":\"40\",\"name\":\"fresh\",\"type\":0}");
+    chat_dispatch("CHANNEL_CREATE", ch);
+    t = chat_tree_json();
+    assert(strstr(t, "fresh")); // a channel made while running shows up
+    free(t);
+    chat_dispatch("CHANNEL_DELETE", ch);
+    cJSON_Delete(ch);
+    t = chat_tree_json();
+    assert(!strstr(t, "fresh"));
+    free(t);
     chat_dispatch("GUILD_DELETE", g);
     cJSON_Delete(g);
     t = chat_tree_json();

@@ -238,6 +238,59 @@ static cJSON *my_roles_in(cJSON *d, int i, const char *me)
     return NULL;
 }
 
+// Adds (or replaces) one guild channel in og, if this account can see it:
+// text-like ones under "channels" (with can_send), voice and stage under "rooms".
+static void put_channel(cJSON *og, cJSON *c)
+{
+    const char *id = str(c, "id");
+    const char *lists[] = {"channels", "rooms"};
+    for (int l = 0; l < 2; l++) {
+        cJSON *list = cJSON_GetObjectItem(og, lists[l]), *e;
+        int i = 0;
+        cJSON_ArrayForEach(e, list)
+        {
+            if (id && str(e, "id") && strcmp(str(e, "id"), id) == 0) {
+                cJSON_DeleteItemFromArray(list, i);
+                break;
+            }
+            ++i;
+        }
+    }
+    const char *me = str(cJSON_GetObjectItem(tree, "me"), "id");
+    const uint64_t base = perm_bits(og, "_base");
+    const uint64_t perms = channel_permissions(base, c, str(og, "id"), me, cJSON_GetObjectItem(og, "_my_roles"));
+    int type = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(c, "type"));
+    // ponytail: categories are kept regardless; their children carry their own overwrites.
+    if (type != 4 && !(perms & PERM_VIEW_CHANNEL))
+        return; // hidden from this account, as in the official client
+    cJSON *oc = cJSON_CreateObject();
+    copy(oc, c, "id");
+    copy(oc, c, "name");
+    copy(oc, c, "type");
+    copy(oc, c, "position");
+    copy(oc, c, "parent_id");
+    if (type == 2 || type == 13) // voice and stage
+        cJSON_AddItemToArray(cJSON_GetObjectItem(og, "rooms"), oc);
+    else if (type == 0 || type == 4 || type == 5) // text, category, announcement
+    {
+        copy(oc, c, "topic");
+        copy(oc, c, "last_message_id");
+        cJSON_AddBoolToObject(oc, "can_send", (perms & PERM_SEND_MESSAGES) != 0);
+        cJSON_AddItemToArray(cJSON_GetObjectItem(og, "channels"), oc);
+    }
+    else
+        cJSON_Delete(oc);
+}
+
+static cJSON *guild_of(const char *id)
+{
+    cJSON *g;
+    cJSON_ArrayForEach(g, cJSON_GetObjectItem(tree, "guilds"))
+        if (id && str(g, "id") && strcmp(str(g, "id"), id) == 0)
+            return g;
+    return NULL;
+}
+
 // One guild as the tree keeps it: visible channels (with can_send), rooms,
 // and its voice states recorded. my_roles: the account's role ids there.
 static cJSON *guild_tree(cJSON *g, const char *me, cJSON *my_roles)
@@ -249,33 +302,15 @@ static cJSON *guild_tree(cJSON *g, const char *me, cJSON *my_roles)
     copy(og, props ? props : g, "name");
     copy(og, props ? props : g, "icon");
     copy(og, g, "member_count");
-    cJSON *chans = cJSON_AddArrayToObject(og, "channels");
-    cJSON *rooms = cJSON_AddArrayToObject(og, "rooms");
+    cJSON_AddArrayToObject(og, "channels");
+    cJSON_AddArrayToObject(og, "rooms");
+    // Kept for channel events later (CHANNEL_CREATE/UPDATE need the same inputs).
+    char base_text[24];
+    snprintf(base_text, sizeof base_text, "%llu", (unsigned long long)base);
+    cJSON_AddStringToObject(og, "_base", base_text);
+    cJSON_AddItemToObject(og, "_my_roles", my_roles ? cJSON_Duplicate(my_roles, 1) : cJSON_CreateArray());
     cJSON_ArrayForEach(c, cJSON_GetObjectItem(g, "channels"))
-    {
-        int type = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(c, "type"));
-        const uint64_t perms = channel_permissions(base, c, str(g, "id"), me, my_roles);
-        // ponytail: categories are kept regardless; their children carry their own overwrites.
-        if (type != 4 && !(perms & PERM_VIEW_CHANNEL))
-            continue; // hidden from this account, as in the official client
-        cJSON *oc = cJSON_CreateObject();
-        copy(oc, c, "id");
-        copy(oc, c, "name");
-        copy(oc, c, "type");
-        copy(oc, c, "position");
-        copy(oc, c, "parent_id");
-        if (type == 2 || type == 13) // voice and stage
-            cJSON_AddItemToArray(rooms, oc);
-        else if (type == 0 || type == 4 || type == 5) // text, category, announcement
-        {
-            copy(oc, c, "topic");
-            copy(oc, c, "last_message_id");
-            cJSON_AddBoolToObject(oc, "can_send", (perms & PERM_SEND_MESSAGES) != 0);
-            cJSON_AddItemToArray(chans, oc);
-        }
-        else
-            cJSON_Delete(oc);
-    }
+        put_channel(og, c);
     cJSON *vs;
     cJSON_ArrayForEach(vs, cJSON_GetObjectItem(g, "voice_states"))
     {
@@ -467,7 +502,18 @@ void chat_dispatch(const char *type, cJSON *d)
         set_voice(d);
     else if (strcmp(type, "GUILD_CREATE") == 0 || strcmp(type, "GUILD_DELETE") == 0)
         guild_changed(d, type[6] == 'C');
-    // ponytail: guild CHANNEL_*/role/member updates need a reconnect to show; handle when they matter.
+    else if ((strcmp(type, "CHANNEL_CREATE") == 0 || strcmp(type, "CHANNEL_UPDATE") == 0) && guild_of(str(d, "guild_id")))
+        put_channel(guild_of(str(d, "guild_id")), d);
+    else if (strcmp(type, "CHANNEL_DELETE") == 0 && guild_of(str(d, "guild_id")))
+    {
+        cJSON *gone = cJSON_Duplicate(d, 1); // same id, nothing visible: put_channel only removes
+        cJSON_ReplaceItemInObject(gone, "permission_overwrites", cJSON_Parse("[]"));
+        cJSON_DeleteItemFromObject(gone, "type");
+        cJSON_AddNumberToObject(gone, "type", 99);
+        put_channel(guild_of(str(d, "guild_id")), gone);
+        cJSON_Delete(gone);
+    }
+    // ponytail: role and member updates (permission changes) show after a reconnect.
     else if (strcmp(type, "MESSAGE_ACK") == 0 && str(d, "channel_id"))
     {
         cJSON *r = read_state(str(d, "channel_id"));
