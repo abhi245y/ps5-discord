@@ -1,0 +1,67 @@
+// ps5-discord - Drawing pieces every screen shares: avatars, scenes, chips,
+// badges, the focus outline and relative times.
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#pragma once
+
+#include <cstdint>
+#include <string>
+
+#include "app/concept.hpp"
+#include "discord/model.hpp"
+#include "gfx/draw_list.hpp"
+#include "ui/fonts.hpp"
+
+namespace screens
+{
+
+using hui::gfx::Color;
+using hui::gfx::DrawList;
+using hui::gfx::Rect;
+
+// What the drawing pieces need from the app.
+struct Ink
+{
+    const hui::ui::Fonts &fonts;
+    const hui::app::ArtSet &art;
+};
+
+// The coral outline around the focused element; strength 0..1 fades it.
+void focus_outline(DrawList &list, const Rect &r, float radius, float strength);
+
+// A round avatar: the user's art (placeholder scene) with their initial, a
+// green ring while they are in voice, and a status badge at the lower right
+// (speaking bars, playing, idle, online dot).
+void avatar(DrawList &list, const Ink &ink, const discord::User &user, float cx, float cy, float radius,
+            bool show_status = true);
+
+// The same circle for something that is not a user (a server icon).
+void art_circle(DrawList &list, const Ink &ink, discord::ArtIndex art, const std::string &letter, float cx,
+                float cy, float radius);
+
+// A wide placeholder scene filling r (rooms, server banners).
+void scene(DrawList &list, const Ink &ink, discord::ArtIndex art, const Rect &r, float radius);
+
+// Three or more rounded bars: someone is talking.
+void speaking_bars(DrawList &list, float cx, float cy, float height, Color color);
+
+// A coral count pill ("7", "99+") whose right edge is at right; returns its width.
+float count_badge(DrawList &list, const Ink &ink, int count, float right, float cy, float height = 34.0f);
+
+// "now", "4m ago", "2h ago", "3d ago".
+std::string ago(std::int64_t now_ms, std::int64_t then_ms);
+
+// Cuts text to max_width with an ellipsis, on whole UTF-8 letters.
+std::string fit(const hui::ui::FontRef &font, const std::string &text, float size, float max_width);
+
+// "In voice", the activity, "Away", "Do not disturb" or "Online".
+std::string status_line(const discord::User &user);
+
+// A row heading at the left margin: "Friends online · 48"; count_hot paints the count coral.
+void row_label(DrawList &list, const Ink &ink, float baseline, const std::string &text, const std::string &count,
+               bool count_hot = false);
+
+// Up to 99, then "99+".
+std::string count_text(int count);
+
+} // namespace screens
