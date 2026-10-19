@@ -681,6 +681,19 @@ void Client::publish()
     ++version_;
 }
 
+void Client::test_notice(const std::string &text)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    Notice &n = snapshot_.notice;
+    ++n.seq;
+    n.guild_id.clear();
+    n.channel_id = "test";
+    n.author = snapshot_.me;
+    n.title = snapshot_.me.name + " (test)";
+    n.text = text;
+    publish();
+}
+
 void Client::want_image(const std::string &url)
 {
     std::lock_guard<std::mutex> lock(mutex_);

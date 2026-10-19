@@ -72,6 +72,8 @@ if verb == "shot" and len(sys.argv) >= 3:
     fetch(name, Path(sys.argv[3] if len(sys.argv) > 3 else f"{name}.png"))
 elif verb == "press" and len(sys.argv) == 3:
     request("press", sys.argv[2])
+elif verb == "notice" and len(sys.argv) == 3:
+    request("notice", sys.argv[2].replace(" ", "_"))
 elif verb == "quit":
     request("quit", "-")
 else:

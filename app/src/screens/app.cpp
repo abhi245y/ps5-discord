@@ -157,7 +157,7 @@ class DiscordApp final : public app::Concept
         if (n.seq != notice_seen_)
         {
             const bool here = route_ == Route::chat && chat_.channel() == n.channel_id;
-            if (notice_seen_ != 0 && !here && context_.snapshot.connection == discord::Connection::ready)
+            if (!here && context_.snapshot.connection == discord::Connection::ready)
             {
                 toast_ = n;
                 toast_time_ = 0.0f;
@@ -209,7 +209,7 @@ class DiscordApp final : public app::Concept
     Route route_ = Route::home;
     std::string waiting_dm_; // a friend whose new DM is being made, opened when it lands
     static constexpr float kToastSeconds = 5.0f;
-    std::uint64_t notice_seen_ = 0; // the first snapshot's notice is history, not news
+    std::uint64_t notice_seen_ = 0; // notices only come from live messages, so any new one is news
     discord::Notice toast_;
     float toast_time_ = 0.0f;
 

@@ -32,6 +32,7 @@
 #include <cstring>
 #include <GL/glcorearb.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -335,6 +336,12 @@ int main()
         if (std::strcmp(verb, "quit") == 0)
         {
             quit_requested = true;
+        }
+        else if (std::strcmp(verb, "notice") == 0)
+        {
+            std::string text = argument;
+            std::replace(text.begin(), text.end(), '_', ' ');
+            client.test_notice(text);
         }
         else if (std::strcmp(verb, "shot") == 0)
         {

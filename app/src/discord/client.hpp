@@ -52,6 +52,8 @@ class Client
     // Queues a CDN image (avatar, icon) for download; take_images hands back the results.
     void want_image(const std::string &url);
     std::vector<Image> take_images();
+    // Development: raises a notice as if a DM had arrived (the toast's path, from the PC).
+    void test_notice(const std::string &text);
 
   private:
     void run();
