@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0-alpha.1] - 2026-10-20
+
+First alpha of the native app. Text chat works; voice does not exist yet.
+
 ### Added
 - Native PS5 app (title PPSA99072) on the ps5-homebrew-ui kit, talking to the core over
   loopback: QR sign-in, Home (friends online, live rooms, recent conversations), Friends,
@@ -24,6 +28,8 @@ All notable changes to this project are documented here. The format follows
   app's own keyboard remains the fallback.
 - App: colour emoji in reactions (server emoji and Twemoji), wrapping onto more lines; role
   and channel names in mentions; markdown links, headings and escapes read as Discord shows them.
+- App: server emoji inside message text drawn as pictures; button hints with the coloured
+  rings of the console's face buttons.
 - App: toast and chime for a live DM or mention; text size on R3 (Small, Medium, Large).
 - App: Malayalam, Devanagari, Tamil, Kannada, Telugu and Bengali fonts; the console's own
   Japanese, Chinese, Korean, Arabic and Thai fonts.
@@ -52,6 +58,12 @@ All notable changes to this project are documented here. The format follows
 ### Security
 - Core: chat routes refuse callers off the console; message and channel IDs are validated
   before they reach Discord's API.
+
+### Known issues
+- No voice: rooms and who is in them show, Join says "soon".
+- No uploads, threads, or notifications outside the app.
+- The session token is stored unencrypted on the console: use a throwaway account.
+- A USB keyboard plugged into the console does not type (its library freezes a payload on 13.00).
 
 ## [0.1.0] - 2026-10-19
 
