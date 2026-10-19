@@ -308,6 +308,11 @@ static cJSON *guild_tree(cJSON *g, const char *me, cJSON *my_roles)
     copy(og, g, "member_count");
     cJSON_AddArrayToObject(og, "channels");
     cJSON_AddArrayToObject(og, "rooms");
+    // Role names by id, so <@&id> in a message reads as the role.
+    cJSON *names = cJSON_AddObjectToObject(og, "roles"), *role;
+    cJSON_ArrayForEach(role, cJSON_GetObjectItem(g, "roles"))
+        if (str(role, "id") && str(role, "name"))
+            cJSON_AddStringToObject(names, str(role, "id"), str(role, "name"));
     // Kept for channel events later (CHANNEL_CREATE/UPDATE need the same inputs).
     char base_text[24];
     snprintf(base_text, sizeof base_text, "%llu", (unsigned long long)base);

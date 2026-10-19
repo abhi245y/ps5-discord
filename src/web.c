@@ -151,7 +151,10 @@ static void api_image(int c, const char *query)
         memcpy(host, rest, hlen);
         host[hlen] = 0;
         allowed = strcmp(host, "cdn.discordapp.com") == 0 || strcmp(host, "media.discordapp.net") == 0 ||
-                  (strncmp(host, "images-ext-", 11) == 0 && strstr(host, ".discordapp.net") != NULL);
+                  (strncmp(host, "images-ext-", 11) == 0 && strstr(host, ".discordapp.net") != NULL) ||
+                  // Colour emoji pictures (Twemoji, as Discord draws them), that project only.
+                  (strcmp(host, "cdn.jsdelivr.net") == 0 &&
+                   strncmp(rest + hlen, "/gh/jdecked/twemoji@", 20) == 0 && !strstr(rest + hlen, ".."));
     }
     if (!allowed) {
         reply(c, "403 Forbidden", "text/plain", "host", 4);
