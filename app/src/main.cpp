@@ -34,6 +34,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <deque>
 #include <memory>
 #include <span>
 #include <string>
@@ -55,8 +56,11 @@ constexpr const char *kDataRoot = "/download0/hui";
 constexpr const char *kDevRoot = "/download0/hui/dev";
 // Requests therefore come in through the install folder, which a PC can
 // write: /data/homebrew/<TITLE_ID>/dev/request.txt is /app0/dev/request.txt
-// here. One line: "tour <design id|all> <token>" or "quit - <token>". A
-// request is honoured once per token (the last one is remembered in kDevRoot).
+// here. One line: "tour <design id|all> <token>", "quit - <token>",
+// "shot <name> <token>" (the live frame to kDevRoot/<name>.bmp) or
+// "press <key,key,...> <token>" (up down left right cross circle triangle
+// square l1 r1 l2 r2 options, one every kPressSeconds). A request is honoured
+// once per token (the last one is remembered in kDevRoot).
 constexpr const char *kRequestPath = "/app0/dev/request.txt";
 // How long a finished tour stays up so the PC can copy its evidence (the
 // storage is unmounted when the title closes) before the app closes itself.
@@ -65,6 +69,40 @@ constexpr double kCollectSeconds = 240.0;
 // hundreds of pictures. Enough to compare layout and colour with the PC's.
 constexpr int kCaptureWidth = 480;
 constexpr int kCaptureHeight = 270;
+// Live screenshots ("shot") are half size: enough to read the text.
+constexpr int kShotWidth = 960;
+constexpr int kShotHeight = 540;
+constexpr double kPressSeconds = 0.35;
+
+// One remote key ("press" request) as the pad would have produced it.
+hui::InputFrame remote_key(const std::string &key)
+{
+    using namespace hui;
+    static const struct
+    {
+        const char *name;
+        Action action;
+        Direction nav;
+    } keys[] = {
+        {"up", Action::up, Direction::up},          {"down", Action::down, Direction::down},
+        {"left", Action::left, Direction::left},    {"right", Action::right, Direction::right},
+        {"cross", Action::confirm, Direction::none}, {"circle", Action::back, Direction::none},
+        {"triangle", Action::north, Direction::none}, {"square", Action::west, Direction::none},
+        {"l1", Action::page_prev, Direction::none}, {"r1", Action::page_next, Direction::none},
+        {"l2", Action::jump_prev, Direction::none}, {"r2", Action::jump_next, Direction::none},
+        {"options", Action::menu, Direction::none},
+    };
+    InputFrame input;
+    input.connected = true;
+    for (const auto &k : keys)
+        if (key == k.name)
+        {
+            input.pressed = action_bit(k.action);
+            input.held = input.pressed;
+            input.nav = k.nav;
+        }
+    return input;
+}
 
 void log_heap(std::uint64_t frames)
 {
@@ -231,6 +269,9 @@ int main()
     const std::string handled_path = std::string(kDevRoot) + "/handled.txt";
     const std::string report_path = std::string(kDevRoot) + "/tour/report.txt";
     bool quit_requested = false;
+    std::string shot_name;               // a live screenshot is due
+    std::deque<std::string> remote_keys; // "press" keys still to play
+    double remote_wait = 0.0;
     const auto poll_request = [&]()
     {
         std::string request;
@@ -249,6 +290,21 @@ int main()
         if (std::strcmp(verb, "quit") == 0)
         {
             quit_requested = true;
+        }
+        else if (std::strcmp(verb, "shot") == 0)
+        {
+            shot_name = argument;
+        }
+        else if (std::strcmp(verb, "press") == 0)
+        {
+            std::string keys = argument;
+            for (std::size_t at = 0; at <= keys.size();)
+            {
+                const std::size_t comma = std::min(keys.find(',', at), keys.size());
+                remote_keys.push_back(keys.substr(at, comma - at));
+                at = comma + 1;
+            }
+            sys::log("[HUI] press %s", argument);
         }
         else if (std::strcmp(verb, "tour") == 0 && !tour)
         {
@@ -286,6 +342,12 @@ int main()
                                           static_cast<std::uint64_t>(now));
         if (tour)
             input = tour->step(dt);
+        else if (!remote_keys.empty() && (remote_wait += dt) >= kPressSeconds)
+        {
+            input = remote_key(remote_keys.front());
+            remote_keys.pop_front();
+            remote_wait = 0.0;
+        }
 
         if (!tour) // the tour runs on the sample account
             client.take(snapshot);
@@ -345,6 +407,21 @@ int main()
             tour->capture_done();
             last_frame_start = sys::monotonic_us(); // saving is slow; the frame was not
         }
+        if (!shot_name.empty())
+        {
+            gfx::Canvas shot;
+            shot.create(kShotWidth, kShotHeight, 1);
+            shot.bind();
+            glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            renderer.present(shot.framebuffer(), kShotWidth, kShotHeight);
+            glBindFramebuffer(GL_FRAMEBUFFER, shot.framebuffer());
+            const bool ok = save_picture(std::string(kDevRoot) + "/" + shot_name + ".bmp", kShotWidth, kShotHeight);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            sys::log("[HUI] shot %s ok=%d", shot_name.c_str(), ok ? 1 : 0);
+            shot_name.clear();
+            last_frame_start = sys::monotonic_us();
+        }
         if (!display.swap())
         {
             sys::log("[HUI] fatal: swap failed frame=%llu error=%s",
@@ -402,7 +479,7 @@ int main()
         }
         if (collect_wait >= 0.0)
             collect_wait += static_cast<double>(frame_ms) / 1000.0;
-        if (frames % 60 == 0)
+        if (frames % 20 == 0)
         {
             poll_request();
             if (quit_requested || collect_wait > kCollectSeconds)

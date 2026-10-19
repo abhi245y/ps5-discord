@@ -164,3 +164,10 @@ cover art inside the app is rendered at start-up from invented titles; no real
 product's name, artwork or trademark is used.
 
 No proprietary runtime module, encryption key, or game file is included.
+
+## Development launch and close controllers
+
+`tools/controllers/launch.c` and `tools/controllers/close.c` come from
+ps5-homebrew-dev-protocol (BlackBearReloaded, GPL-3.0-or-later), adapted from
+shsrv and websrv by John Törnblom (GPL-3.0-or-later). They are development
+tools only and are not part of the app.
