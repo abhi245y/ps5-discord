@@ -61,7 +61,7 @@ constexpr const char *kDevRoot = "/download0/hui/dev";
 // here. One line: "tour <design id|all> <token>", "quit - <token>",
 // "shot <name> <token>" (the live frame to kDevRoot/<name>.bmp) or
 // "press <key,key,...> <token>" (up down left right cross circle triangle
-// square l1 r1 l2 r2 options, one every kPressSeconds). A request is honoured
+// square l1 r1 l2 r2 options, one every kPressSeconds; "key~N" holds it N frames). A request is honoured
 // once per token (the last one is remembered in kDevRoot).
 constexpr const char *kRequestPath = "/app0/dev/request.txt";
 // How long a finished tour stays up so the PC can copy its evidence (the
@@ -314,6 +314,8 @@ int main()
     std::string shot_name;               // a live screenshot is due
     std::deque<std::string> remote_keys; // "press" keys still to play
     double remote_wait = 0.0;
+    int remote_hold = 0;         // frames the held remote key stays down
+    std::string remote_hold_key;
     const auto poll_request = [&]()
     {
         std::string request;
@@ -384,10 +386,25 @@ int main()
                                           static_cast<std::uint64_t>(now));
         if (tour)
             input = tour->step(dt);
+        else if (remote_hold > 0)
+        {
+            // "key~N": the key stays down for N frames after its press.
+            input = remote_key(remote_hold_key);
+            input.pressed = 0;
+            input.nav = Direction::none;
+            --remote_hold;
+        }
         else if (!remote_keys.empty() && (remote_wait += dt) >= kPressSeconds)
         {
-            input = remote_key(remote_keys.front());
+            std::string key = remote_keys.front();
             remote_keys.pop_front();
+            if (const std::size_t tilde = key.find('~'); tilde != std::string::npos)
+            {
+                remote_hold = std::atoi(key.c_str() + tilde + 1);
+                key.resize(tilde);
+                remote_hold_key = key;
+            }
+            input = remote_key(key);
             remote_wait = 0.0;
         }
 
