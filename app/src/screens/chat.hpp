@@ -45,6 +45,7 @@ class Chat
     std::vector<Row> layout(const discord::Snapshot &snapshot) const;
     float row_height(const discord::Snapshot &snapshot, int index, bool grouped) const;
     Rect row_rect(const Row &row) const; // on screen, scroll applied
+    bool can_send(const discord::Snapshot &s) const;
     bool dm() const
     {
         return guild_id_.empty();

@@ -72,9 +72,19 @@ static void test_chat(void)
     cJSON *ready = cJSON_Parse(
         "{\"user\":{\"id\":\"1\",\"username\":\"me\"},"
         "\"users\":[{\"id\":\"2\",\"username\":\"bob\",\"global_name\":\"Bob\"}],"
-        "\"guilds\":[{\"id\":\"10\",\"properties\":{\"name\":\"G\"},\"channels\":["
+        "\"guilds\":[{\"id\":\"10\",\"properties\":{\"name\":\"G\",\"owner_id\":\"9\"},"
+        "\"roles\":[{\"id\":\"10\",\"permissions\":\"3072\"},{\"id\":\"16\",\"permissions\":\"0\"}],"
+        "\"channels\":["
         "{\"id\":\"11\",\"name\":\"general\",\"type\":0,\"position\":0},"
-        "{\"id\":\"12\",\"name\":\"Voice\",\"type\":2,\"position\":1}]}],"
+        "{\"id\":\"12\",\"name\":\"Voice\",\"type\":2,\"position\":1},"
+        "{\"id\":\"13\",\"name\":\"staff\",\"type\":0,\"permission_overwrites\":"
+        "[{\"id\":\"10\",\"type\":0,\"allow\":\"0\",\"deny\":\"1024\"}]},"
+        "{\"id\":\"14\",\"name\":\"news\",\"type\":5,\"permission_overwrites\":"
+        "[{\"id\":\"10\",\"type\":0,\"allow\":\"0\",\"deny\":\"2048\"}]},"
+        "{\"id\":\"15\",\"name\":\"club\",\"type\":0,\"permission_overwrites\":"
+        "[{\"id\":\"10\",\"type\":0,\"allow\":\"0\",\"deny\":\"1024\"},"
+        "{\"id\":\"16\",\"type\":0,\"allow\":\"1024\",\"deny\":\"0\"}]}]}],"
+        "\"merged_members\":[[{\"user_id\":\"1\",\"roles\":[\"16\"]}]],"
         "\"private_channels\":[{\"id\":\"20\",\"type\":1,\"recipient_ids\":[\"2\"]}]}");
     chat_dispatch("READY", ready);
     cJSON_Delete(ready);
@@ -82,6 +92,10 @@ static void test_chat(void)
     assert(t && strstr(t, "\"name\":\"G\"") && strstr(t, "general"));
     assert(strstr(t, "\"rooms\":[{\"id\":\"12\"")); // voice channels become rooms
     assert(strstr(t, "\"global_name\":\"Bob\"")); // DM recipients land in users
+    assert(!strstr(t, "staff"));                       // denied VIEW_CHANNEL: hidden
+    assert(strstr(t, "\"club\""));                    // a role of ours allows it back
+    assert(strstr(strstr(t, "\"news\""), "\"can_send\":false")); // read-only
+    assert(strstr(strstr(t, "\"general\""), "\"can_send\":true"));
     free(t);
 
     cJSON *m = cJSON_Parse("{\"id\":\"30\",\"channel_id\":\"11\",\"content\":\"hi\","

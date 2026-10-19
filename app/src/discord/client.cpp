@@ -311,6 +311,7 @@ void apply_tree(Snapshot &s, const json &t)
                     ch.id = text(c, "id");
                     ch.name = text(c, "name");
                     ch.topic = text(c, "topic");
+                    ch.can_send = c.value("can_send", true);
                     ch.kind = type == 5 ? ChannelKind::announcement : ChannelKind::text;
                     const std::string last = text(c, "last_message_id");
                     const auto [has_unread, mentions] = read_of(ch.id, last);

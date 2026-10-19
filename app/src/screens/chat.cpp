@@ -118,6 +118,14 @@ std::vector<const discord::Channel *> Chat::chips(const discord::Snapshot &s) co
     return out;
 }
 
+bool Chat::can_send(const discord::Snapshot &s) const
+{
+    for (const discord::Channel *c : chips(s))
+        if (c->id == channel_id_)
+            return c->can_send;
+    return true; // DMs
+}
+
 void Chat::open(const discord::Snapshot &s, const std::string &guild_id, const std::string &channel_id,
                 std::vector<discord::Request> &requests)
 {
@@ -211,6 +219,11 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
         {
             mode_ = Mode::browse;
             feedback.play(hui::audio::Cue::modal_close);
+        }
+        else if (reply && !can_send(s))
+        {
+            mode_ = Mode::browse;
+            feedback.play(hui::audio::Cue::error);
         }
         else if (reply)
         {
@@ -327,7 +340,9 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
         action_ = 0;
         feedback.play(hui::audio::Cue::modal_open);
     }
-    if (input.is_pressed(Action::north) || (input.is_pressed(Action::confirm) && focus_ < 0))
+    if ((input.is_pressed(Action::north) || (input.is_pressed(Action::confirm) && focus_ < 0)) && !can_send(s))
+        feedback.play(hui::audio::Cue::error);
+    else if (input.is_pressed(Action::north) || (input.is_pressed(Action::confirm) && focus_ < 0))
     {
         mode_ = Mode::compose;
         quick_ = 0;
@@ -587,6 +602,13 @@ void Chat::draw_composer(const discord::Snapshot &s, DrawList &list) const
 {
     const bool composing = mode_ == Mode::compose;
     const Rect bar{kMargin, kComposerY, kWidth, kComposerH};
+    if (!can_send(s))
+    {
+        list.rounded_rect(bar, 22.0f, Color::rgb(0x1d2026));
+        ui::text(list, ink_.fonts.regular, "You can't send messages in this channel.", bar.cx(), bar.cy() + 10.0f, 27.0f,
+                 kFaint, gfx::Align::center);
+        return;
+    }
     list.rounded_rect(bar, 22.0f, kRaised);
     list.circle(bar.x + 52.0f, bar.cy(), 30.0f, kRaisedHigh);
     list.rounded_rect({bar.x + 50.0f, bar.cy() - 14.0f, 4.0f, 28.0f}, 2.0f, kText);

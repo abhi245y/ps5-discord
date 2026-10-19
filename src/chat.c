@@ -1,6 +1,7 @@
 #include "chat.h"
 
 #include <pthread.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -157,6 +158,86 @@ static void set_string(cJSON *o, const char *key, const char *value)
     cJSON_AddItemToObject(o, key, value ? cJSON_CreateString(value) : cJSON_CreateNull());
 }
 
+// Discord permission bits used here.
+#define PERM_ADMINISTRATOR (1ull << 3)
+#define PERM_VIEW_CHANNEL (1ull << 10)
+#define PERM_SEND_MESSAGES (1ull << 11)
+
+static uint64_t perm_bits(cJSON *o, const char *key)
+{
+    const char *v = str(o, key); // permissions are decimal strings (64-bit)
+    return v ? strtoull(v, NULL, 10) : 0;
+}
+
+static int has_role(cJSON *roles, const char *id)
+{
+    cJSON *r;
+    cJSON_ArrayForEach(r, roles)
+        if (cJSON_IsString(r) && strcmp(r->valuestring, id) == 0)
+            return 1;
+    return 0;
+}
+
+// The account's guild-wide permissions: @everyone plus its roles (Discord's
+// documented order). my_roles is the member's role id list.
+static uint64_t guild_permissions(cJSON *g, const char *me, cJSON *my_roles)
+{
+    const char *gid = str(g, "id");
+    cJSON *props = cJSON_GetObjectItem(g, "properties");
+    const char *owner = str(props ? props : g, "owner_id");
+    if (me && owner && strcmp(me, owner) == 0)
+        return ~0ull;
+    uint64_t p = 0;
+    cJSON *r;
+    cJSON_ArrayForEach(r, cJSON_GetObjectItem(g, "roles"))
+    {
+        const char *id = str(r, "id");
+        if (id && gid && (strcmp(id, gid) == 0 || has_role(my_roles, id)))
+            p |= perm_bits(r, "permissions");
+    }
+    return (p & PERM_ADMINISTRATOR) ? ~0ull : p;
+}
+
+// Channel overwrites on top: @everyone, then all roles together, then the member.
+static uint64_t channel_permissions(uint64_t base, cJSON *c, const char *gid, const char *me, cJSON *my_roles)
+{
+    if (base == ~0ull)
+        return base;
+    uint64_t allow = 0, deny = 0;
+    cJSON *o;
+    cJSON_ArrayForEach(o, cJSON_GetObjectItem(c, "permission_overwrites"))
+        if (gid && str(o, "id") && strcmp(str(o, "id"), gid) == 0)
+            base = (base & ~perm_bits(o, "deny")) | perm_bits(o, "allow");
+    cJSON_ArrayForEach(o, cJSON_GetObjectItem(c, "permission_overwrites"))
+    {
+        const char *id = str(o, "id");
+        int type = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "type"));
+        if (id && type == 0 && strcmp(id, gid ? gid : "") != 0 && has_role(my_roles, id)) {
+            allow |= perm_bits(o, "allow");
+            deny |= perm_bits(o, "deny");
+        }
+    }
+    base = (base & ~deny) | allow;
+    cJSON_ArrayForEach(o, cJSON_GetObjectItem(c, "permission_overwrites"))
+    {
+        const char *id = str(o, "id");
+        int type = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "type"));
+        if (id && me && type == 1 && strcmp(id, me) == 0)
+            base = (base & ~perm_bits(o, "deny")) | perm_bits(o, "allow");
+    }
+    return base;
+}
+
+// The member's roles in guild index i: merged_members runs parallel to guilds.
+static cJSON *my_roles_in(cJSON *d, int i, const char *me)
+{
+    cJSON *m, *members = cJSON_GetArrayItem(cJSON_GetObjectItem(d, "merged_members"), i);
+    cJSON_ArrayForEach(m, members)
+        if (me && str(m, "user_id") && strcmp(str(m, "user_id"), me) == 0)
+            return cJSON_GetObjectItem(m, "roles");
+    return NULL;
+}
+
 static void load_ready(cJSON *d)
 {
     cJSON *t = cJSON_CreateObject(), *g, *c;
@@ -172,8 +253,13 @@ static void load_ready(cJSON *d)
     remember_user(cJSON_GetObjectItem(d, "user"));
 
     cJSON *guilds = cJSON_AddArrayToObject(t, "guilds");
+    const char *me = str(cJSON_GetObjectItem(d, "user"), "id");
+    int gi = -1;
     cJSON_ArrayForEach(g, cJSON_GetObjectItem(d, "guilds"))
     {
+        ++gi;
+        cJSON *my_roles = my_roles_in(d, gi, me);
+        const uint64_t base = guild_permissions(g, me, my_roles);
         cJSON *og = cJSON_CreateObject(), *props = cJSON_GetObjectItem(g, "properties");
         copy(og, g, "id");
         copy(og, props ? props : g, "name");
@@ -184,6 +270,10 @@ static void load_ready(cJSON *d)
         cJSON_ArrayForEach(c, cJSON_GetObjectItem(g, "channels"))
         {
             int type = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(c, "type"));
+            const uint64_t perms = channel_permissions(base, c, str(g, "id"), me, my_roles);
+            // ponytail: categories are kept regardless; their children carry their own overwrites.
+            if (type != 4 && !(perms & PERM_VIEW_CHANNEL))
+                continue; // hidden from this account, as in the official client
             cJSON *oc = cJSON_CreateObject();
             copy(oc, c, "id");
             copy(oc, c, "name");
@@ -196,6 +286,7 @@ static void load_ready(cJSON *d)
             {
                 copy(oc, c, "topic");
                 copy(oc, c, "last_message_id");
+                cJSON_AddBoolToObject(oc, "can_send", (perms & PERM_SEND_MESSAGES) != 0);
                 cJSON_AddItemToArray(chans, oc);
             }
             else

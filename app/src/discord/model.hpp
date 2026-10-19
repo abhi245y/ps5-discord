@@ -68,6 +68,7 @@ struct Channel
     int unread = 0;          // mentions of you, shown as a count
     bool has_unread = false; // newer messages than you have read, shown as a dot
     bool mentioned = false;
+    bool can_send = true; // false: read-only for this account (announcements, rules)
 };
 
 struct Guild
