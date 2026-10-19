@@ -1,0 +1,287 @@
+// ps5-discord - The app, hosted by the kit's shell as its only design.
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Owns the screen stack and routes input to the visible screen. Its tour()
+// walks every screen so `make host-snapshots` photographs the whole app for
+// comparison with the design framework's comps.
+
+#include <algorithm>
+#include <memory>
+#include <optional>
+#include <vector>
+
+#include "app/concept.hpp"
+#include "screens/draw.hpp"
+#include "screens/chat.hpp"
+#include "screens/home.hpp"
+#include "screens/server.hpp"
+#include "screens/signin.hpp"
+#include "screens/style.hpp"
+
+namespace screens
+{
+
+namespace
+{
+
+using hui::Action;
+using hui::Direction;
+using hui::action_bit;
+namespace app = hui::app;
+
+constexpr const char *kTechniques[] = {
+    "TV Media Rows: rows you glide through, one coral focus",
+    "Springs for focus and scrolling",
+};
+
+const app::ConceptInfo kInfo{
+    "ps5-discord",
+    "ps5-discord",
+    "Discord on the TV",
+    "src/screens/app.cpp",
+    hui::audio::SoundSet::glass,
+    style::kCoral,
+    kTechniques,
+};
+
+// Screen names in captures follow the framework's frame numbers.
+constexpr app::TourStep kTour[] = {
+    {0.9f, 0, Direction::none, "home"},
+    {0.5f, 0, Direction::right},
+    {0.6f, 0, Direction::right, "home-rooms-scroll"},
+    {0.5f, 0, Direction::down},
+    {0.6f, 0, Direction::none, "home-recent"},
+    {0.5f, 0, Direction::up},
+    {0.4f, 0, Direction::up},
+    {0.6f, 0, Direction::none, "home-friends"},
+    {0.4f, action_bit(Action::page_next)},
+    {0.8f, 0, Direction::none, "tab-friends"},
+    {0.4f, 0, Direction::down},
+    {0.6f, 0, Direction::none, "tab-friends-scrolled"},
+    {0.4f, action_bit(Action::page_next)},
+    {0.8f, 0, Direction::none, "tab-servers"},
+    {0.4f, action_bit(Action::page_next)},
+    {0.8f, 0, Direction::none, "tab-mentions"},
+    {0.4f, action_bit(Action::page_next)},
+    {0.6f, 0, Direction::none, "home-again"},
+    // Into #general from Recent conversations.
+    {0.4f, 0, Direction::down},
+    {0.3f, 0, Direction::left},
+    {0.3f, 0, Direction::left},
+    {0.3f, 0, Direction::left},
+    {0.5f, action_bit(Action::confirm)},
+    {0.9f, 0, Direction::none, "chat"},
+    {0.4f, 0, Direction::up},
+    {0.4f, 0, Direction::up},
+    {0.4f, 0, Direction::up},
+    {0.7f, 0, Direction::none, "chat-focus"},
+    {0.4f, action_bit(Action::confirm)},
+    {0.7f, 0, Direction::none, "chat-actions"},
+    {0.4f, action_bit(Action::confirm)},
+    {0.6f, 0, Direction::right},
+    {0.7f, 0, Direction::none, "chat-compose"},
+    {0.4f, action_bit(Action::confirm)},
+    {0.8f, 0, Direction::none, "chat-sent"},
+    {0.5f, action_bit(Action::page_next)},
+    {0.8f, 0, Direction::none, "chat-next-channel"},
+    {0.5f, action_bit(Action::back)},
+    // The DM with Theo.
+    {0.5f, 0, Direction::right},
+    {0.3f, 0, Direction::right},
+    {0.5f, action_bit(Action::confirm)},
+    {0.9f, 0, Direction::none, "dm"},
+    {0.5f, action_bit(Action::back)},
+    {0.6f, 0, Direction::none, "home-return"},
+};
+
+class DiscordApp final : public app::Concept
+{
+  public:
+    explicit DiscordApp(app::Context &context)
+        : context_(context), ink_{context.fonts, context.art}, home_(ink_), server_(ink_), chat_(ink_)
+    {
+    }
+
+    const app::ConceptInfo &info() const override
+    {
+        return kInfo;
+    }
+
+    void enter() override
+    {
+        home_.enter();
+    }
+
+    void update(const hui::InputFrame &input, float dt, app::Feedback &feedback) override
+    {
+        time_ += dt;
+        std::vector<discord::Request> requests;
+        if (context_.snapshot.connection != discord::Connection::ready)
+        {
+            // Sign-in and waiting screens take no input beyond the system's.
+        }
+        else if (route_ == Route::home)
+        {
+            home_.update(context_.snapshot, input, dt, feedback);
+            std::optional<HomeOpen> open = home_.take_open();
+            if (open && open->channel_id.empty() && !open->user_id.empty())
+            {
+                // No DM with them yet: ask for one and open it when it arrives.
+                discord::Request r;
+                r.kind = discord::Request::Kind::open_dm;
+                r.user_id = open->user_id;
+                requests.push_back(r);
+                waiting_dm_ = open->user_id;
+                open.reset();
+            }
+            if (!open && !waiting_dm_.empty())
+                if (const auto dm = context_.snapshot.dm_by_user.find(waiting_dm_);
+                    dm != context_.snapshot.dm_by_user.end())
+                {
+                    open = HomeOpen{"", dm->second, waiting_dm_};
+                    waiting_dm_.clear();
+                }
+            if (open && open->channel_id.empty())
+            {
+                server_.open(open->guild_id);
+                route_ = Route::server;
+                fade_.snap(0.0f);
+            }
+            else if (open)
+            {
+                chat_.open(context_.snapshot, open->guild_id, open->channel_id, requests);
+                route_ = Route::chat;
+                from_server_ = false;
+                fade_.snap(0.0f);
+            }
+        }
+        else if (route_ == Route::server)
+        {
+            if (!server_.update(context_.snapshot, input, dt, feedback))
+            {
+                route_ = Route::home;
+                fade_.snap(0.0f);
+            }
+            else if (const std::optional<std::string> channel = server_.take_open())
+            {
+                chat_.open(context_.snapshot, server_.guild(), *channel, requests);
+                route_ = Route::chat;
+                from_server_ = true;
+                fade_.snap(0.0f);
+            }
+        }
+        else if (!chat_.update(context_.snapshot, input, dt, feedback, requests))
+        {
+            route_ = from_server_ ? Route::server : Route::home; // Back returns where the chat was opened from
+            fade_.snap(0.0f);
+        }
+        // A new live DM or mention: a toast and a chime, unless it is in the open chat.
+        const discord::Notice &n = context_.snapshot.notice;
+        if (n.seq != notice_seen_)
+        {
+            const bool here = route_ == Route::chat && chat_.channel() == n.channel_id;
+            if (!here && context_.snapshot.connection == discord::Connection::ready)
+            {
+                toast_ = n;
+                toast_time_ = 0.0f;
+                feedback.play(hui::audio::Cue::notify);
+            }
+            notice_seen_ = n.seq;
+        }
+        toast_time_ += dt;
+        fade_.target = 1.0f;
+        fade_.update(dt, 16.0f);
+        for (const discord::Request &request : requests)
+            context_.submit(request);
+    }
+
+    void draw(app::Frame &frame) const override
+    {
+        frame.backdrop.mode = hui::gfx::BackdropMode::none;
+        // A short fade in on every screen change.
+        frame.scene.rounded_rect({0, 0, 1920, 1080}, 0.0f, style::kGround);
+        frame.scene.push_opacity(std::clamp(fade_.value, 0.0f, 1.0f));
+        if (context_.snapshot.connection == discord::Connection::signing_in)
+            draw_sign_in(frame.scene, ink_, context_.snapshot, time_);
+        else if (context_.snapshot.connection != discord::Connection::ready)
+            draw_waiting(frame.scene, ink_, context_.snapshot, time_);
+        else if (route_ == Route::home)
+            home_.draw(context_.snapshot, frame.scene);
+        else if (route_ == Route::server)
+            server_.draw(context_.snapshot, frame.scene);
+        else
+            chat_.draw(context_.snapshot, frame.scene);
+        frame.scene.pop_opacity();
+        if (toast_.seq != 0 && toast_time_ < kToastSeconds)
+            draw_toast(frame.scene);
+    }
+
+    std::span<const app::TourStep> tour() const override
+    {
+        return kTour;
+    }
+
+  private:
+    enum class Route
+    {
+        home,
+        server,
+        chat,
+    };
+    app::Context &context_;
+    Ink ink_;
+    Home home_;
+    Server server_;
+    Chat chat_;
+    Route route_ = Route::home;
+    bool from_server_ = false; // the open chat came from a server's page
+    std::string waiting_dm_; // a friend whose new DM is being made, opened when it lands
+    static constexpr float kToastSeconds = 5.0f;
+    std::uint64_t notice_seen_ = 0; // notices only come from live messages, so any new one is news
+    discord::Notice toast_;
+    float toast_time_ = 0.0f;
+
+    // Top right, sliding in and out: who wrote, and the start of what.
+    void draw_toast(DrawList &list) const
+    {
+        const float in = std::min(1.0f, toast_time_ * 5.0f);
+        const float out = std::min(1.0f, (kToastSeconds - toast_time_) * 4.0f);
+        const float t = std::clamp(std::min(in, out), 0.0f, 1.0f);
+        const Rect r{1920.0f - style::kMargin - 620.0f, 24.0f - (1.0f - t) * 140.0f, 620.0f, 108.0f};
+        list.push_opacity(t);
+        list.shadow(r, 22.0f, 40.0f, Color::rgb(0, 0.5f));
+        list.rounded_rect(r, 22.0f, style::kRaisedHigh);
+        list.rounded_rect({r.x, r.y + 18.0f, 4.0f, r.h - 36.0f}, 2.0f, style::kCoral);
+        avatar(list, ink_, toast_.author, r.x + 64.0f, r.cy(), 36.0f, false);
+        hui::ui::text(list, ink_.fonts.semibold, fit(ink_.fonts.semibold, toast_.title, 25.0f, r.w - 140.0f),
+                      r.x + 120.0f, r.y + 46.0f, 25.0f, style::kText);
+        hui::ui::text(list, ink_.fonts.regular, fit(ink_.fonts.regular, toast_.text, 23.0f, r.w - 140.0f),
+                      r.x + 120.0f, r.y + 82.0f, 23.0f, style::kDim);
+        list.pop_opacity();
+    }
+    hui::tween::Spring fade_;
+    float time_ = 0.0f;
+};
+
+} // namespace
+
+} // namespace screens
+
+namespace hui::app
+{
+
+namespace
+{
+std::unique_ptr<Concept> make_app(Context &context)
+{
+    return std::make_unique<screens::DiscordApp>(context);
+}
+constexpr ConceptFactory kRegistry[] = {make_app};
+} // namespace
+
+std::span<const ConceptFactory> concept_registry()
+{
+    return kRegistry;
+}
+
+} // namespace hui::app

@@ -6,8 +6,12 @@
 void chat_set_token(const char *token);
 const char *chat_token(void); // valid while the session lives
 
-void chat_load_ready(cJSON *ready);
-void chat_event(const char *type, cJSON *d); // MESSAGE_CREATE / UPDATE / DELETE
+// Every gateway dispatch: READY builds the account, the rest keep it current
+// (presence, voice states, read state, DMs) and feed the message event ring.
+void chat_dispatch(const char *type, cJSON *d);
 
-char *chat_tree_json(void);              // {"me":..., "guilds":[...], "dms":[...]}; caller frees
-char *chat_events_json(long since);      // {"next":N, "events":[...]}; caller frees
+// {"me", "guilds", "dms", "users", "friends", "presence", "voice", "reads", "my_voice"}; caller frees
+char *chat_tree_json(void);
+// A key pressed (or repeating) on the console's keyboard: a "KEY" event for the app.
+void chat_key(int usage, int mods, int led);
+char *chat_events_json(long since, int wait_ms); // {"next":N, "events":[...]}; waits up to wait_ms for one; caller frees

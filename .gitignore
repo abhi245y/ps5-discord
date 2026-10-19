@@ -34,3 +34,4 @@ design/
 .github/hooks/
 .claude/
 .grok/
+compile_flags.txt

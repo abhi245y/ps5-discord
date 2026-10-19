@@ -5,6 +5,7 @@
 #include <ctype.h>
 #include <netinet/in.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -78,7 +79,7 @@ static int claim_instance(void)
     int one = 1; // a just-stopped instance leaves TIME_WAIT behind; a live one still blocks bind
     if (fd >= 0)
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
-    if (fd < 0 || bind(fd, (struct sockaddr *)&a, sizeof a) != 0 || listen(fd, 1) != 0) {
+    if (fd < 0 || bind(fd, (struct sockaddr *)&a, sizeof a) != 0 || listen(fd, 16) != 0) {
         if (fd >= 0)
             close(fd);
         return -1;
@@ -94,6 +95,8 @@ static void *control_loop(void *arg)
 
 int main(void)
 {
+    // A peer that hangs up mid-write (the app, a browser, Discord) must not kill the core.
+    signal(SIGPIPE, SIG_IGN);
     char token[256];
     int control = claim_instance();
     if (control < 0) {

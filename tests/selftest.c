@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include <zlib.h>
 
 #include <stdlib.h>
@@ -10,6 +11,7 @@
 #include <cJSON.h>
 
 #include "../src/chat.h"
+#include "../src/ratelimit.h"
 #include "../src/ws.h"
 #include "../src/zstream.h"
 
@@ -72,32 +74,94 @@ static void test_chat(void)
     cJSON *ready = cJSON_Parse(
         "{\"user\":{\"id\":\"1\",\"username\":\"me\"},"
         "\"users\":[{\"id\":\"2\",\"username\":\"bob\",\"global_name\":\"Bob\"}],"
-        "\"guilds\":[{\"id\":\"10\",\"properties\":{\"name\":\"G\"},\"channels\":["
+        "\"guilds\":[{\"id\":\"10\",\"properties\":{\"name\":\"G\",\"owner_id\":\"9\"},"
+        "\"roles\":[{\"id\":\"10\",\"permissions\":\"3072\"},{\"id\":\"16\",\"permissions\":\"0\"}],"
+        "\"channels\":["
         "{\"id\":\"11\",\"name\":\"general\",\"type\":0,\"position\":0},"
-        "{\"id\":\"12\",\"name\":\"Voice\",\"type\":2,\"position\":1}]}],"
+        "{\"id\":\"12\",\"name\":\"Voice\",\"type\":2,\"position\":1},"
+        "{\"id\":\"13\",\"name\":\"staff\",\"type\":0,\"permission_overwrites\":"
+        "[{\"id\":\"10\",\"type\":0,\"allow\":\"0\",\"deny\":\"1024\"}]},"
+        "{\"id\":\"14\",\"name\":\"news\",\"type\":5,\"permission_overwrites\":"
+        "[{\"id\":\"10\",\"type\":0,\"allow\":\"0\",\"deny\":\"2048\"}]},"
+        "{\"id\":\"15\",\"name\":\"club\",\"type\":0,\"permission_overwrites\":"
+        "[{\"id\":\"10\",\"type\":0,\"allow\":\"0\",\"deny\":\"1024\"},"
+        "{\"id\":\"16\",\"type\":0,\"allow\":\"1024\",\"deny\":\"0\"}]}]}],"
+        "\"merged_members\":[[{\"user_id\":\"1\",\"roles\":[\"16\"]}]],"
         "\"private_channels\":[{\"id\":\"20\",\"type\":1,\"recipient_ids\":[\"2\"]}]}");
-    chat_load_ready(ready);
+    chat_dispatch("READY", ready);
     cJSON_Delete(ready);
     char *t = chat_tree_json();
-    assert(t && strstr(t, "\"name\":\"G\"") && strstr(t, "general") && !strstr(t, "Voice"));
-    assert(strstr(t, "\"name\":\"Bob\"")); // DM named after its recipient
+    assert(t && strstr(t, "\"name\":\"G\"") && strstr(t, "general"));
+    assert(strstr(t, "\"rooms\":[{\"id\":\"12\"")); // voice channels become rooms
+    assert(strstr(t, "\"global_name\":\"Bob\"")); // DM recipients land in users
+    assert(!strstr(t, "staff"));                       // denied VIEW_CHANNEL: hidden
+    assert(strstr(t, "\"club\""));                    // a role of ours allows it back
+    assert(strstr(strstr(t, "\"news\""), "\"can_send\":false")); // read-only
+    assert(strstr(strstr(t, "\"general\""), "\"can_send\":true"));
     free(t);
 
     cJSON *m = cJSON_Parse("{\"id\":\"30\",\"channel_id\":\"11\",\"content\":\"hi\","
                            "\"author\":{\"id\":\"2\",\"username\":\"bob\",\"email\":\"x\"}}");
-    chat_event("MESSAGE_CREATE", m);
+    chat_dispatch("MESSAGE_CREATE", m);
     cJSON_Delete(m);
-    char *e = chat_events_json(0);
+    char *e = chat_events_json(0, 0);
     assert(e && strstr(e, "\"next\":1") && strstr(e, "\"content\":\"hi\"") && !strstr(e, "email"));
     free(e);
-    e = chat_events_json(1);
+    e = chat_events_json(1, 0);
     assert(e && strstr(e, "\"events\":[]"));
     free(e);
+    time_t before = time(NULL);
+    e = chat_events_json(1, 1000); // nothing new: the long poll waits, then answers empty
+    assert(e && strstr(e, "\"events\":[]") && time(NULL) - before >= 1);
+    free(e);
+    e = chat_events_json(99, 5000); // past the end (core restarted): answers at once
+    assert(e && time(NULL) - before <= 3);
+    free(e);
+    t = chat_tree_json();
+    assert(strstr(t, "\"last_message_id\":\"30\"")); // the channel moved to the top
+    free(t);
+
+    cJSON *g = cJSON_Parse("{\"id\":\"40\",\"name\":\"New\",\"owner_id\":\"1\",\"members\":[{\"user\":{\"id\":\"1\"},"
+                           "\"roles\":[]}],\"channels\":[{\"id\":\"41\",\"name\":\"lobby\",\"type\":0}]}");
+    chat_dispatch("GUILD_CREATE", g);
+    t = chat_tree_json();
+    assert(strstr(t, "\"name\":\"New\"") && strstr(t, "lobby")); // a server created live shows up
+    free(t);
+    cJSON *ch = cJSON_Parse("{\"id\":\"42\",\"guild_id\":\"40\",\"name\":\"fresh\",\"type\":0}");
+    chat_dispatch("CHANNEL_CREATE", ch);
+    t = chat_tree_json();
+    assert(strstr(t, "fresh")); // a channel made while running shows up
+    free(t);
+    chat_dispatch("CHANNEL_DELETE", ch);
+    cJSON_Delete(ch);
+    t = chat_tree_json();
+    assert(!strstr(t, "fresh"));
+    free(t);
+    chat_dispatch("GUILD_DELETE", g);
+    cJSON_Delete(g);
+    t = chat_tree_json();
+    assert(!strstr(t, "lobby"));
+    free(t);
+}
+
+static void test_ratelimit(void)
+{
+    char limited[] = "{\"message\":\"You are being rate limited.\",\"retry_after\":0.75,\"global\":false}";
+    char too_long[] = "{\"retry_after\":30}";
+    char ok[] = "{\"id\":\"1\"}";
+    http_response a = {.status = 429, .body = limited}, b = {.status = 429, .body = too_long},
+                  c = {.status = 200, .body = ok}, d = {.status = 429, .body = ok};
+    assert(ratelimit_retry_after(&a, 5.0) == 0.75); // retried after Discord's wait
+    assert(ratelimit_retry_after(&b, 5.0) == 0);    // too long to hold the request
+    assert(ratelimit_retry_after(&c, 5.0) == 0);    // not limited
+    assert(ratelimit_retry_after(&d, 5.0) == 0);    // limited without a wait: not retried
+    assert(ratelimit_retry_after(NULL, 5.0) == 0);
 }
 
 int main(void)
 {
     test_chat();
+    test_ratelimit();
     test_ws_frame();
     test_zstream();
     puts("selftest ok");

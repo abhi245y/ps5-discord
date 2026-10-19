@@ -16,7 +16,7 @@ static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static char state[32] = "starting", user[64];
 static int guilds, dms;
 static long events;
-static char qr_url[128];
+static char qr_url[128], note[256];
 static char qr_bits[177 * 177 + 1]; // row-major '1' = dark module
 static int qr_size;
 static char log_ring[LOG_LINES][160];
@@ -73,10 +73,18 @@ void status_log(const char *line)
     pthread_mutex_unlock(&lock);
 }
 
+void status_note(const char *text)
+{
+    pthread_mutex_lock(&lock);
+    snprintf(note, sizeof note, "%s", text ? text : "");
+    pthread_mutex_unlock(&lock);
+}
+
 char *status_json(void)
 {
     cJSON *j = cJSON_CreateObject();
     pthread_mutex_lock(&lock);
+    cJSON_AddNumberToObject(j, "api_version", CORE_API_VERSION);
     cJSON_AddStringToObject(j, "state", state);
     cJSON_AddStringToObject(j, "user", user);
     cJSON_AddNumberToObject(j, "guilds", guilds);
@@ -86,6 +94,7 @@ char *status_json(void)
     cJSON_AddStringToObject(j, "qr_url", qr_url);
     cJSON_AddNumberToObject(j, "qr_size", qr_size);
     cJSON_AddStringToObject(j, "qr", qr_bits);
+    cJSON_AddStringToObject(j, "note", note);
     cJSON *log = cJSON_AddArrayToObject(j, "log");
     unsigned first = log_next > LOG_LINES ? log_next - LOG_LINES : 0;
     for (unsigned i = first; i < log_next; i++)
