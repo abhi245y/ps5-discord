@@ -1,0 +1,114 @@
+#include "tls.h"
+
+#include <poll.h>
+#include <string.h>
+
+#include <mbedtls/ctr_drbg.h>
+#include <mbedtls/entropy.h>
+#include <mbedtls/error.h>
+#include <psa/crypto.h>
+
+#include "log.h"
+
+extern const unsigned char ca_bundle_pem[];
+extern const size_t ca_bundle_pem_len;
+
+static mbedtls_entropy_context entropy;
+static mbedtls_ctr_drbg_context drbg;
+static mbedtls_x509_crt roots;
+static mbedtls_ssl_config conf;
+
+static void log_err(const char *what, int ret)
+{
+    char msg[128];
+    mbedtls_strerror(ret, msg, sizeof msg);
+    LOG("tls: %s failed: -0x%04x %s", what, (unsigned)-ret, msg);
+}
+
+int tls_global_init(void)
+{
+    int ret;
+    if (psa_crypto_init() != PSA_SUCCESS) // TLS 1.3 in mbedTLS 3.6 needs PSA
+        return -1;
+    mbedtls_entropy_init(&entropy);
+    mbedtls_ctr_drbg_init(&drbg);
+    mbedtls_x509_crt_init(&roots);
+    mbedtls_ssl_config_init(&conf);
+    if ((ret = mbedtls_ctr_drbg_seed(&drbg, mbedtls_entropy_func, &entropy, NULL, 0)) != 0)
+        return log_err("drbg seed", ret), ret;
+    // Partial failures are fine: a few odd roots in a system bundle may not parse.
+    if ((ret = mbedtls_x509_crt_parse(&roots, ca_bundle_pem, ca_bundle_pem_len)) < 0)
+        return log_err("ca parse", ret), ret;
+    if ((ret = mbedtls_ssl_config_defaults(&conf, MBEDTLS_SSL_IS_CLIENT, MBEDTLS_SSL_TRANSPORT_STREAM,
+                                           MBEDTLS_SSL_PRESET_DEFAULT)) != 0)
+        return log_err("config", ret), ret;
+    mbedtls_ssl_conf_authmode(&conf, MBEDTLS_SSL_VERIFY_REQUIRED);
+    mbedtls_ssl_conf_ca_chain(&conf, &roots, NULL);
+    mbedtls_ssl_conf_rng(&conf, mbedtls_ctr_drbg_random, &drbg);
+    return 0;
+}
+
+int tls_connect(tls_conn *c, const char *host, const char *port)
+{
+    int ret;
+    mbedtls_net_init(&c->net);
+    mbedtls_ssl_init(&c->ssl);
+    if ((ret = mbedtls_net_connect(&c->net, host, port, MBEDTLS_NET_PROTO_TCP)) != 0)
+        return log_err("connect", ret), ret;
+    if ((ret = mbedtls_ssl_setup(&c->ssl, &conf)) != 0 ||
+        (ret = mbedtls_ssl_set_hostname(&c->ssl, host)) != 0)
+        return log_err("setup", ret), ret;
+    mbedtls_ssl_set_bio(&c->ssl, &c->net, mbedtls_net_send, mbedtls_net_recv, NULL);
+    while ((ret = mbedtls_ssl_handshake(&c->ssl)) != 0)
+        if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE)
+            return log_err("handshake", ret), ret;
+    return 0;
+}
+
+int tls_wait(tls_conn *c, int timeout_ms)
+{
+    if (mbedtls_ssl_get_bytes_avail(&c->ssl) > 0) // already decrypted, poll would miss it
+        return 1;
+    struct pollfd p = {.fd = c->net.fd, .events = POLLIN};
+    int r = poll(&p, 1, timeout_ms);
+    return r < 0 ? -1 : r > 0;
+}
+
+int tls_read(tls_conn *c, void *buf, size_t len)
+{
+    for (;;) {
+        int ret = mbedtls_ssl_read(&c->ssl, buf, len);
+        if (ret >= 0)
+            return ret;
+        if (ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY)
+            return 0;
+        // TLS 1.3 session tickets arrive as reads; just read again.
+        if (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE ||
+            ret == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET)
+            continue;
+        log_err("read", ret);
+        return ret;
+    }
+}
+
+int tls_write_all(tls_conn *c, const void *buf, size_t len)
+{
+    const unsigned char *p = buf;
+    while (len > 0) {
+        int ret = mbedtls_ssl_write(&c->ssl, p, len);
+        if (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE)
+            continue;
+        if (ret < 0)
+            return log_err("write", ret), ret;
+        p += ret;
+        len -= (size_t)ret;
+    }
+    return 0;
+}
+
+void tls_close(tls_conn *c)
+{
+    mbedtls_ssl_close_notify(&c->ssl);
+    mbedtls_ssl_free(&c->ssl);
+    mbedtls_net_free(&c->net);
+}
