@@ -20,6 +20,10 @@ class Chat
     explicit Chat(const Ink &ink) : ink_(ink), keys_(ink) {}
 
     // guild_id empty: a DM channel.
+    const std::string &channel() const
+    {
+        return channel_id_;
+    }
     void open(const discord::Snapshot &snapshot, const std::string &guild_id, const std::string &channel_id,
               std::vector<discord::Request> &requests);
     // Returns false when the screen asks to be left (Circle with nothing open).

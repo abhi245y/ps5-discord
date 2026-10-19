@@ -167,6 +167,17 @@ enum class Connection : std::uint8_t
     reconnecting,
 };
 
+// A message worth interrupting for: a DM, or a mention, that arrived live.
+struct Notice
+{
+    std::uint64_t seq = 0; // grows with each notice; 0 = none yet
+    std::string guild_id;  // empty for a DM
+    std::string channel_id;
+    std::string title;     // "Abhi2nd" or "Abhi2nd in #general"
+    std::string text;
+    User author;
+};
+
 struct Snapshot
 {
     Connection connection = Connection::starting;
@@ -190,6 +201,7 @@ struct Snapshot
     std::set<std::string> load_failed; // history that did not load (network, core); retried on open
     std::set<std::string> history_start; // channels loaded back to their first message
     std::map<std::string, std::string> dm_by_user; // one-to-one DM channel by the other person's id
+    Notice notice; // the latest live DM or mention
     Voice voice;
     int friends_online = 0;
     int unread_total = 0;

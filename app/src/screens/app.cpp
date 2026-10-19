@@ -152,6 +152,20 @@ class DiscordApp final : public app::Concept
             route_ = Route::home;
             fade_.snap(0.0f);
         }
+        // A new live DM or mention: a toast and a chime, unless it is in the open chat.
+        const discord::Notice &n = context_.snapshot.notice;
+        if (n.seq != notice_seen_)
+        {
+            const bool here = route_ == Route::chat && chat_.channel() == n.channel_id;
+            if (notice_seen_ != 0 && !here && context_.snapshot.connection == discord::Connection::ready)
+            {
+                toast_ = n;
+                toast_time_ = 0.0f;
+                feedback.play(hui::audio::Cue::notify);
+            }
+            notice_seen_ = n.seq;
+        }
+        toast_time_ += dt;
         fade_.target = 1.0f;
         fade_.update(dt, 16.0f);
         for (const discord::Request &request : requests)
@@ -173,6 +187,8 @@ class DiscordApp final : public app::Concept
         else
             chat_.draw(context_.snapshot, frame.scene);
         frame.scene.pop_opacity();
+        if (toast_.seq != 0 && toast_time_ < kToastSeconds)
+            draw_toast(frame.scene);
     }
 
     std::span<const app::TourStep> tour() const override
@@ -192,6 +208,29 @@ class DiscordApp final : public app::Concept
     Chat chat_;
     Route route_ = Route::home;
     std::string waiting_dm_; // a friend whose new DM is being made, opened when it lands
+    static constexpr float kToastSeconds = 5.0f;
+    std::uint64_t notice_seen_ = 0; // the first snapshot's notice is history, not news
+    discord::Notice toast_;
+    float toast_time_ = 0.0f;
+
+    // Top right, sliding in and out: who wrote, and the start of what.
+    void draw_toast(DrawList &list) const
+    {
+        const float in = std::min(1.0f, toast_time_ * 5.0f);
+        const float out = std::min(1.0f, (kToastSeconds - toast_time_) * 4.0f);
+        const float t = std::clamp(std::min(in, out), 0.0f, 1.0f);
+        const Rect r{1920.0f - style::kMargin - 620.0f, 24.0f - (1.0f - t) * 140.0f, 620.0f, 108.0f};
+        list.push_opacity(t);
+        list.shadow(r, 22.0f, 40.0f, Color::rgb(0, 0.5f));
+        list.rounded_rect(r, 22.0f, style::kRaisedHigh);
+        list.rounded_rect({r.x, r.y + 18.0f, 4.0f, r.h - 36.0f}, 2.0f, style::kCoral);
+        avatar(list, ink_, toast_.author, r.x + 64.0f, r.cy(), 36.0f, false);
+        hui::ui::text(list, ink_.fonts.semibold, fit(ink_.fonts.semibold, toast_.title, 25.0f, r.w - 140.0f),
+                      r.x + 120.0f, r.y + 46.0f, 25.0f, style::kText);
+        hui::ui::text(list, ink_.fonts.regular, fit(ink_.fonts.regular, toast_.text, 23.0f, r.w - 140.0f),
+                      r.x + 120.0f, r.y + 82.0f, 23.0f, style::kDim);
+        list.pop_opacity();
+    }
     hui::tween::Spring fade_;
     float time_ = 0.0f;
 };

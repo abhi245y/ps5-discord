@@ -908,6 +908,27 @@ bool Client::poll_events()
     {
         const std::string type = text(ev, "t");
         const std::string channel = text(ev, "channel_id");
+        if (type == "MESSAGE_CREATE")
+        {
+            // A DM or a mention from someone else becomes a notice, open channel or not.
+            const Message m = message_from(ev, snapshot_.me.id);
+            const std::string guild = text(ev, "guild_id");
+            if (m.author_id != snapshot_.me.id && !m.author_id.empty() && (guild.empty() || m.mentions_me))
+            {
+                Notice &n = snapshot_.notice;
+                ++n.seq;
+                n.guild_id = guild;
+                n.channel_id = channel;
+                n.author = ev.contains("author") && ev["author"].is_object() ? user_from(ev["author"]) : User{};
+                n.title = n.author.name;
+                if (!guild.empty())
+                    for (const Guild &g : snapshot_.guilds)
+                        for (const Channel &c : g.channels)
+                            if (c.id == channel)
+                                n.title += " in #" + c.name;
+                n.text = m.content.empty() && !m.attachments.empty() ? "sent an attachment" : m.content;
+            }
+        }
         if (snapshot_.messages.find(channel) == snapshot_.messages.end())
         {
             last_chat_ms_ = 0; // not open: its history loads when it is; refresh unread counts now
