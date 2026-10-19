@@ -11,6 +11,7 @@
 
 #include "log.h"
 #include "props.h"
+#include "status.h"
 #include "ws.h"
 #include "zstream.h"
 
@@ -111,13 +112,18 @@ static void on_dispatch(gateway *g, const char *t, cJSON *d)
             cJSON_GetObjectItem(cJSON_GetObjectItem(d, "user"), "username"));
         snprintf(g->session_id, sizeof g->session_id, "%s", sid ? sid : "");
         snprintf(g->resume_url, sizeof g->resume_url, "%s", url ? url : "");
+        status_user(name, cJSON_GetArraySize(cJSON_GetObjectItem(d, "guilds")),
+                    cJSON_GetArraySize(cJSON_GetObjectItem(d, "private_channels")));
+        status_state("ready");
         LOG("gateway: READY as %s, %d guilds, %d DMs, resume via %s", name ? name : "?",
             cJSON_GetArraySize(cJSON_GetObjectItem(d, "guilds")),
             cJSON_GetArraySize(cJSON_GetObjectItem(d, "private_channels")), g->resume_url);
     } else if (strcmp(t, "RESUMED") == 0) {
+        status_state("ready");
         LOG("gateway: RESUMED");
     } else {
         // Event names only; message contents stay out of the console log.
+        status_event();
         LOG("gateway: %s s=%lld", t, (long long)g->seq);
     }
 }
@@ -177,6 +183,7 @@ static int run_connection(gateway *g)
 {
     char url[320];
     snprintf(url, sizeof url, "%s%s", g->resume_url[0] ? g->resume_url : GATEWAY_URL, GATEWAY_QUERY);
+    status_state("connecting");
     if (ws_open(&g->ws, url) != 0) {
         tls_close(&g->ws.tls);
         return -1;

@@ -1,10 +1,5 @@
-// Logging: klog on the console, stderr on the host.
+// Logging: klog on the console, stderr on the host, and the web UI's log view.
 #pragma once
 
-#ifdef __PROSPERO__
-#include <ps5/klog.h>
-#define LOG(fmt, ...) klog_printf("[discord] " fmt "\n", ##__VA_ARGS__)
-#else
-#include <stdio.h>
-#define LOG(fmt, ...) fprintf(stderr, "[discord] " fmt "\n", ##__VA_ARGS__)
-#endif
+void log_printf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+#define LOG(fmt, ...) log_printf(fmt, ##__VA_ARGS__)

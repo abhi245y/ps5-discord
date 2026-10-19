@@ -13,9 +13,13 @@
 #include <mbedtls/rsa.h>
 #include <mbedtls/sha256.h>
 #include <qrcodegen.h>
+#ifdef __PROSPERO__
+#include <ps5/klog.h>
+#endif
 
 #include "http.h"
 #include "log.h"
+#include "status.h"
 #include "ws.h"
 
 #define REMOTE_AUTH_URL "wss://remote-auth-gateway.discord.gg/?v=2"
@@ -58,6 +62,15 @@ static int decrypt_b64(mbedtls_pk_context *pk, const char *in, unsigned char *ou
     return (int)olen;
 }
 
+static void klog_line(const char *line)
+{
+#ifdef __PROSPERO__
+    klog_printf("[discord] %s\n", line);
+#else
+    fprintf(stderr, "[discord] %s\n", line);
+#endif
+}
+
 // One QR row per line, two characters per module, plain ASCII so any klog viewer
 // shows it. Light modules are drawn, so it reads dark-on-light on a dark terminal.
 static void log_qr(const char *text)
@@ -78,9 +91,8 @@ static void log_qr(const char *text)
             line[n++] = c;
         }
         line[n] = 0;
-        LOG("%s", line);
+        klog_line(line);
     }
-    LOG("remote auth: or open %s on a logged-in phone", text);
 }
 
 static int send_op(ws_conn *ws, const char *op, const char *key, const char *value)
@@ -155,24 +167,18 @@ int remote_auth_login(char *out, size_t cap)
         mbedtls_pk_free(&pk);
         return -1;
     }
-    int64_t next_beat = 0, next_qr = 0, deadline = now_ms() + 30000; // until HELLO sets the real one
+    int64_t next_beat = 0, deadline = now_ms() + 30000; // until HELLO sets the real one
     char qr_url[128] = "";
     int interval = 0, acked = 1;
     char ticket[512] = "";
     for (;;) {
         int64_t now = now_ms(), wake = next_beat && next_beat < deadline ? next_beat : deadline;
-        if (next_qr && next_qr < wake)
-            wake = next_qr;
         if (now >= deadline) {
             LOG("remote auth: QR expired");
             break;
         }
         int r = ws_recv(&ws, (int)(wake - now));
         if (r == 0) {
-            if (next_qr && now_ms() >= next_qr) { // repeat: klog viewers may join late
-                log_qr(qr_url);
-                next_qr = now_ms() + 30000;
-            }
             if (next_beat && now_ms() >= next_beat) {
                 if (!acked) {
                     LOG("remote auth: heartbeat not acked");
@@ -217,9 +223,11 @@ int remote_auth_login(char *out, size_t cap)
                 break;
             }
             snprintf(qr_url, sizeof qr_url, QR_PREFIX "%s", fp);
-            LOG("remote auth: scan with the Discord mobile app (Settings > Scan QR Code):");
+            status_qr(qr_url);
+            status_state("login");
+            LOG("remote auth: QR ready, open the web UI on port 9041 or scan below "
+                "(Discord app: Settings > Scan QR Code)");
             log_qr(qr_url);
-            next_qr = now_ms() + 30000;
         } else if (strcmp(op, "pending_ticket") == 0) {
             // "id:discriminator:avatar:username"
             unsigned char user[512];
@@ -230,7 +238,8 @@ int remote_auth_login(char *out, size_t cap)
                 const char *name = strrchr((char *)user, ':');
                 LOG("remote auth: scanned by %s, approve on the phone", name ? name + 1 : "?");
             }
-            next_qr = 0; // scanned: stop repeating the code
+            status_qr(NULL);
+            status_state("scanned");
         } else if (strcmp(op, "pending_login") == 0) {
             const char *t = cJSON_GetStringValue(cJSON_GetObjectItem(m, "ticket"));
             snprintf(ticket, sizeof ticket, "%s", t ? t : "");
@@ -246,6 +255,7 @@ int remote_auth_login(char *out, size_t cap)
         cJSON_Delete(m);
     }
     ws_close(&ws, 1000);
+    status_qr(NULL);
 
     if (ticket[0] && redeem_ticket(&pk, ticket, out, cap) == 0) {
         LOG("remote auth: logged in");

@@ -17,6 +17,8 @@
 #include "gateway.h"
 #include "log.h"
 #include "remote_auth.h"
+#include "status.h"
+#include "web.h"
 #include "tls.h"
 
 #ifdef __PROSPERO__
@@ -26,8 +28,8 @@
 #endif
 // ponytail: plaintext token on the console's data partition; encrypt at rest before release.
 #define TOKEN_PATH DATA_DIR "/token"
-// Control port: keeps one instance alive and takes "quit" (make stop) so a new build
-// can replace the running one. Future UI app IPC goes here too.
+// Control port: keeps one instance alive and serves the status web UI
+// (http://<ps5>:9041, POST /api/quit for make stop). Future UI app IPC goes here too.
 #define CONTROL_PORT 9041
 
 static int read_token(char *out, size_t cap)
@@ -69,8 +71,12 @@ static int claim_instance(void)
 {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons(CONTROL_PORT)};
-    // ponytail: open to the LAN for dev "make stop"; loopback-only once it carries app IPC.
+    // ponytail: open to the LAN for the PoC web UI; no auth, shows no secrets.
+    // Loopback-only (or authenticated) once it carries app IPC.
     a.sin_addr.s_addr = htonl(INADDR_ANY);
+    int one = 1; // a just-stopped instance leaves TIME_WAIT behind; a live one still blocks bind
+    if (fd >= 0)
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
     if (fd < 0 || bind(fd, (struct sockaddr *)&a, sizeof a) != 0 || listen(fd, 1) != 0) {
         if (fd >= 0)
             close(fd);
@@ -81,18 +87,7 @@ static int claim_instance(void)
 
 static void *control_loop(void *arg)
 {
-    int fd = (int)(intptr_t)arg;
-    for (;;) {
-        int c = accept(fd, NULL, NULL);
-        if (c < 0)
-            continue;
-        char cmd[16] = {0};
-        if (read(c, cmd, sizeof cmd - 1) > 0 && strncmp(cmd, "quit", 4) == 0) {
-            LOG("quit requested");
-            _exit(0);
-        }
-        close(c);
-    }
+    web_serve((int)(intptr_t)arg);
     return NULL;
 }
 
@@ -116,8 +111,11 @@ int main(void)
         if (read_token(token, sizeof token) != 0)
             login(token, sizeof token);
         int code = gateway_run(token);
-        if (code != 4004)
-            return LOG("stopped (%d)", code), 1;
+        if (code != 4004) {
+            status_state("stopped");
+            LOG("stopped (%d)", code);
+            pause(); // keep the web UI up so the failure is visible; quit from there
+        }
         LOG("token rejected, logging in again");
         remove(TOKEN_PATH);
     }
