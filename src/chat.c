@@ -439,6 +439,15 @@ static void push_event(const char *type, cJSON *d)
         copy(e, d, "attachments");
         copy(e, d, "mentions");
         copy(e, d, "referenced_message");
+        copy(e, d, "type");
+        copy(e, d, "sticker_items");
+        cJSON *embeds = cJSON_AddArrayToObject(e, "embeds"), *em; // titles only: embeds can be large
+        cJSON_ArrayForEach(em, cJSON_GetObjectItem(d, "embeds"))
+        {
+            cJSON *t = cJSON_CreateObject();
+            copy(t, em, "title");
+            cJSON_AddItemToArray(embeds, t);
+        }
         cJSON *a = cJSON_GetObjectItem(d, "author");
         if (a)
             cJSON_AddItemToObject(e, "author", trim_user(a));

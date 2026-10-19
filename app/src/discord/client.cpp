@@ -218,6 +218,37 @@ std::string readable(const std::string &content, const json &m)
         out += shown;
         i = close + 1;
     }
+    // Markdown markers read as noise without styling: drop the paired ones.
+    // ponytail: no bold/italic/code styling yet; draw runs with the semibold and mono faces later.
+    for (const char *marker : {"**", "__", "~~", "||", "```", "`"})
+    {
+        const std::string mk = marker;
+        std::size_t first = out.find(mk);
+        while (first != std::string::npos)
+        {
+            const std::size_t second = out.find(mk, first + mk.size());
+            if (second == std::string::npos)
+                break;
+            out.erase(second, mk.size());
+            out.erase(first, mk.size());
+            first = out.find(mk, second - mk.size());
+        }
+    }
+    // *italic* and _italic_: only hugging a word, so 2*3*4 and snake_case stay.
+    for (const char mk : {'*', '_'})
+        for (std::size_t first = out.find(mk); first != std::string::npos; first = out.find(mk, first + 1))
+        {
+            const std::size_t second = out.find(mk, first + 1);
+            if (second == std::string::npos)
+                break;
+            const bool hugs = second > first + 1 && out[first + 1] != ' ' && out[second - 1] != ' ' &&
+                              (first == 0 || !std::isalnum(static_cast<unsigned char>(out[first - 1]))) &&
+                              (second + 1 >= out.size() || !std::isalnum(static_cast<unsigned char>(out[second + 1])));
+            if (!hugs)
+                continue;
+            out.erase(second, 1);
+            out.erase(first, 1);
+        }
     return out;
 }
 
@@ -228,6 +259,22 @@ Message message_from(const json &m, const std::string &me_id)
     out.channel_id = text(m, "channel_id");
     out.content = readable(text(m, "content"), m);
     out.time_ms = snowflake_ms(out.id);
+    // Messages without text of their own: say what they are.
+    const int type = static_cast<int>(m.value("type", 0.0));
+    if (type == 7)
+        out.content = "joined the server. \xF0\x9F\x91\x8B";
+    else if (type == 6)
+        out.content = "pinned a message.";
+    else if (type >= 8 && type <= 11)
+        out.content = "boosted the server.";
+    if (out.content.empty() && m.contains("sticker_items") && m["sticker_items"].is_array() &&
+        !m["sticker_items"].empty())
+        out.content = "[Sticker: " + text(m["sticker_items"][0], "name") + "]";
+    if (out.content.empty() && m.contains("embeds") && m["embeds"].is_array() && !m["embeds"].empty())
+    {
+        const std::string title = text(m["embeds"][0], "title");
+        out.content = title.empty() ? std::string("[Embed]") : "[Embed: " + title + "]";
+    }
     if (m.contains("author") && m["author"].is_object())
     {
         out.author_id = text(m["author"], "id");
