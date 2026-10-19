@@ -300,7 +300,7 @@ Message message_from(const json &m, const std::string &me_id)
         out.content = "\xE2\x86\xAA Forwarded" + (text_of.empty() ? std::string() : ": " + text_of);
     }
     if (out.content.empty() && out.attachments.empty() && !(m.contains("attachments") && !m["attachments"].empty()))
-        out.content = "[A message this app cannot show yet]";
+        out.content = type != 0 ? "[Discord notice]" : "[A message this app cannot show yet]";
     if (m.contains("author") && m["author"].is_object())
     {
         out.author_id = text(m["author"], "id");

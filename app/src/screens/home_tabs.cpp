@@ -259,7 +259,7 @@ void Home::update_tab(const discord::Snapshot &s, const hui::InputFrame &input, 
                 for (const discord::Channel &c : g.channels)
                     if (c.id == m.channel_id)
                         guild = g.id;
-            open_ = HomeOpen{guild, m.channel_id};
+            open_ = HomeOpen{guild, m.channel_id, {}};
         }
         else if (tab_ == HomeTab::servers)
         {
@@ -268,7 +268,7 @@ void Home::update_tab(const discord::Snapshot &s, const hui::InputFrame &input, 
             for (const discord::Channel &c : g.channels)
                 if (c.kind != discord::ChannelKind::voice)
                 {
-                    open_ = HomeOpen{g.id, c.id};
+                    open_ = HomeOpen{g.id, c.id, {}};
                     break;
                 }
         }

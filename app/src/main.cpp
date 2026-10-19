@@ -24,6 +24,7 @@
 #include "gfx/renderer.hpp"
 #include "platform/ps5/audio_out.hpp"
 #include "platform/ps5/display_egl.hpp"
+#include "platform/ps5/ime.hpp"
 #include "platform/ps5/pad.hpp"
 #include "platform/ps5/system.hpp"
 #include "ui/fonts.hpp"
@@ -264,6 +265,20 @@ int main()
     ps5::Pad pad;
     pad.open();
     InputTracker tracker;
+    ps5::Ime ime;
+    art.keyboard_open = [&](const std::string &title) { return ime.open(pad.user(), title, ""); };
+    art.keyboard_poll = [&](std::string &out) {
+        switch (ime.poll())
+        {
+        case ps5::Ime::State::done:
+            out = ime.text();
+            return 1;
+        case ps5::Ime::State::cancelled:
+            return 2;
+        default:
+            return 0;
+        }
+    };
     audio::Mixer mixer;
     // The music stream attaches to the mixer before the audio thread starts.
     audio::MusicPlayer music;
@@ -302,12 +317,12 @@ int main()
     const auto poll_request = [&]()
     {
         std::string request;
-        if (!save::read_file(kRequestPath, &request, 256))
+        if (!save::read_file(kRequestPath, &request, 1024))
             return;
         char verb[16] = {};
-        char argument[64] = {};
+        char argument[768] = {};
         char token[64] = {};
-        if (std::sscanf(request.c_str(), "%15s %63s %63s", verb, argument, token) != 3)
+        if (std::sscanf(request.c_str(), "%15s %767s %63s", verb, argument, token) != 3)
             return;
         std::string handled;
         save::read_file(handled_path, &handled, 128);

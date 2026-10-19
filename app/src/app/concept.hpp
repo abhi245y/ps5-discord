@@ -71,6 +71,12 @@ struct ArtSet
         int w = 0, h = 0;
     };
     std::function<Remote(const std::string &)> remote;
+    // The system keyboard (console only; unset on the host). open() shows it
+    // with a title; poll() answers 0 while it is up (or none), 1 with the
+    // typed text in out, 2 when it was cancelled.
+    // ponytail: rides on ArtSet as the screens' one platform-services handle.
+    std::function<bool(const std::string &title)> keyboard_open;
+    std::function<int(std::string &out)> keyboard_poll;
 };
 
 struct Context

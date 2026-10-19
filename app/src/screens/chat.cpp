@@ -131,6 +131,29 @@ const discord::User *Chat::dm_person(const discord::Snapshot &s) const
     return nullptr;
 }
 
+// Shows the system keyboard for this channel; false where there is none (host).
+bool Chat::start_typing(const discord::Snapshot &s, hui::ui::Feedback &feedback)
+{
+    std::string title = "Message";
+    for (const discord::Channel *c : chips(s))
+        if (c->id == channel_id_)
+            title = "Message #" + c->name;
+    if (const discord::User *other = dm() ? dm_person(s) : nullptr)
+        title = "Message " + other->name;
+    for (const discord::Message &m : messages(s))
+        if (!reply_to_.empty() && m.id == reply_to_)
+            title = "Replying to " + author_name(s, m);
+    if (ink_.art.keyboard_open && ink_.art.keyboard_open(title))
+        mode_ = Mode::typing; // the system keyboard, where the console lets us have it
+    else
+    {
+        keys_.open(title);
+        mode_ = Mode::keys;
+    }
+    feedback.play(hui::audio::Cue::open);
+    return true;
+}
+
 bool Chat::can_send(const discord::Snapshot &s) const
 {
     for (const discord::Channel *c : chips(s))
@@ -142,6 +165,8 @@ bool Chat::can_send(const discord::Snapshot &s) const
 void Chat::open(const discord::Snapshot &s, const std::string &guild_id, const std::string &channel_id,
                 std::vector<discord::Request> &requests)
 {
+    if (channel_id != channel_id_)
+        keys_.clear(); // a draft belongs to its channel
     guild_id_ = guild_id;
     channel_id_ = channel_id;
     mode_ = Mode::browse;
@@ -268,8 +293,71 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
         return true;
     }
 
+    if (mode_ == Mode::keys)
+    {
+        switch (keys_.update(input, dt, feedback))
+        {
+        case Keyboard::Result::send: {
+            std::string typed = keys_.text();
+            while (!typed.empty() && (typed.back() == ' ' || typed.back() == '\n'))
+                typed.pop_back();
+            discord::Request r;
+            r.kind = discord::Request::Kind::send;
+            r.guild_id = guild_id_;
+            r.channel_id = channel_id_;
+            r.content = typed;
+            r.reply_to = reply_to_;
+            requests.push_back(r);
+            keys_.clear();
+            reply_to_.clear();
+            mode_ = Mode::browse;
+            focus_ = -1;
+            scroll_.target = 0.0f;
+            feedback.play(hui::audio::Cue::select);
+            break;
+        }
+        case Keyboard::Result::cancel:
+            mode_ = Mode::browse; // the draft stays for next time
+            break;
+        case Keyboard::Result::none:
+            break;
+        }
+        scroll_.update(dt, 14.0f);
+        return true;
+    }
+
+    if (mode_ == Mode::typing)
+    {
+        // The system keyboard is up; the app waits for what was typed.
+        std::string typed;
+        const int state = ink_.art.keyboard_poll ? ink_.art.keyboard_poll(typed) : 2;
+        while (!typed.empty() && (typed.back() == ' ' || typed.back() == '\n'))
+            typed.pop_back();
+        if (state == 1 && !typed.empty())
+        {
+            discord::Request r;
+            r.kind = discord::Request::Kind::send;
+            r.guild_id = guild_id_;
+            r.channel_id = channel_id_;
+            r.content = typed;
+            r.reply_to = reply_to_;
+            requests.push_back(r);
+            reply_to_.clear();
+            mode_ = Mode::browse;
+            focus_ = -1;
+            scroll_.target = 0.0f;
+            feedback.play(hui::audio::Cue::select);
+        }
+        else if (state != 0)
+            mode_ = Mode::compose; // cancelled or empty: back to the quick replies
+        scroll_.update(dt, 14.0f);
+        return true;
+    }
+
     if (mode_ == Mode::compose)
     {
+        if (input.is_pressed(Action::north) && start_typing(s, feedback))
+            return true;
         if (input.nav == Direction::left && quick_ > 0)
             --quick_;
         else if (input.nav == Direction::right && quick_ < kQuickCount - 1)
@@ -367,6 +455,10 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
     }
     if ((input.is_pressed(Action::north) || (input.is_pressed(Action::confirm) && focus_ < 0)) && !can_send(s))
         feedback.play(hui::audio::Cue::error);
+    else if (input.is_pressed(Action::north) && start_typing(s, feedback))
+    {
+        // Triangle: straight to the keyboard (quick replies stay a Cross away).
+    }
     else if (input.is_pressed(Action::north) || (input.is_pressed(Action::confirm) && focus_ < 0))
     {
         mode_ = Mode::compose;
@@ -807,6 +899,8 @@ void Chat::draw(const discord::Snapshot &s, DrawList &list) const
     layout.cy = kHintsBaseline;
     layout.item_gap = 38.0f;
     ui::draw_hints(list, ink_.fonts, ui::GlyphStyle::dark(), hints, count, kRight, true, layout);
+    if (mode_ == Mode::keys)
+        keys_.draw(list);
 }
 
 } // namespace screens

@@ -9,6 +9,7 @@
 #include "core/tween.hpp"
 #include "discord/request.hpp"
 #include "screens/draw.hpp"
+#include "screens/keyboard.hpp"
 
 namespace screens
 {
@@ -16,7 +17,7 @@ namespace screens
 class Chat
 {
   public:
-    explicit Chat(const Ink &ink) : ink_(ink) {}
+    explicit Chat(const Ink &ink) : ink_(ink), keys_(ink) {}
 
     // guild_id empty: a DM channel.
     void open(const discord::Snapshot &snapshot, const std::string &guild_id, const std::string &channel_id,
@@ -39,6 +40,8 @@ class Chat
         browse,  // moving between messages
         actions, // the action menu of the focused message is open
         compose, // the composer with quick replies is open
+        typing,  // the system keyboard is up over the app
+        keys,    // the app's own keyboard is up
     };
 
     const std::vector<discord::Message> &messages(const discord::Snapshot &snapshot) const;
@@ -46,6 +49,7 @@ class Chat
     float row_height(const discord::Snapshot &snapshot, int index, bool grouped) const;
     Rect row_rect(const Row &row) const; // on screen, scroll applied
     bool can_send(const discord::Snapshot &s) const;
+    bool start_typing(const discord::Snapshot &s, hui::ui::Feedback &feedback);
     const discord::User *dm_person(const discord::Snapshot &s) const;
     bool dm() const
     {
@@ -60,6 +64,7 @@ class Chat
     void draw_actions(const discord::Snapshot &snapshot, DrawList &list, const Rect &anchor) const;
 
     const Ink &ink_;
+    Keyboard keys_; // the app's own keyboard, when the system one is not there
     std::string guild_id_;
     std::string channel_id_;
     Mode mode_ = Mode::browse;

@@ -261,7 +261,18 @@ void Home::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
             else if (zone_ == kRecent && index_[kRecent] < static_cast<int>(s.recent.size()))
             {
                 const discord::Conversation &c = s.recent[static_cast<std::size_t>(index_[kRecent])];
-                open_ = HomeOpen{c.guild_id, c.channel_id};
+                open_ = HomeOpen{c.guild_id, c.channel_id, {}};
+            }
+            else if (zone_ == kFriends)
+            {
+                // A friend's face: your DM with them (made first if there is none).
+                const std::vector<const discord::User *> people = ordered_friends(s);
+                if (index_[kFriends] < std::min<int>(kFriendsShown, static_cast<int>(people.size())))
+                {
+                    const discord::User &u = *people[static_cast<std::size_t>(index_[kFriends])];
+                    const auto dm = s.dm_by_user.find(u.id);
+                    open_ = HomeOpen{"", dm == s.dm_by_user.end() ? std::string() : dm->second, u.id};
+                }
             }
             // ponytail: Join on a live room comes with voice (0.4.0).
             feedback.play(open_ ? hui::audio::Cue::open : hui::audio::Cue::select);
