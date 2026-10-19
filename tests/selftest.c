@@ -5,6 +5,11 @@
 #include <string.h>
 #include <zlib.h>
 
+#include <stdlib.h>
+
+#include <cJSON.h>
+
+#include "../src/chat.h"
 #include "../src/ws.h"
 #include "../src/zstream.h"
 
@@ -62,8 +67,37 @@ static void test_zstream(void)
     deflateEnd(&d);
 }
 
+static void test_chat(void)
+{
+    cJSON *ready = cJSON_Parse(
+        "{\"user\":{\"id\":\"1\",\"username\":\"me\"},"
+        "\"users\":[{\"id\":\"2\",\"username\":\"bob\",\"global_name\":\"Bob\"}],"
+        "\"guilds\":[{\"id\":\"10\",\"properties\":{\"name\":\"G\"},\"channels\":["
+        "{\"id\":\"11\",\"name\":\"general\",\"type\":0,\"position\":0},"
+        "{\"id\":\"12\",\"name\":\"Voice\",\"type\":2,\"position\":1}]}],"
+        "\"private_channels\":[{\"id\":\"20\",\"type\":1,\"recipient_ids\":[\"2\"]}]}");
+    chat_load_ready(ready);
+    cJSON_Delete(ready);
+    char *t = chat_tree_json();
+    assert(t && strstr(t, "\"name\":\"G\"") && strstr(t, "general") && !strstr(t, "Voice"));
+    assert(strstr(t, "\"name\":\"Bob\"")); // DM named after its recipient
+    free(t);
+
+    cJSON *m = cJSON_Parse("{\"id\":\"30\",\"channel_id\":\"11\",\"content\":\"hi\","
+                           "\"author\":{\"id\":\"2\",\"username\":\"bob\",\"email\":\"x\"}}");
+    chat_event("MESSAGE_CREATE", m);
+    cJSON_Delete(m);
+    char *e = chat_events_json(0);
+    assert(e && strstr(e, "\"next\":1") && strstr(e, "\"content\":\"hi\"") && !strstr(e, "email"));
+    free(e);
+    e = chat_events_json(1);
+    assert(e && strstr(e, "\"events\":[]"));
+    free(e);
+}
+
 int main(void)
 {
+    test_chat();
     test_ws_frame();
     test_zstream();
     puts("selftest ok");

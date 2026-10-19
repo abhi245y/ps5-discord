@@ -8,5 +8,7 @@ typedef struct {
     size_t body_len;
 } http_response;
 
-// POST JSON to path (e.g. "/users/@me/remote-auth/login"). token may be NULL.
-http_response http_post_json(const char *path, const char *json, const char *token);
+// Request to path under /api/v9 (e.g. "/channels/1/messages?limit=50").
+// json is the request body or NULL; token may be NULL.
+http_response http_request(const char *method, const char *path, const char *json, const char *token);
+#define http_post_json(path, json, token) http_request("POST", path, json, token)

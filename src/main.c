@@ -14,6 +14,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "chat.h"
 #include "gateway.h"
 #include "log.h"
 #include "remote_auth.h"
@@ -110,6 +111,7 @@ int main(void)
     for (;;) {
         if (read_token(token, sizeof token) != 0)
             login(token, sizeof token);
+        chat_set_token(token);
         int code = gateway_run(token);
         if (code != 4004) {
             status_state("stopped");

@@ -1,5 +1,6 @@
 #include "gateway.h"
 
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,6 +10,7 @@
 
 #include <cJSON.h>
 
+#include "chat.h"
 #include "log.h"
 #include "props.h"
 #include "status.h"
@@ -21,7 +23,7 @@
 #define CAPABILITIES 1734653
 
 enum { OP_DISPATCH = 0, OP_HEARTBEAT = 1, OP_IDENTIFY = 2, OP_RESUME = 6, OP_RECONNECT = 7,
-       OP_INVALID_SESSION = 9, OP_HELLO = 10, OP_HEARTBEAT_ACK = 11 };
+       OP_INVALID_SESSION = 9, OP_HELLO = 10, OP_HEARTBEAT_ACK = 11, OP_GUILD_SUBSCRIPTIONS_BULK = 37 };
 
 typedef struct {
     const char *token;
@@ -35,6 +37,11 @@ typedef struct {
     int acked;
     int reconnect; // set by handlers: leave the read loop
 } gateway;
+
+// All socket I/O stays on the gateway thread (an mbedTLS context is not safe for a
+// concurrent read and write). Other threads leave requests here.
+static pthread_mutex_t pending_lock = PTHREAD_MUTEX_INITIALIZER;
+static char pending_subscribe[32];
 
 static int64_t now_ms(void)
 {
@@ -112,6 +119,7 @@ static void on_dispatch(gateway *g, const char *t, cJSON *d)
             cJSON_GetObjectItem(cJSON_GetObjectItem(d, "user"), "username"));
         snprintf(g->session_id, sizeof g->session_id, "%s", sid ? sid : "");
         snprintf(g->resume_url, sizeof g->resume_url, "%s", url ? url : "");
+        chat_load_ready(d);
         status_user(name, cJSON_GetArraySize(cJSON_GetObjectItem(d, "guilds")),
                     cJSON_GetArraySize(cJSON_GetObjectItem(d, "private_channels")));
         status_state("ready");
@@ -122,6 +130,9 @@ static void on_dispatch(gateway *g, const char *t, cJSON *d)
         status_state("ready");
         LOG("gateway: RESUMED");
     } else {
+        if (strncmp(t, "MESSAGE_", 8) == 0 && (strcmp(t + 8, "CREATE") == 0 ||
+                                                strcmp(t + 8, "UPDATE") == 0 || strcmp(t + 8, "DELETE") == 0))
+            chat_event(t, d);
         // Event names only; message contents stay out of the console log.
         status_event();
         LOG("gateway: %s s=%lld", t, (long long)g->seq);
@@ -178,6 +189,8 @@ static int on_message(gateway *g, const char *json)
     return r;
 }
 
+static int send_pending(gateway *g);
+
 // One connection. Returns the server close code, 0 for a client-side reconnect, -1 on error.
 static int run_connection(gateway *g)
 {
@@ -194,21 +207,17 @@ static int run_connection(gateway *g)
     }
     g->next_heartbeat = 0;
     g->reconnect = 0;
+    int64_t started = now_ms();
 
     int result = 0;
     for (;;) {
-        int timeout = 30000; // until HELLO
+        int timeout = 1000; // short, so requests from other threads go out quickly
         if (g->next_heartbeat) {
             int64_t left = g->next_heartbeat - now_ms();
-            timeout = left > 0 ? (int)left : 0;
+            timeout = left <= 0 ? 0 : left < timeout ? (int)left : timeout;
         }
-        int r = ws_recv(&g->ws, timeout);
-        if (r == 0) {
-            if (!g->next_heartbeat) {
-                LOG("gateway: no HELLO");
-                result = -1;
-                break;
-            }
+        // Heartbeat on schedule even while events keep the socket busy.
+        if (g->next_heartbeat && now_ms() >= g->next_heartbeat) {
             if (!g->acked) { // zombied connection
                 LOG("gateway: heartbeat not acked, reconnecting");
                 break;
@@ -218,6 +227,19 @@ static int run_connection(gateway *g)
                 break;
             }
             g->next_heartbeat += g->heartbeat_ms;
+            continue;
+        }
+        if (send_pending(g) != 0) {
+            result = -1;
+            break;
+        }
+        int r = ws_recv(&g->ws, timeout);
+        if (r == 0) {
+            if (!g->next_heartbeat && now_ms() - started >= 30000) {
+                LOG("gateway: no HELLO");
+                result = -1;
+                break;
+            }
             continue;
         }
         if (r == WS_CLOSE) {
@@ -247,6 +269,32 @@ static int run_connection(gateway *g)
     // 4000 keeps the session resumable; 1000 would end it.
     ws_close(&g->ws, 4000);
     return result;
+}
+
+int gateway_subscribe(const char *guild_id)
+{
+    pthread_mutex_lock(&pending_lock);
+    snprintf(pending_subscribe, sizeof pending_subscribe, "%s", guild_id);
+    pthread_mutex_unlock(&pending_lock);
+    return 0;
+}
+
+// Called on the gateway thread between reads.
+static int send_pending(gateway *g)
+{
+    char guild[32];
+    pthread_mutex_lock(&pending_lock);
+    snprintf(guild, sizeof guild, "%s", pending_subscribe);
+    pending_subscribe[0] = 0;
+    pthread_mutex_unlock(&pending_lock);
+    if (!guild[0] || !g->session_id[0])
+        return 0;
+    cJSON *sub = cJSON_CreateObject(), *subs = cJSON_AddObjectToObject(sub, "subscriptions");
+    cJSON *opts = cJSON_AddObjectToObject(subs, guild);
+    cJSON_AddTrueToObject(opts, "typing");
+    cJSON_AddTrueToObject(opts, "activities");
+    cJSON_AddTrueToObject(opts, "threads");
+    return send_json(g, op_msg(OP_GUILD_SUBSCRIPTIONS_BULK, sub));
 }
 
 int gateway_run(const char *token)
