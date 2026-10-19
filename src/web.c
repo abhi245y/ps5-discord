@@ -239,6 +239,33 @@ static void api_react(int c, const char *body)
     reply_rest(c, rest("PUT", path, NULL));
 }
 
+// Edits or deletes one of the account's messages: {channel, message[, content]}.
+static void api_change(int c, const char *body, int remove)
+{
+    cJSON *in = cJSON_Parse(body ? body : "");
+    const char *channel = cJSON_GetStringValue(cJSON_GetObjectItem(in, "channel"));
+    const char *message = cJSON_GetStringValue(cJSON_GetObjectItem(in, "message"));
+    const char *content = cJSON_GetStringValue(cJSON_GetObjectItem(in, "content"));
+    if (!channel || !is_id(channel) || !message || !is_id(message) ||
+        (!remove && (!content || !*content || strlen(content) > 8000))) {
+        cJSON_Delete(in);
+        reply(c, "400 Bad Request", "text/plain", "message", 7);
+        return;
+    }
+    char path[96];
+    snprintf(path, sizeof path, "/channels/%s/messages/%s", channel, message);
+    char *json = NULL;
+    if (!remove) {
+        cJSON *out = cJSON_CreateObject();
+        cJSON_AddStringToObject(out, "content", content);
+        json = cJSON_PrintUnformatted(out);
+        cJSON_Delete(out);
+    }
+    cJSON_Delete(in);
+    reply_rest(c, rest(remove ? "DELETE" : "PATCH", path, json));
+    free(json);
+}
+
 // Opens (or finds) the DM with a user: {user}; Discord answers with the channel.
 static void api_dm(int c, const char *body)
 {
@@ -318,6 +345,10 @@ static void handle(int c, int local)
         api_react(c, body);
     } else if (post && strcmp(path, "/api/dm") == 0) {
         api_dm(c, body);
+    } else if (post && strcmp(path, "/api/edit") == 0) {
+        api_change(c, body, 0);
+    } else if (post && strcmp(path, "/api/delete") == 0) {
+        api_change(c, body, 1);
     } else if (post && strcmp(path, "/api/quit") == 0) {
         reply(c, "200 OK", "application/json", "{\"ok\":true}", 11);
         LOG("quit requested from the web UI");

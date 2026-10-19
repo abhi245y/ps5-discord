@@ -19,6 +19,8 @@ struct Request
         react,        // add emoji to message_id in channel_id
         open_dm,      // find or create the DM with user_id (Snapshot::dm_by_user)
         prefetch,     // load history ahead of an open, without marking it read
+        edit,         // replace message_id's content (the account's own message)
+        remove,       // delete message_id (the account's own message)
     };
     Kind kind = Kind::open_channel;
     std::string guild_id; // empty for a DM

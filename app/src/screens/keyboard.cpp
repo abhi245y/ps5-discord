@@ -80,9 +80,11 @@ std::string shifted(const char *key, bool shift)
 
 } // namespace
 
-void Keyboard::open(const std::string &title)
+void Keyboard::open(const std::string &title, const std::string &initial)
 {
     title_ = title;
+    if (!initial.empty())
+        text_ = initial;
     row_ = 2;
     col_ = 0;
     shift_ = text_.empty(); // the first letter of a message starts capitalised

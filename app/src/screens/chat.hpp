@@ -74,6 +74,9 @@ class Chat
     Mode mode_ = Mode::browse;
     int focus_ = -1;  // focused message index; -1 is the composer
     std::string front_id_;        // oldest loaded message last frame: an older page shifts focus
+    std::string editing_id_;      // the own message the keyboard is rewriting
+    std::string draft_before_edit_;
+    bool delete_armed_ = false;   // Delete pressed once: the next press deletes
     std::string older_asked_for_; // the oldest id an older page was requested above
     int action_ = 0;  // focused entry in the action menu (actions, then reactions)
     int quick_ = 0;   // focused quick reply in compose mode

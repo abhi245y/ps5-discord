@@ -24,7 +24,8 @@ class Keyboard
     };
     explicit Keyboard(const Ink &ink) : ink_(ink) {}
 
-    void open(const std::string &title);
+    // initial: replaces the draft (editing a message); empty keeps the draft.
+    void open(const std::string &title, const std::string &initial = {});
     Result update(const hui::InputFrame &input, float dt, hui::ui::Feedback &feedback);
     void draw(DrawList &list) const;
     const std::string &text() const
@@ -34,6 +35,10 @@ class Keyboard
     void clear()
     {
         text_.clear();
+    }
+    void set_text(std::string text)
+    {
+        text_ = std::move(text);
     }
 
   private:

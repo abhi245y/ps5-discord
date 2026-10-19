@@ -66,9 +66,15 @@ struct Action_
 const Action_ kActions[] = {
     {ui::Button::cross, "Reply"},
     {ui::Button::square, "React"},
+    {ui::Button::triangle, "Edit"},
+    {ui::Button::none, "Delete"},
 };
-// ponytail: copy, mark unread and mention return with free typing (system keyboard).
-constexpr int kActionCount = 2;
+// Reply and React for everyone's messages; Edit and Delete for your own too.
+constexpr int kActionCountAll = 4;
+int action_count(bool mine)
+{
+    return mine ? kActionCountAll : 2;
+}
 const char *const kReactions[] = {"\xE2\x9D\xA4\xEF\xB8\x8F", "\xF0\x9F\x91\x8D", "\xF0\x9F\x98\x82",
                                   "\xF0\x9F\x98\xAE", "\xF0\x9F\x94\xA5"};
 constexpr int kReactionCount = 5;
@@ -277,7 +283,11 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
 
     if (mode_ == Mode::actions)
     {
+        const bool mine = focus_ >= 0 && ms[static_cast<std::size_t>(focus_)].author_id == s.me.id;
+        const int kActionCount = action_count(mine);
         const int entries = kActionCount + kReactionCount;
+        if (input.nav != Direction::none)
+            delete_armed_ = false;
         if (input.nav == Direction::down && action_ < kActionCount - 1)
             ++action_;
         else if (input.nav == Direction::down && action_ < kActionCount)
@@ -311,6 +321,35 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
             mode_ = Mode::compose;
             quick_ = 0;
             feedback.play(hui::audio::Cue::open);
+        }
+        else if (mine && ((input.is_pressed(Action::confirm) && action_ == 2) || input.is_pressed(Action::north)))
+        {
+            // Edit: the keyboard opens on the message's text; the draft waits.
+            const discord::Message &m = ms[static_cast<std::size_t>(focus_)];
+            editing_id_ = m.id;
+            draft_before_edit_ = keys_.text();
+            keys_.open("Editing your message", m.content);
+            mode_ = Mode::keys;
+            feedback.play(hui::audio::Cue::open);
+        }
+        else if (mine && input.is_pressed(Action::confirm) && action_ == 3)
+        {
+            if (!delete_armed_)
+            {
+                delete_armed_ = true; // asks once more: deleting cannot be undone
+                feedback.play(hui::audio::Cue::error, 0.8f);
+            }
+            else
+            {
+                discord::Request r;
+                r.kind = discord::Request::Kind::remove;
+                r.channel_id = channel_id_;
+                r.message_id = ms[static_cast<std::size_t>(focus_)].id;
+                requests.push_back(r);
+                delete_armed_ = false;
+                mode_ = Mode::browse;
+                feedback.play(hui::audio::Cue::erase);
+            }
         }
         else if ((input.is_pressed(Action::confirm) && action_ == 1) || input.is_pressed(Action::west))
         {
@@ -377,6 +416,20 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
             std::string typed = keys_.text();
             while (!typed.empty() && (typed.back() == ' ' || typed.back() == '\n'))
                 typed.pop_back();
+            if (!editing_id_.empty())
+            {
+                discord::Request r;
+                r.kind = discord::Request::Kind::edit;
+                r.channel_id = channel_id_;
+                r.message_id = editing_id_;
+                r.content = typed;
+                requests.push_back(r);
+                editing_id_.clear();
+                keys_.set_text(draft_before_edit_);
+                mode_ = Mode::browse;
+                feedback.play(hui::audio::Cue::select);
+                break;
+            }
             discord::Request r;
             r.kind = discord::Request::Kind::send;
             r.guild_id = guild_id_;
@@ -393,6 +446,11 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
             break;
         }
         case Keyboard::Result::cancel:
+            if (!editing_id_.empty()) // an abandoned edit: the draft comes back
+            {
+                editing_id_.clear();
+                keys_.set_text(draft_before_edit_);
+            }
             mode_ = Mode::browse; // the draft stays for next time
             break;
         case Keyboard::Result::none:
@@ -901,7 +959,10 @@ void Chat::draw_composer(const discord::Snapshot &s, DrawList &list) const
 
 void Chat::draw_actions(const discord::Snapshot &s, DrawList &list, const Rect &anchor) const
 {
-    (void)s;
+    const std::vector<discord::Message> &ms = messages(s);
+    const bool mine = focus_ >= 0 && focus_ < static_cast<int>(ms.size()) &&
+                      ms[static_cast<std::size_t>(focus_)].author_id == s.me.id;
+    const int kActionCount = action_count(mine);
     const float show = menu_show_.value;
     if (show <= 0.01f)
         return;
@@ -917,7 +978,9 @@ void Chat::draw_actions(const discord::Snapshot &s, DrawList &list, const Rect &
         const Rect row{panel.x + 16.0f, panel.y + 16.0f + 72.0f * i, w - 32.0f, 64.0f};
         if (kActions[i].button != ui::Button::none)
             ui::draw_button(list, ink_.fonts, ui::GlyphStyle::dark(), kActions[i].button, row.x + 20.0f, row.cy(), 36.0f);
-        ui::text(list, ink_.fonts.semibold, kActions[i].label, row.x + 82.0f, row.cy() + 10.0f, 28.0f, kText);
+        const bool arming = i == 3 && delete_armed_;
+        ui::text(list, ink_.fonts.semibold, arming ? "Press again to delete" : kActions[i].label, row.x + 82.0f,
+                 row.cy() + 10.0f, 28.0f, i == 3 ? kCoral : kText);
         if (action_ == i)
             focus_outline(list, row, 16.0f, 1.0f);
     }

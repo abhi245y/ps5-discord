@@ -1119,6 +1119,20 @@ void Client::handle(const Request &request)
             hui::sys::log("[CLIENT] react failed (%d)", reply.status);
         break;
     }
+    case Request::Kind::edit:
+    case Request::Kind::remove: {
+        json body{{"channel", request.channel_id}, {"message", request.message_id}};
+        if (request.kind == Request::Kind::edit)
+            body["content"] = request.content;
+        const Reply reply = http(port_, "POST", request.kind == Request::Kind::edit ? "/api/edit" : "/api/delete",
+                                 body.dump());
+        const json r = json::parse(reply.body, nullptr, false);
+        const int discord_status = r.is_discarded() ? 0 : static_cast<int>(r.value("status", 0.0));
+        if (reply.status != 200 || discord_status < 200 || discord_status >= 300)
+            hui::sys::log("[CLIENT] %s failed (%d/%d)", request.kind == Request::Kind::edit ? "edit" : "delete",
+                          reply.status, discord_status);
+        break; // the gateway's MESSAGE_UPDATE / MESSAGE_DELETE changes the list
+    }
     case Request::Kind::open_dm: {
         const Reply reply = http(port_, "POST", "/api/dm", json{{"user", request.user_id}}.dump());
         const json r = json::parse(reply.body, nullptr, false);
