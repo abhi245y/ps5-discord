@@ -120,7 +120,13 @@ static int redeem_ticket(mbedtls_pk_context *pk, const char *ticket, char *out, 
     int r = -1;
     cJSON *j = res.status == 200 ? cJSON_Parse(res.body) : NULL;
     if (!j) {
-        LOG("remote auth: ticket redeem failed (HTTP %d)", res.status);
+        // The error body says why (a captcha, an expired ticket); it holds no token.
+        LOG("remote auth: ticket redeem failed (HTTP %d) %.300s", res.status, res.body ? res.body : "");
+        // Discord wants a captcha this console cannot show (often right after a
+        // device was logged out). Never worked around: the person waits it out.
+        if (res.body && strstr(res.body, "captcha-required"))
+            status_note("Discord asked for a captcha, which this app cannot show. Sign in once on discord.com "
+                        "in a browser, wait a while, then scan again.");
     } else {
         unsigned char tok[256];
         int n = decrypt_b64(pk, cJSON_GetStringValue(cJSON_GetObjectItem(j, "encrypted_token")), tok,
@@ -259,6 +265,7 @@ int remote_auth_login(char *out, size_t cap)
 
     if (ticket[0] && redeem_ticket(&pk, ticket, out, cap) == 0) {
         LOG("remote auth: logged in");
+        status_note(NULL);
         result = 0;
     }
     mbedtls_pk_free(&pk);

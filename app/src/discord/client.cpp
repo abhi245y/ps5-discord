@@ -951,6 +951,7 @@ void Client::poll_state()
         snapshot_.connection = Connection::connecting;
     snapshot_.login_scanned = s == "scanned";
     snapshot_.login_qr = text(state, "qr");
+    snapshot_.login_note = text(state, "note");
     snapshot_.login_qr_size = static_cast<int>(state.value("qr_size", 0.0));
     snapshot_.status_message.clear();
     const bool was_ready = ready_;

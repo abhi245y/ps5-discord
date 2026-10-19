@@ -44,8 +44,13 @@ void draw_sign_in(DrawList &list, const Ink &ink, const discord::Snapshot &s, fl
     const Rect status{left, 742.0f, 940.0f, 108.0f};
     list.rounded_rect(status, 22.0f, kRaised);
     spinner(list, status.x + 66.0f, status.cy(), 26.0f, time);
-    ui::text(list, ink.fonts.regular, s.login_scanned ? "Scanned. Approve the login on your phone." : "Waiting for scan…",
-             status.x + 120.0f, status.cy() + 12.0f, 33.0f, kDim);
+    if (!s.login_note.empty() && !s.login_scanned)
+        ui::paragraph(list, ink.fonts.regular, s.login_note, status.x + 120.0f, status.y + 34.0f, 22.0f,
+                      status.w - 150.0f, 28.0f, kCoral, 3, gfx::Align::left);
+    else
+        ui::text(list, ink.fonts.regular,
+                 s.login_scanned ? "Scanned. Approve the login on your phone." : "Waiting for scan…",
+                 status.x + 120.0f, status.cy() + 12.0f, 33.0f, kDim);
     ui::text(list, ink.fonts.regular, "Unofficial client  ·  your password never touches this console", left, 1000.0f,
              25.0f, kFaint);
 

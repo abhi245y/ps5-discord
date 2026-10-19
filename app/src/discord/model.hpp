@@ -217,6 +217,7 @@ struct Snapshot
     std::string login_qr;
     int login_qr_size = 0;
     bool login_scanned = false; // waiting for approval on the phone
+    std::string login_note;     // why the last sign-in failed, from the core
     std::int64_t now_ms = 0; // for "12m ago"
     int utc_offset_minutes = 0; // the console's time zone, for clock times
     User me;
