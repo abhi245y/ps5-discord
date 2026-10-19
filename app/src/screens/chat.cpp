@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 
@@ -891,6 +892,18 @@ void Chat::draw_message(const discord::Snapshot &s, DrawList &list, const Row &r
         list.rounded_rect(card, 16.0f, kRaisedHigh);
         if (a.image)
             scene(list, ink_, a.art, {card.x + 10.0f, card.y + 10.0f, 220.0f, card.h - 20.0f}, 10.0f, a.url);
+        else
+        {
+            // A file: its extension on a plain tile.
+            const Rect tile{card.x + 10.0f, card.y + 10.0f, 220.0f, card.h - 20.0f};
+            list.rounded_rect(tile, 10.0f, kRaised);
+            const std::size_t dot = a.name.rfind('.');
+            std::string ext = dot == std::string::npos ? std::string("FILE") : a.name.substr(dot + 1);
+            for (char &c : ext)
+                c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+            ui::text(list, ink_.fonts.semibold, fit(ink_.fonts.semibold, ext, 30.0f, tile.w - 30.0f), tile.cx(),
+                     tile.cy() + 11.0f, 30.0f, kDim, gfx::Align::center);
+        }
         ui::text(list, ink_.fonts.semibold, fit(ink_.fonts.semibold, a.name, 26.0f, 290.0f), card.x + 250.0f, card.y + 56.0f,
                  26.0f, kText);
         ui::text(list, ink_.fonts.regular, a.size_text, card.x + 250.0f, card.y + 92.0f, 22.0f, kDim);
