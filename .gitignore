@@ -1,0 +1,19 @@
+# local scratch, captures, downloaded bundles (may hold tokens)
+tmp/
+*.pcap
+*.har
+
+# build output
+build/
+*.o
+*.elf
+
+# other agents' workspaces
+discord-ps5-lounge/
+
+# local notes and agent files, never committed
+docs/
+AGENTS.md
+CLAUDE.md
+OTHER_AGENTS.md
+.claude/
