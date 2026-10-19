@@ -265,7 +265,11 @@ std::vector<Chat::Row> Chat::layout(const discord::Snapshot &s) const
         const bool grouped = i > 0 && ms[static_cast<std::size_t>(i - 1)].author_id == m.author_id &&
                              m.time_ms - ms[static_cast<std::size_t>(i - 1)].time_ms < kGroupMs &&
                              m.reply_author.empty() && !m.mentions_me;
-        const float h = row_height(s, i, grouped);
+        // Far above the view, a one-line estimate: a fresh page of history is
+        // then wrapped as it scrolls in, not all in the frame it lands.
+        const bool far = bottom > std::max(scroll_.value, scroll_.target) + 2600.0f && i != focus_;
+        const float h = far ? (grouped ? kPadGrouped : kPadTop + kNameLine) + kLineH + kPadBottom
+                            : row_height(s, i, grouped);
         rows[static_cast<std::size_t>(i)] = {i, bottom, h, grouped};
         bottom += h;
     }
