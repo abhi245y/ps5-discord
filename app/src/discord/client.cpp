@@ -19,6 +19,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <map>
+#include <mutex>
+#include <unordered_map>
 #include <vector>
 
 #include "platform/ps5/system.hpp"
@@ -182,6 +184,18 @@ User user_from(const json &u)
     return user;
 }
 
+// Role and channel names by id for readable(), refreshed with each /api/chat.
+// ponytail: one global map behind a mutex; readable() runs on two threads.
+std::mutex g_names_mutex;
+std::unordered_map<std::string, std::string> g_names;
+
+std::string name_of(const std::string &id, const std::string &fallback)
+{
+    std::lock_guard<std::mutex> lock(g_names_mutex);
+    const auto it = g_names.find(id);
+    return it == g_names.end() ? fallback : it->second;
+}
+
 // Discord markup as people read it: <:name:id> and <a:name:id> become :name:,
 // <@id> becomes @name (from the message's mentions), <@&id> @role, <#id> #channel.
 std::string readable(const std::string &content, const json &m)
@@ -206,7 +220,7 @@ std::string readable(const std::string &content, const json &m)
                 shown = ":" + tag.substr(start, end - start) + ":";
         }
         else if (tag.rfind("@&", 0) == 0)
-            shown = "@role";
+            shown = "@" + name_of(tag.substr(2), "role");
         else if (tag.rfind("@", 0) == 0)
         {
             const std::string id = tag.substr(tag.rfind("@!", 0) == 0 ? 2 : 1);
@@ -217,7 +231,7 @@ std::string readable(const std::string &content, const json &m)
                         shown = "@" + user_from(u).name;
         }
         else if (tag.rfind("#", 0) == 0)
-            shown = "#channel";
+            shown = "#" + name_of(tag.substr(1), "channel");
         if (shown.empty())
         {
             out += content[i++];
@@ -226,6 +240,34 @@ std::string readable(const std::string &content, const json &m)
         out += shown;
         i = close + 1;
     }
+    // [text](https://...) reads as its text; "# ", "## ", "### " and "-# " open headings and small print.
+    for (std::size_t open = out.find('['); open != std::string::npos; open = out.find('[', open + 1))
+    {
+        const std::size_t mid = out.find("](", open);
+        const std::size_t end = mid == std::string::npos ? mid : out.find(')', mid);
+        if (end == std::string::npos || out.find('\n', open) < mid || out.compare(mid + 2, 4, "http") != 0)
+            continue;
+        out.erase(mid, end + 1 - mid);
+        out.erase(open, 1);
+    }
+    for (std::size_t line = 0; line < out.size();)
+    {
+        for (const char *marker : {"### ", "## ", "# ", "-# "})
+            if (out.compare(line, std::strlen(marker), marker) == 0)
+            {
+                out.erase(line, std::strlen(marker));
+                break;
+            }
+        const std::size_t next = out.find('\n', line);
+        line = next == std::string::npos ? out.size() : next + 1;
+    }
+    // \* \` \# ...: escaped, shown as typed. Mark them so the passes below keep them.
+    for (std::size_t i = 0; i + 1 < out.size(); ++i)
+        if (out[i] == '\\' && std::ispunct(static_cast<unsigned char>(out[i + 1])))
+        {
+            out[i++] = '\x01';
+            out[i] = static_cast<char>(out[i] | 0x80); // hidden from the marker passes until restored
+        }
     // Markdown markers read as noise without styling: drop the paired ones.
     // ponytail: no bold/italic/code styling yet; draw runs with the semibold and mono faces later.
     for (const char *marker : {"**", "__", "~~", "||", "```", "`"})
@@ -257,6 +299,10 @@ std::string readable(const std::string &content, const json &m)
             out.erase(second, 1);
             out.erase(first, 1);
         }
+    for (std::size_t i = 0; i + 1 < out.size(); ++i)
+        if (out[i] == '\x01')
+            out[i + 1] = static_cast<char>(out[i + 1] & 0x7f);
+    out.erase(std::remove(out.begin(), out.end(), '\x01'), out.end());
     return out;
 }
 
@@ -304,7 +350,9 @@ Message message_from(const json &m, const std::string &me_id)
     if (m.contains("author") && m["author"].is_object())
     {
         out.author_id = text(m["author"], "id");
-        out.author_name = user_from(m["author"]).name;
+        const User author = user_from(m["author"]);
+        out.author_name = author.name;
+        out.author_avatar_url = author.avatar_url;
     }
     out.edited = m.contains("edited_timestamp") && m["edited_timestamp"].is_string();
     if (m.contains("mentions") && m["mentions"].is_array())
@@ -403,6 +451,16 @@ void apply_tree(Snapshot &s, const json &t)
                 guild.banner_url = "https://cdn.discordapp.com/splashes/" + guild.id + "/" + splash + ".png?size=640";
             guild.art = art_for(guild.id, kSceneArt);
             guild.members = static_cast<int>(g.value("member_count", 0.0));
+            {
+                std::lock_guard<std::mutex> lock(g_names_mutex);
+                if (g.contains("roles") && g["roles"].is_object())
+                    for (const auto &[id, name] : g["roles"].items())
+                        if (name.is_string())
+                            g_names[id] = name.get<std::string>();
+                if (g.contains("channels") && g["channels"].is_array())
+                    for (const json &c : g["channels"])
+                        g_names[text(c, "id")] = text(c, "name");
+            }
             if (g.contains("channels"))
             {
                 // Discord's order: channels without a category first, then each

@@ -136,6 +136,7 @@ struct Message
     std::string channel_id;
     std::string author_id;
     std::string author_name; // as sent, for authors not in the friends list
+    std::string author_avatar_url; // likewise: their picture, or Discord's default
     std::string content;
     std::int64_t time_ms = 0;
     bool mentions_me = false;

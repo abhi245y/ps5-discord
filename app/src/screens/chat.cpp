@@ -73,6 +73,39 @@ constexpr float kPadBottom = 10.0f;
 constexpr float kDmBubbleW = 860.0f;
 constexpr std::int64_t kGroupMs = 7 * 60 * 1000;
 
+// A reaction chip's emoji: a server's own is its picture from the CDN.
+constexpr float kReactEmoji = 28.0f;
+// A Unicode one is Twemoji's colour picture (the font's emoji are one colour,
+// and draw flags and keycaps as boxed letters).
+std::string emoji_url(const discord::Reaction &r)
+{
+    if (!r.emoji_id.empty())
+        return "https://cdn.discordapp.com/emojis/" + r.emoji_id + ".png?size=48";
+    // Twemoji names files by code points in hex; FE0F is left out unless a ZWJ joins the sequence.
+    std::vector<std::uint32_t> points;
+    for (std::size_t i = 0; i < r.emoji.size();)
+    {
+        const unsigned char c = static_cast<unsigned char>(r.emoji[i]);
+        const int n = c < 0x80 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
+        std::uint32_t cp = n == 1 ? c : c & (0x3F >> (n - 1));
+        for (int k = 1; k < n && i + k < r.emoji.size(); ++k)
+            cp = (cp << 6) | (static_cast<unsigned char>(r.emoji[i + k]) & 0x3F);
+        points.push_back(cp);
+        i += n;
+    }
+    const bool zwj = std::find(points.begin(), points.end(), 0x200Du) != points.end();
+    std::string name;
+    for (const std::uint32_t cp : points)
+    {
+        if (cp == 0xFE0F && !zwj)
+            continue;
+        char hex[12];
+        std::snprintf(hex, sizeof hex, "%s%x", name.empty() ? "" : "-", cp);
+        name += hex;
+    }
+    return name.empty() ? std::string() : "https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.1.0/assets/72x72/" + name + ".png";
+}
+
 const char *const kQuickReplies[] = {"On my way", "gg", "brb", "5 min", "\xF0\x9F\x91\x8D"};
 constexpr int kQuickCount = 5;
 
@@ -249,7 +282,7 @@ float Chat::row_height(const discord::Snapshot &s, int index, bool grouped) cons
     }
     h += static_cast<float>(m.attachments.size()) * (kAttachH + 10.0f);
     if (!m.reactions.empty())
-        h += kReactH + 10.0f;
+        h += (kReactH + 10.0f) * static_cast<float>(reaction_lines(m, width));
     if (dm())
         h += 24.0f; // bubble padding
     return h + kPadBottom;
@@ -275,6 +308,40 @@ std::vector<Chat::Row> Chat::layout(const discord::Snapshot &s) const
         bottom += h;
     }
     return rows;
+}
+
+std::pair<float, float> Chat::focus_range(const Row &row) const
+{
+    // Scroll values that keep a row in view. A row taller than the view
+    // swaps the ends: it then fills the view, and Up/Down read through it.
+    const float top_edge = (dm() ? 170.0f : kChipsY + kChipH + 16.0f) + 10.0f;
+    const float base = kListBottom - row.bottom - row.height;
+    const float a = top_edge - base;
+    const float b = kListBottom - row.height - base;
+    return {std::max(0.0f, std::min(a, b)), std::max(0.0f, std::max(a, b))};
+}
+
+int Chat::reaction_lines(const discord::Message &m, float width) const
+{
+    int lines = 1;
+    float x = 0.0f;
+    for (const discord::Reaction &r : m.reactions)
+    {
+        const float w = reaction_width(r);
+        if (x > 0.0f && x + w > width)
+        {
+            ++lines;
+            x = 0.0f;
+        }
+        x += w + 10.0f;
+    }
+    return lines;
+}
+
+float Chat::reaction_width(const discord::Reaction &r) const
+{
+    const float ew = r.emoji_id.empty() ? std::max(kReactEmoji, ink_.fonts.regular.measure(r.emoji, 24.0f)) : kReactEmoji;
+    return ew + ink_.fonts.semibold.measure(std::to_string(r.count), 22.0f) + 46.0f;
 }
 
 Rect Chat::row_rect(const Row &row) const
@@ -618,7 +685,30 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
             feedback.play(hui::audio::Cue::error, 1.0f, 0.0f, 0.5f);
         return true;
     }
-    if (input.nav == Direction::up)
+    // A message taller than the view: Up/Down scroll through it first.
+    const float view_step = (kListBottom - kChipsY - kChipH) * 0.6f;
+    std::pair<float, float> range;
+    if (focus_ >= 0 && focus_ < count && (input.nav == Direction::up || input.nav == Direction::down))
+    {
+        const Row row = layout(s)[static_cast<std::size_t>(focus_)];
+        if (row.height > kListBottom - kChipsY - kChipH - 26.0f) // a short row: Up/Down move the focus
+            range = focus_range(row);
+        else
+            range = {scroll_.target, scroll_.target};
+    }
+    else
+        range = {scroll_.target, scroll_.target};
+    if (input.nav == Direction::up && scroll_.target < range.second - 1.0f)
+    {
+        scroll_.target = std::min(range.second, scroll_.target + view_step);
+        feedback.play(hui::audio::Cue::focus, 1.02f, 0.0f, 0.4f);
+    }
+    else if (input.nav == Direction::down && scroll_.target > range.first + 1.0f)
+    {
+        scroll_.target = std::max(range.first, scroll_.target - view_step);
+        feedback.play(hui::audio::Cue::focus, 0.98f, 0.0f, 0.4f);
+    }
+    else if (input.nav == Direction::up)
     {
         if (count == 0 || focus_ == 0)
         {
@@ -665,12 +755,8 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
     if (focus_ >= 0)
     {
         const Row &row = rows[static_cast<std::size_t>(focus_)];
-        const float top_edge = (dm() ? 170.0f : kChipsY + kChipH + 16.0f) + 10.0f;
-        const float y = kListBottom - row.bottom - row.height + target;
-        if (y < top_edge)
-            target += top_edge - y;
-        if (y + row.height > kListBottom)
-            target -= y + row.height - kListBottom;
+        const auto [lo, hi] = focus_range(row);
+        target = std::clamp(target, lo, hi);
     }
     else
     {
@@ -826,6 +912,7 @@ void Chat::draw_message(const discord::Snapshot &s, DrawList &list, const Row &r
             // Server members outside the friends list: their initial on stable art.
             discord::User face;
             face.name = author_name(s, m);
+            face.avatar_url = m.author_avatar_url;
             face.art = static_cast<discord::ArtIndex>(std::hash<std::string>{}(m.author_id) % 12);
             avatar(list, ink_, face, acx, y + 34.0f, 36.0f, false);
         }
@@ -916,16 +1003,34 @@ void Chat::draw_message(const discord::Snapshot &s, DrawList &list, const Row &r
         for (const discord::Reaction &reaction : m.reactions)
         {
             const std::string count = std::to_string(reaction.count);
-            const float ew = ink_.fonts.regular.measure(reaction.emoji, 24.0f);
-            const float cw = ink_.fonts.semibold.measure(count, 22.0f);
-            const Rect chip{rx, y + 8.0f, ew + cw + 46.0f, kReactH};
+            const float cw = reaction_width(reaction);
+            if (rx > text_x && rx + cw > text_x + width) // wrap, as Discord does
+            {
+                rx = text_x;
+                y += kReactH + 10.0f;
+            }
+            const Rect chip{rx, y + 8.0f, cw, kReactH};
             list.rounded_rect(chip, kReactH * 0.5f, reaction.me ? Color::rgb(0x3a2a28) : kRaisedHigh);
             if (reaction.me)
                 list.bordered_rect(chip, kReactH * 0.5f, Color::rgb(0, 0.0f), 2.0f, kCoral);
-            ui::text(list, ink_.fonts.regular, reaction.emoji, chip.x + 16.0f, chip.cy() + 9.0f, 24.0f, kText);
+            const float ew = cw - ink_.fonts.semibold.measure(count, 22.0f) - 46.0f;
+            const hui::app::ArtSet::Remote pic = ink_.art.remote ? ink_.art.remote(emoji_url(reaction)) : hui::app::ArtSet::Remote{};
+            if (pic.texture)
+            {
+                // Fit the picture's aspect in the emoji square.
+                const float aspect = pic.h > 0 ? static_cast<float>(pic.w) / pic.h : 1.0f;
+                const float iw = aspect >= 1.0f ? kReactEmoji : kReactEmoji * aspect;
+                const float ih = aspect >= 1.0f ? kReactEmoji / aspect : kReactEmoji;
+                list.image(pic.texture, {chip.x + 16.0f + (ew - iw) * 0.5f, chip.cy() - ih * 0.5f, iw, ih},
+                           gfx::kFullUv, Color::rgb(0xffffff), 4.0f);
+            }
+            else if (!reaction.emoji_id.empty()) // loading: a quiet square, not the :name:
+                list.rounded_rect({chip.x + 16.0f, chip.cy() - kReactEmoji * 0.5f, kReactEmoji, kReactEmoji}, 6.0f, kRaised);
+            else
+                ui::text(list, ink_.fonts.regular, reaction.emoji, chip.x + 16.0f, chip.cy() + 9.0f, 24.0f, kText);
             ui::text(list, ink_.fonts.semibold, count, chip.x + 26.0f + ew, chip.cy() + 8.0f, 22.0f,
                      reaction.me ? kCoral : kDim);
-            rx += chip.w + 10.0f;
+            rx += cw + 10.0f;
         }
         y += kReactH + 10.0f;
     }

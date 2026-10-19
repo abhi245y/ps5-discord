@@ -72,6 +72,8 @@ if verb == "shot" and len(sys.argv) >= 3:
     fetch(name, Path(sys.argv[3] if len(sys.argv) > 3 else f"{name}.png"))
 elif verb == "press" and len(sys.argv) == 3:
     request("press", sys.argv[2])
+    # Let the app read and play the keys before a next request replaces the file.
+    time.sleep(1.2 + 0.35 * len(sys.argv[2].split(",")))
 elif verb == "notice" and len(sys.argv) == 3:
     request("notice", sys.argv[2].replace(" ", "_"))
 elif verb == "quit":
