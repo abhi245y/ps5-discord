@@ -7,6 +7,23 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Native PS5 app (title PPSA99072) on the ps5-homebrew-ui kit, talking to the core over
+  loopback: QR sign-in, Home (friends online, live rooms, recent conversations), Friends,
+  Servers and Mentions tabs, server chat and DMs.
+- App: real avatars (Discord's default for accounts without one), server icons and banners,
+  image attachment previews, through the core's image route.
+- App: replies, reactions, edit and delete of your own messages, DMs opened from a friend.
+- App: on-screen keyboard (Triangle) with an emoji row, held keys repeating, the 2000-character
+  limit and a draft per channel; quick replies stay a Cross away.
+- App: channel list on Options, servers open on their liveliest channel, history pages load
+  ahead of the focus, a marker at the start of a channel.
+- App: toast and chime for a live DM or mention; text size on R3 (Small, Medium, Large).
+- App: Malayalam, Devanagari, Tamil, Kannada, Telugu and Bengali fonts; the console's own
+  Japanese, Chinese, Korean, Arabic and Thai fonts.
+- Core: live account tree (users, presence, voice, read state), channel permissions from READY,
+  servers and channels created or removed while running, reactions and forwards in events.
+- Core: `/api/mentions`, `/api/image`, `/api/ack`, `/api/react`, `/api/dm`, `/api/edit`,
+  `/api/delete`; replies on `/api/send`; long-poll `/api/events?wait=`; `api_version` 1.
 - Core: text chat API for the native app, served to local callers only: guild, channel and DM
   lists (`/api/chat`), live message events (`/api/events`), message history
   (`/api/messages`) and sending (`/api/send`).
@@ -14,6 +31,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 - Core: heartbeats could be starved while the gateway delivered a steady stream of events.
+- App: SIGPIPE crash when the core closed a connection; abort in the JSON parser (the runtime
+  libc reported an empty decimal point; decimals parsed short).
+- Core: the TLS random generator was shared between threads without a lock.
+
+### Changed
+- Core: each web connection is served on its own thread; rate-limited REST calls retry once.
+- App: messages arrive by long poll; images load on their own thread; text fitting and
+  wrapping are cached; message lists are shared copy-on-write.
 
 ### Security
 - Core: chat routes refuse callers off the console; message and channel IDs are validated
