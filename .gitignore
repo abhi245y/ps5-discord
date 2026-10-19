@@ -19,3 +19,18 @@ AGENTS.md
 CLAUDE.md
 OTHER_AGENTS.md
 .claude/
+.grok/
+
+# design-tool artifacts, local only
+PRODUCT.md
+DESIGN.md
+.impeccable/
+design/
+
+# agent tool configs, never committed
+.codex/
+.cursor/
+.gemini/
+.github/hooks/
+.claude/
+.grok/
