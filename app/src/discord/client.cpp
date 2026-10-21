@@ -1121,7 +1121,7 @@ bool Client::poll_events()
     {
         const std::string type = text(ev, "t");
         const std::string channel = text(ev, "channel_id");
-        if (type == "call" || text(ev, "type") == "call") // a DM call changed: its calls come with the tree
+        if (type == "CALL") // a DM call changed: its calls come with the tree
         {
             last_chat_ms_ = 0;
             continue;
