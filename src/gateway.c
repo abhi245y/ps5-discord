@@ -7,6 +7,8 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <netdb.h>
+#include <sys/socket.h>
 
 #include <cJSON.h>
 
@@ -127,11 +129,13 @@ static void on_dispatch(gateway *g, const char *t, cJSON *d)
         status_user(name, cJSON_GetArraySize(cJSON_GetObjectItem(d, "guilds")),
                     cJSON_GetArraySize(cJSON_GetObjectItem(d, "private_channels")));
         status_state("ready");
+        status_note(NULL);
         LOG("gateway: READY as %s, %d guilds, %d DMs, resume via %s", name ? name : "?",
             cJSON_GetArraySize(cJSON_GetObjectItem(d, "guilds")),
             cJSON_GetArraySize(cJSON_GetObjectItem(d, "private_channels")), g->resume_url);
     } else if (strcmp(t, "RESUMED") == 0) {
         status_state("ready");
+        status_note(NULL);
         LOG("gateway: RESUMED");
     } else if (strcmp(t, "VOICE_STATE_UPDATE") == 0) {
         voice_on_state(d);
@@ -319,6 +323,19 @@ static int send_pending(gateway *g)
     return send_json(g, op_msg(OP_GUILD_SUBSCRIPTIONS_BULK, sub));
 }
 
+// Why the gateway cannot be reached, for the app's connecting screen. A failed name
+// lookup almost always means the console's DNS is down (e.g. nanoDNS not started).
+static void note_unreachable(void)
+{
+    struct addrinfo hints = {.ai_socktype = SOCK_STREAM}, *ai = NULL;
+    int dns_ok = getaddrinfo("gateway.discord.gg", "443", &hints, &ai) == 0;
+    if (ai)
+        freeaddrinfo(ai);
+    status_note(dns_ok ? "Can't reach Discord. Check the console's internet connection. Trying again."
+                       : "Can't reach Discord: the console can't look up its address. Check the console's "
+                         "internet connection and DNS (for example nanoDNS). Trying again.");
+}
+
 int gateway_run(const char *token)
 {
     gateway g = {.token = token, .seq = -1};
@@ -337,9 +354,11 @@ int gateway_run(const char *token)
         }
         if (g.heartbeat_ms) // got HELLO this time: the network is fine
             backoff = 1;
+        else if (backoff >= 2) // a second miss in a row: say why in the app
+            note_unreachable();
         g.heartbeat_ms = 0;
         LOG("gateway: connection ended (%d), retry in %d s", code, backoff);
         sleep((unsigned)backoff);
-        backoff = backoff < 60 ? backoff * 2 : 60;
+        backoff = backoff < 15 ? backoff * 2 : 15; // short cap: back soon once the network is
     }
 }

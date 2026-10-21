@@ -122,7 +122,9 @@ void draw_waiting(DrawList &list, const Ink &ink, const discord::Snapshot &s, fl
     else if (s.connection == discord::Connection::reconnecting)
         title = "Reconnecting…";
     ui::text(list, ink.fonts.display, title, card.cx(), card.y + 236.0f, 50.0f, kText, gfx::Align::center);
+    // The core's note says why Discord cannot be reached (no network, DNS down).
     const std::string line = !s.status_message.empty() ? s.status_message
+                             : !s.login_note.empty()    ? s.login_note
                              : s.connection == discord::Connection::reconnecting
                                  ? std::string("Lost connection to Discord. Trying again.")
                                  : std::string("Opening your Discord session.");
