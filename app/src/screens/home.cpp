@@ -274,7 +274,11 @@ void Home::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
                     open_ = HomeOpen{"", dm == s.dm_by_user.end() ? std::string() : dm->second, u.id};
                 }
             }
-            // ponytail: Join on a live room comes with voice (0.4.0).
+            else if (zone_ == kRooms && index_[kRooms] < static_cast<int>(s.live_rooms.size()))
+            {
+                const discord::Room &room = s.live_rooms[static_cast<std::size_t>(index_[kRooms])];
+                open_ = HomeOpen{room.guild_id, room.id, {}, true};
+            }
             feedback.play(open_ ? hui::audio::Cue::open : hui::audio::Cue::select);
         }
 
@@ -498,17 +502,20 @@ void Home::draw(const discord::Snapshot &s, DrawList &list) const
         radius = f.h * 0.5f;
     focus_outline(list, f, radius, 1.0f);
 
-    const ui::Hint hints[] = {
+    ui::Hint hints[4] = {
         {ui::Button::cross, "Select"},
         {ui::Button::circle, "Back"},
         {ui::Button::l1, "Tabs", ui::Button::r1},
-    }; // ponytail: Square for voice returns with the voice milestone
+    };
+    int count = 3;
+    if (s.voice.active())
+        hints[count++] = {ui::Button::square, "Voice"};
     ui::HintLayout layout;
     layout.size = 34.0f;
     layout.text_size = 23.0f;
     layout.cy = kHintsBaseline;
     layout.item_gap = 38.0f;
-    ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints, 3, kRight, true, layout);
+    ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints, count, kRight, true, layout);
 }
 
 } // namespace screens

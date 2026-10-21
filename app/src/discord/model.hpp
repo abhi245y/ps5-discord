@@ -179,14 +179,58 @@ inline std::string plain_text(const Message &m, bool raw = false)
     return out;
 }
 
-struct Voice // the account's own voice connection
+// The core's voice state (GET /api/voice, docs/voice-api.md).
+enum class VoiceState : std::uint8_t
 {
-    bool connected = false;
-    std::string room_name;
+    idle,
+    joining,
+    connecting,
+    securing,
+    connected,
+    error,
+};
+
+// The account's own voice connection: state and self mute from /api/voice,
+// names and member count worked out from the chat tree.
+struct Voice
+{
+    VoiceState state = VoiceState::idle;
+    std::string channel_id;   // the room or DM call we are in; empty when idle
+    std::string guild_id;     // empty for a DM call
+    std::string room_name;    // "Raid Night", or the other person's name in a DM call
     std::string guild_name;
     int member_count = 0;
     bool muted = false;
     bool deafened = false;
+    int ping_ms = 0;           // voice gateway heartbeat, 0 when unknown
+    bool secure = false;       // the DAVE session is up
+    std::int64_t since_ms = 0; // when it became connected (epoch ms), 0 otherwise
+    std::string error;         // a sentence, when state is error
+
+    bool active() const
+    {
+        return state != VoiceState::idle;
+    }
+    bool dm() const // a DM call: no guild
+    {
+        return active() && guild_id.empty();
+    }
+};
+
+// Someone in a voice channel (or a DM call).
+struct VoiceSeat
+{
+    std::string user_id;
+    bool muted = false;
+    bool deafened = false;
+};
+
+// A DM call going on, or ringing (the chat tree's "calls").
+struct Call
+{
+    std::string channel_id; // the DM
+    std::string peer_id;    // the other person in the DM, empty if unknown
+    std::vector<std::string> ringing; // user ids the call still rings
 };
 
 enum class Connection : std::uint8_t
@@ -236,6 +280,8 @@ struct Snapshot
     std::map<std::string, std::string> dm_by_user; // one-to-one DM channel by the other person's id
     Notice notice; // the latest live DM or mention
     Voice voice;
+    std::map<std::string, std::vector<VoiceSeat>> seats; // by channel id: rooms and DM calls
+    std::vector<Call> calls;
     int friends_online = 0;
     int unread_total = 0;
     int mention_count = 0; // unread mentions
@@ -250,5 +296,7 @@ inline std::vector<Message> &edit_messages(Snapshot &s, const std::string &chann
     return *slot;
 }
 const Guild *find_guild(const Snapshot &snapshot, const std::string &id);
+// The DM call that rings us (we are in the ring's list), or nullptr.
+const Call *ringing_call(const Snapshot &snapshot);
 
 } // namespace discord

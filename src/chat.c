@@ -16,7 +16,8 @@ static char token[256];
 // The live account, served whole by /api/chat:
 //   me, guilds[] (text channels with last_message_id, voice rooms), dms[],
 //   users{id: user}, friends[ids], presence{id: {status, activity}},
-//   voice{channel_id: [states]}, reads{channel_id: {last_read, mentions}}
+//   voice{channel_id: [states]}, reads{channel_id: {last_read, mentions}},
+//   calls{channel_id: {ringing[ids], message_id}} (DM calls in progress or ringing)
 static cJSON *tree;
 static char *events[EVENT_RING];
 static long next_event; // sequence number of the next event
@@ -365,6 +366,7 @@ static void load_ready(cJSON *d)
     cJSON_AddObjectToObject(t, "presence");
     cJSON_AddObjectToObject(t, "voice");
     cJSON_AddObjectToObject(t, "reads");
+    cJSON_AddObjectToObject(t, "calls");
     cJSON_AddNullToObject(t, "my_voice");
     cJSON_ArrayForEach(c, cJSON_GetObjectItem(d, "users"))
         remember_user(c);
@@ -435,6 +437,17 @@ static void load_supplemental(cJSON *d)
     }
 }
 
+// Adds e to the event ring and wakes the long polls. Lock held; e stays the caller's.
+static void store_event(cJSON *e)
+{
+    cJSON_AddNumberToObject(e, "seq", (double)next_event);
+    char *s = cJSON_PrintUnformatted(e);
+    free(events[next_event % EVENT_RING]);
+    events[next_event % EVENT_RING] = s;
+    next_event++;
+    pthread_cond_broadcast(&event_ready);
+}
+
 static void push_event(const char *type, cJSON *d)
 {
     cJSON *e = cJSON_CreateObject();
@@ -479,12 +492,39 @@ static void push_event(const char *type, cJSON *d)
         if (a)
             cJSON_AddItemToObject(e, "author", trim_user(a));
     }
-    cJSON_AddNumberToObject(e, "seq", (double)next_event);
-    char *s = cJSON_PrintUnformatted(e);
-    free(events[next_event % EVENT_RING]);
-    events[next_event % EVENT_RING] = s;
-    next_event++;
-    pthread_cond_broadcast(&event_ready);
+    store_event(e);
+    cJSON_Delete(e);
+}
+
+// CALL_CREATE / CALL_UPDATE / CALL_DELETE. The calls entry holds who is ringing; the
+// event tells the app to look (the app's ring screen does not wait for a tree refresh).
+static void call_changed(cJSON *d, int gone)
+{
+    const char *cid = str(d, "channel_id");
+    if (!cid)
+        return;
+    cJSON *calls = cJSON_GetObjectItem(tree, "calls");
+    // The caller is kept while the ring message is the same one (CALL_UPDATE re-sends the call).
+    char caller[24] = "";
+    cJSON *old = cJSON_GetObjectItem(calls, cid);
+    if (old && !gone && strcmp(str(old, "message_id") ? str(old, "message_id") : "", str(d, "message_id") ? str(d, "message_id") : "") == 0)
+        snprintf(caller, sizeof caller, "%s", str(old, "caller") ? str(old, "caller") : "");
+    cJSON_DeleteItemFromObject(calls, cid);
+    if (!gone) {
+        cJSON *c = cJSON_AddObjectToObject(calls, cid), *r, *vs;
+        cJSON *ringing = cJSON_AddArrayToObject(c, "ringing");
+        cJSON_ArrayForEach(r, cJSON_GetObjectItem(d, "ringing"))
+            if (cJSON_IsString(r))
+                cJSON_AddItemToArray(ringing, cJSON_CreateString(r->valuestring));
+        set_string(c, "message_id", str(d, "message_id"));
+        set_string(c, "caller", caller);
+        cJSON_ArrayForEach(vs, cJSON_GetObjectItem(d, "voice_states"))
+            set_voice(vs);
+    }
+    cJSON *e = cJSON_CreateObject();
+    cJSON_AddStringToObject(e, "t", "CALL");       // docs/voice-api.md
+    cJSON_AddStringToObject(e, "channel", cid);
+    store_event(e);
     cJSON_Delete(e);
 }
 
@@ -494,6 +534,13 @@ static void message_created(cJSON *d)
     const char *id = str(d, "id");
     if (!channel_id || !id)
         return;
+    // A call's ring message (type 3) names who started the call.
+    cJSON *call = cJSON_GetObjectItem(cJSON_GetObjectItem(tree, "calls"), channel_id);
+    if (call && (int)cJSON_GetNumberValue(cJSON_GetObjectItem(d, "type")) == 3 &&
+        strcmp(str(call, "message_id") ? str(call, "message_id") : "", id) == 0) {
+        const char *who = str(cJSON_GetObjectItem(d, "author"), "id");
+        set_string(call, "caller", who ? who : "");
+    }
     cJSON *c = find_channel(channel_id);
     if (c)
         set_string(c, "last_message_id", id);
@@ -537,6 +584,10 @@ void chat_dispatch(const char *type, cJSON *d)
         set_presence(str(cJSON_GetObjectItem(d, "user"), "id"), str(d, "status"), cJSON_GetObjectItem(d, "activities"));
     else if (strcmp(type, "VOICE_STATE_UPDATE") == 0)
         set_voice(d);
+    else if (strcmp(type, "CALL_CREATE") == 0 || strcmp(type, "CALL_UPDATE") == 0)
+        call_changed(d, 0);
+    else if (strcmp(type, "CALL_DELETE") == 0)
+        call_changed(d, 1);
     else if (strcmp(type, "GUILD_CREATE") == 0 || strcmp(type, "GUILD_DELETE") == 0)
         guild_changed(d, type[6] == 'C');
     else if ((strcmp(type, "CHANNEL_CREATE") == 0 || strcmp(type, "CHANNEL_UPDATE") == 0) && guild_of(str(d, "guild_id")))
@@ -581,6 +632,27 @@ void chat_dispatch(const char *type, cJSON *d)
         push_event(type, d);
     }
     pthread_mutex_unlock(&lock);
+}
+
+int chat_me_id(char *out, size_t cap)
+{
+    int ok = 0;
+    pthread_mutex_lock(&lock);
+    const char *id = tree ? str(cJSON_GetObjectItem(tree, "me"), "id") : NULL;
+    if (id) {
+        snprintf(out, cap, "%s", id);
+        ok = 1;
+    }
+    pthread_mutex_unlock(&lock);
+    return ok;
+}
+
+int chat_call_active(const char *channel_id)
+{
+    pthread_mutex_lock(&lock);
+    int on = tree && cJSON_GetObjectItem(cJSON_GetObjectItem(tree, "calls"), channel_id) != NULL;
+    pthread_mutex_unlock(&lock);
+    return on;
 }
 
 void chat_key(int usage, int mods, int led)

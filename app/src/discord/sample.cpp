@@ -9,6 +9,8 @@
 
 #include "discord/sample.hpp"
 
+#include <algorithm>
+
 namespace discord
 {
 
@@ -27,6 +29,18 @@ const Guild *find_guild(const Snapshot &snapshot, const std::string &id)
     for (const Guild &guild : snapshot.guilds)
         if (guild.id == id)
             return &guild;
+    return nullptr;
+}
+
+const Call *ringing_call(const Snapshot &snapshot)
+{
+    for (const Call &call : snapshot.calls)
+    {
+        const bool rings_me = std::find(call.ringing.begin(), call.ringing.end(), snapshot.me.id) != call.ringing.end();
+        const bool in_it = snapshot.voice.active() && snapshot.voice.channel_id == call.channel_id;
+        if (rings_me && !in_it)
+            return &call;
+    }
     return nullptr;
 }
 
@@ -74,10 +88,23 @@ Snapshot sample_snapshot()
         person("zed", "Zed", 11, Presence::online),
     };
     s.friends_online = 48;
+    s.dm_by_user["theo"] = "dm-theo";
 
-    s.voice = {true, "Raid Night", "Night Shift", 18, true, false};
+    // In a call: the raid room, muted, with the people who are in it.
+    s.voice.state = VoiceState::connected;
+    s.voice.channel_id = "raid";
+    s.voice.guild_id = "nightshift";
+    s.voice.room_name = "Raid Night";
+    s.voice.guild_name = "Night Shift";
+    s.voice.muted = true;
+    s.voice.ping_ms = 42;
+    s.voice.secure = true;
+    s.voice.since_ms = kNow - 42 * kMinute;
+    s.seats["raid"] = {{"me", true, false}, {"mira"}, {"theo"}, {"kenji", true, false}, {"ana"}, {"jo", false, true},
+                       {"sam"}, {"lily"}, {"rin"}, {"alex"}, {"nova"}, {"zed"}};
+    s.voice.member_count = static_cast<int>(s.seats["raid"].size());
 
-    Room raid{"raid", "nightshift", "Night Shift", "Raid Night", 0, {"mira", "ana", "lily", "nova"}, 18};
+    Room raid{"raid", "nightshift", "Night Shift", "Raid Night", 0, {"mira", "ana", "lily", "nova"}, 12};
     Room race{"race", "speedrun", "Speedrun Lab", "Race Room", 1, {"theo", "sam", "kenji"}, 6};
     Room chill{"chill", "coop", "Co-op Club", "Chill", 2, {"kenji", "ana", "jo", "sam"}, 9};
     Room lake{"lake", "photo", "Photo Mode", "Golden Hour", 3, {"rin", "zed"}, 4};
@@ -177,8 +204,97 @@ Snapshot sample_snapshot()
 namespace discord
 {
 
+namespace
+{
+
+// The voice requests, done the way the core would finish them (at once).
+void apply_voice(Snapshot &s, const Request &r)
+{
+    const std::string me = s.me.id;
+    auto drop_me = [&](const std::string &channel) {
+        auto &seats = s.seats[channel];
+        seats.erase(std::remove_if(seats.begin(), seats.end(), [&](const VoiceSeat &seat) { return seat.user_id == me; }),
+                    seats.end());
+    };
+    auto stop_ringing = [&](const std::string &channel) {
+        for (Call &call : s.calls)
+            if (call.channel_id == channel)
+                call.ringing.erase(std::remove(call.ringing.begin(), call.ringing.end(), me), call.ringing.end());
+    };
+    switch (r.kind)
+    {
+    case Request::Kind::voice_join:
+    case Request::Kind::voice_call:
+    case Request::Kind::voice_answer:
+        if (s.voice.active())
+            drop_me(s.voice.channel_id); // moving: out of the old room first
+        drop_me(r.channel_id);            // and no second seat in the new one
+        if (r.kind == Request::Kind::voice_answer)
+            stop_ringing(r.channel_id);
+        if (r.kind == Request::Kind::voice_call)
+        {
+            // A call rings the other person until they answer.
+            std::string peer;
+            for (const auto &[user_id, channel] : s.dm_by_user)
+                if (channel == r.channel_id)
+                    peer = user_id;
+            auto call = std::find_if(s.calls.begin(), s.calls.end(), [&](const Call &c) { return c.channel_id == r.channel_id; });
+            if (call == s.calls.end())
+            {
+                s.calls.push_back(Call{r.channel_id, peer, {}});
+                call = s.calls.end() - 1;
+            }
+            call->ringing.clear();
+            if (!peer.empty())
+                call->ringing.push_back(peer);
+        }
+        s.voice.state = VoiceState::connected;
+        s.voice.channel_id = r.channel_id;
+        s.voice.guild_id = r.kind == Request::Kind::voice_join ? r.guild_id : std::string();
+        s.voice.since_ms = s.now_ms;
+        s.seats[r.channel_id].push_back({me, s.voice.muted, s.voice.deafened});
+        break;
+    case Request::Kind::voice_decline:
+        stop_ringing(r.channel_id);
+        break;
+    case Request::Kind::voice_leave:
+        if (s.voice.active())
+            drop_me(s.voice.channel_id);
+        s.voice = Voice{};
+        break;
+    case Request::Kind::voice_set:
+        s.voice.muted = r.mute;
+        s.voice.deafened = r.deaf;
+        break;
+    default:
+        break;
+    }
+    // Names and counts follow the seats, as the client resolves them.
+    s.voice.member_count = s.voice.active() ? static_cast<int>(s.seats[s.voice.channel_id].size()) : 0;
+    s.voice.room_name.clear();
+    for (const Guild &g : s.guilds)
+        for (const Room &room : g.rooms)
+            if (room.id == s.voice.channel_id)
+            {
+                s.voice.room_name = room.name;
+                s.voice.guild_name = g.name;
+            }
+    if (s.voice.room_name.empty())
+        for (const auto &[user_id, channel] : s.dm_by_user)
+            if (channel == s.voice.channel_id)
+                if (const User *u = find_user(s, user_id))
+                    s.voice.room_name = u->name;
+}
+
+} // namespace
+
 void apply_sample(Snapshot &s, const Request &r)
 {
+    if (r.kind >= Request::Kind::voice_join)
+    {
+        apply_voice(s, r);
+        return;
+    }
     if (r.kind != Request::Kind::send)
         return; // history is all loaded already
     std::vector<Message> &list = edit_messages(s, r.channel_id);
@@ -196,6 +312,37 @@ void apply_sample(Snapshot &s, const Request &r)
             m.reply_text = original.content;
         }
     list.push_back(m);
+}
+
+} // namespace discord
+
+namespace discord
+{
+
+void sample_picture(Snapshot &s, const std::string &picture)
+{
+    // Tour pictures are named "<nn>-<design>-<step>": match the step's end.
+    auto is = [&](const char *step) {
+        const std::string tail = std::string("-") + step;
+        return picture.size() >= tail.size() && picture.compare(picture.size() - tail.size(), tail.size(), tail) == 0;
+    };
+    if (is("voice-incoming")) // Theo rings us, from the DM, while we are in no call
+    {
+        s.voice = Voice{};
+        s.calls = {Call{"dm-theo", "theo", {"me"}}};
+    }
+    else if (is("voice-error")) // still in the raid room, which has failed
+    {
+        s.voice.state = VoiceState::error;
+        s.voice.channel_id = "raid";
+        s.voice.guild_id = "nightshift";
+        s.voice.room_name = "Raid Night";
+        s.voice.guild_name = "Night Shift";
+        s.voice.member_count = static_cast<int>(s.seats["raid"].size());
+        s.voice.ping_ms = 0;
+        s.voice.since_ms = 0;
+        s.voice.error = "The voice server closed the connection. Join again to get back in.";
+    }
 }
 
 } // namespace discord

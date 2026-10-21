@@ -23,6 +23,12 @@ struct Request
         prefetch,     // load history ahead of an open, without marking it read
         edit,         // replace message_id's content (the account's own message)
         remove,       // delete message_id (the account's own message)
+        voice_join,   // join a server voice channel: guild_id, channel_id
+        voice_call,   // join a DM's call, ringing the other side: channel_id
+        voice_answer, // join a DM's call that rings us: channel_id
+        voice_decline,// stop ringing us in channel_id
+        voice_leave,  // leave whatever we are in
+        voice_set,    // self mute and deafen: mute, deaf
     };
     Kind kind = Kind::open_channel;
     std::string guild_id; // empty for a DM
@@ -33,6 +39,8 @@ struct Request
     std::string emoji;    // a Unicode emoji, for react
     std::string user_id;  // for open_dm
     std::string nonce;    // set by the client for send: matches the gateway's echo
+    bool mute = false;    // voice_set
+    bool deaf = false;    // voice_set
 };
 
 } // namespace discord

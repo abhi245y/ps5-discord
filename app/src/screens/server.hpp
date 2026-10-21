@@ -34,6 +34,13 @@ class Server
         open_.reset();
         return out;
     }
+    // The voice room Cross picked during the last update, once (the app joins it).
+    std::optional<std::string> take_room()
+    {
+        std::optional<std::string> out = std::move(room_);
+        room_.reset();
+        return out;
+    }
 
   private:
     enum Zone : int
@@ -55,8 +62,8 @@ class Server
     int zone_ = kChannels;
     std::array<int, kZones> index_{};
     std::array<hui::tween::Spring, kZones> scroll_{};
-    float soon_ = 0.0f; // seconds left on the "voice is coming" note
     std::optional<std::string> open_;
+    std::optional<std::string> room_;
 };
 
 } // namespace screens

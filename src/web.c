@@ -19,6 +19,7 @@
 #include "log.h"
 #include "ratelimit.h"
 #include "status.h"
+#include "voice.h"
 #include "browser_auth.h"
 
 #ifdef __PROSPERO__
@@ -288,6 +289,127 @@ static void api_dm(int c, const char *body)
     reply_rest(c, rest("POST", "/users/@me/channels", json));
 }
 
+// Voice (docs/voice-api.md). Each refusal is kept for GET /api/voice ("refused") and
+// the next accepted command clears it.
+static void reply_ok(int c)
+{
+    voice_refuse("");
+    reply(c, "202 Accepted", "application/json", "{\"ok\":true}", 11);
+}
+
+// 400/409 with a short reason the app can show.
+static void refuse(int c, const char *status, const char *why)
+{
+    voice_refuse(why);
+    reply(c, status, "text/plain", why, strlen(why));
+}
+
+// The routes need a signed-in account: 409 until READY.
+static int signed_in(int c)
+{
+    char me[32];
+    if (chat_me_id(me, sizeof me))
+        return 1;
+    refuse(c, "409 Conflict", "Sign in first.");
+    return 0;
+}
+
+// The body's "channel" (a snowflake), or NULL after a 400.
+static const char *body_channel(int c, cJSON *in)
+{
+    const char *channel = cJSON_GetStringValue(cJSON_GetObjectItem(in, "channel"));
+    if (channel && is_id(channel))
+        return channel;
+    refuse(c, "400 Bad Request", "That channel id is not valid.");
+    return NULL;
+}
+
+// Join a server voice channel: {channel, guild}. The gateway thread sends op 4.
+static void api_voice_join(int c, const char *body)
+{
+    cJSON *in = cJSON_Parse(body ? body : "");
+    const char *guild = cJSON_GetStringValue(cJSON_GetObjectItem(in, "guild"));
+    const char *channel = body_channel(c, in);
+    if (channel && (!guild || !is_id(guild))) {
+        refuse(c, "400 Bad Request", "That server id is not valid.");
+        channel = NULL;
+    }
+    if (channel) {
+        voice_join(guild, channel);
+        reply_ok(c);
+    }
+    cJSON_Delete(in);
+}
+
+// Join a DM call: {channel}. With no call running, rings the other side first (answer is the
+// same: the ring is already on, so no new ring is sent).
+static void api_voice_call(int c, const char *body)
+{
+    cJSON *in = cJSON_Parse(body ? body : "");
+    const char *channel = body_channel(c, in);
+    if (channel && !chat_call_active(channel)) {
+        char path[96];
+        snprintf(path, sizeof path, "/channels/%s/call/ring", channel);
+        http_response res = rest("POST", path, "{\"recipients\":null}");
+        free(res.body);
+        if (res.status < 200 || res.status > 299) {
+            refuse(c, "409 Conflict", "Discord would not ring that call.");
+            channel = NULL;
+        }
+    }
+    if (channel) {
+        voice_join(NULL, channel);
+        reply_ok(c);
+    }
+    cJSON_Delete(in);
+}
+
+// Stop ringing us on a DM call: {channel}. We do not join it.
+static void api_voice_decline(int c, const char *body)
+{
+    char me[32], path[96], json[96];
+    if (!chat_me_id(me, sizeof me))
+        return;
+    cJSON *in = cJSON_Parse(body ? body : "");
+    const char *channel = body_channel(c, in);
+    cJSON_Delete(in);
+    if (!channel)
+        return;
+    snprintf(path, sizeof path, "/channels/%s/call/stop-ringing", channel);
+    snprintf(json, sizeof json, "{\"recipients\":[\"%s\"]}", me);
+    http_response res = rest("POST", path, json);
+    free(res.body);
+    if (res.status >= 200 && res.status <= 299)
+        reply_ok(c);
+    else
+        refuse(c, "409 Conflict", "Discord would not stop the ring.");
+}
+
+// Leave whatever we are in: no body.
+static void api_voice_leave(int c)
+{
+    voice_leave();
+    reply_ok(c);
+}
+
+// Self mute and deafen: {mute, deaf}, each optional. 409 when not in a call.
+static void api_voice_set(int c, const char *body)
+{
+    cJSON *in = cJSON_Parse(body ? body : "");
+    cJSON *m = cJSON_GetObjectItem(in, "mute"), *d = cJSON_GetObjectItem(in, "deaf");
+    if ((m && !cJSON_IsBool(m)) || (d && !cJSON_IsBool(d))) {
+        cJSON_Delete(in);
+        refuse(c, "400 Bad Request", "mute and deaf must be true or false.");
+        return;
+    }
+    int r = voice_set_flags(m ? cJSON_IsTrue(m) : -1, d ? cJSON_IsTrue(d) : -1);
+    cJSON_Delete(in);
+    if (r == 0)
+        reply_ok(c);
+    else
+        refuse(c, "409 Conflict", "Not in a call.");
+}
+
 // Where a system library's function sits in the app. A title's own dlsym finds
 // nothing on 13.00, so the app asks the core, which reads the app's library
 // table through the kernel; the app then calls the address itself.
@@ -420,6 +542,21 @@ static void handle(int c, int local)
         api_react(c, body);
     } else if (post && strcmp(path, "/api/dm") == 0) {
         api_dm(c, body);
+    } else if (get && strcmp(path, "/api/voice") == 0) {
+        reply_json(c, voice_state_json());
+    } else if (post && strncmp(path, "/api/voice/", 11) == 0 && signed_in(c)) {
+        if (strcmp(path, "/api/voice/join") == 0)
+            api_voice_join(c, body);
+        else if (strcmp(path, "/api/voice/call") == 0 || strcmp(path, "/api/voice/answer") == 0)
+            api_voice_call(c, body);
+        else if (strcmp(path, "/api/voice/decline") == 0)
+            api_voice_decline(c, body);
+        else if (strcmp(path, "/api/voice/leave") == 0)
+            api_voice_leave(c);
+        else if (strcmp(path, "/api/voice/set") == 0)
+            api_voice_set(c, body);
+        else
+            reply(c, "404 Not Found", "text/plain", "not found", 9);
     } else if (post && strcmp(path, "/api/edit") == 0) {
         api_change(c, body, 0);
     } else if (post && strcmp(path, "/api/delete") == 0) {

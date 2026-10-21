@@ -23,10 +23,12 @@
 #include "browser_storage.h"
 #include "status.h"
 #include "web.h"
+#include "voice.h"
 #include "tls.h"
 
 #ifdef __PROSPERO__
 #define DATA_DIR "/data/ps5-discord"
+int sceKernelSetProcessName(const char *name);
 #else
 #define DATA_DIR "."
 #endif
@@ -100,6 +102,11 @@ static void *control_loop(void *arg)
 
 int main(void)
 {
+#ifdef __PROSPERO__
+    // elfldr names every payload "payload.elf"; payload managers list only names ending in
+    // .elf, and the name holds 19 characters at most.
+    sceKernelSetProcessName("discord-core.elf");
+#endif
     // A peer that hangs up mid-write (the app, a browser, Discord) must not kill the core.
     signal(SIGPIPE, SIG_IGN);
     char token[256];
@@ -111,6 +118,7 @@ int main(void)
     pthread_t t;
     pthread_create(&t, NULL, control_loop, (void *)(intptr_t)control);
     srand((unsigned)time(NULL) ^ (unsigned)getpid());
+    voice_init(DATA_DIR);
     if (tls_global_init() != 0) {
         LOG("tls init failed");
         return 1;

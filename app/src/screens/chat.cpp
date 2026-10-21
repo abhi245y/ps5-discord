@@ -511,6 +511,8 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
 
     if (mode_ == Mode::profile)
     {
+        if (input.is_pressed(Action::confirm)) // Cross: call them
+            voice_ = true;
         if (input.is_pressed(Action::back) || input.is_pressed(Action::menu) || input.is_pressed(Action::confirm))
         {
             mode_ = Mode::browse;
@@ -693,6 +695,8 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
     }
 
     // Browsing.
+    if (input.is_pressed(Action::west)) // Square: call the DM, or open the voice room you are in
+        voice_ = true;
     if (dm() && input.is_pressed(Action::menu) && dm_person(s))
     {
         mode_ = Mode::profile;
@@ -846,8 +850,16 @@ void Chat::draw_header(const discord::Snapshot &s, DrawList &list) const
             list.circle(kMargin + 146.0f, kHeaderY + 86.0f, 7.0f, dot);
             ui::text(list, ink_.fonts.regular, line, kMargin + 164.0f, kHeaderY + 95.0f, 25.0f, kDim);
         }
-        // Profile on Options. ponytail: Call returns with voice (docs/voice.md).
+        // Call (Square) and Profile (Options). The call's state sits to its left.
         const Rect profile{kRight - 220.0f, kHeaderY + 4.0f, 220.0f, 64.0f};
+        const Rect call{profile.x - 186.0f, kHeaderY + 4.0f, 170.0f, 64.0f};
+        const bool calling = s.voice.active() && s.voice.channel_id == channel_id_;
+        list.rounded_rect(call, 32.0f, kRaised);
+        ui::draw_button(list, ink_.fonts, hint_glyphs(), ui::Button::square, call.x + 40.0f, call.cy(), 34.0f);
+        ui::text(list, ink_.fonts.semibold, calling ? "In call" : "Call", call.x + 84.0f, call.cy() + 9.0f, 26.0f,
+                 calling ? kOnline : kText);
+        if (s.voice.active())
+            voice_dock(list, ink_, s, kHeaderY, kHeaderH, call.x - 16.0f);
         list.rounded_rect(profile, 32.0f, kRaised);
         ui::draw_button(list, ink_.fonts, hint_glyphs(), ui::Button::options, profile.x + 40.0f, profile.cy(),
                         34.0f);
@@ -864,7 +876,7 @@ void Chat::draw_header(const discord::Snapshot &s, DrawList &list) const
     x += ui::text(list, ink_.fonts.display, g ? g->name : std::string(), x, 78.0f, 52.0f, kText);
     x += ui::text(list, ink_.fonts.display, "  /  ", x, 78.0f, 52.0f, kFaint);
     ui::text(list, ink_.fonts.display, "#" + channel_name, x, 78.0f, 52.0f, Color::rgb(0xb9bfdc));
-    voice_pill(list, ink_, s.voice, kHeaderY, kHeaderH);
+    voice_dock(list, ink_, s, kHeaderY, kHeaderH, kRight);
 
     constexpr float kChipGap = 16.0f;
     // Channel chips: the run starts late enough that the open channel is in it.
@@ -1280,11 +1292,15 @@ void Chat::draw(const discord::Snapshot &s, DrawList &list) const
     if (focus_ >= 0)
         draw_actions(s, list, focused_rect);
 
-    ui::Hint hints[5] = {{ui::Button::cross, "Select"}, {ui::Button::circle, "Back"}, {ui::Button::triangle, "Type"},
+    ui::Hint hints[7] = {{ui::Button::cross, "Select"}, {ui::Button::circle, "Back"}, {ui::Button::triangle, "Type"},
                          {ui::Button::right_stick, "Text size"}, {}};
     int count = 4;
     if (!dm())
         hints[count++] = {ui::Button::options, "Channels"};
+    if (dm())
+        hints[count++] = {ui::Button::square, s.voice.active() && s.voice.channel_id == channel_id_ ? "In call" : "Call"};
+    else if (s.voice.active())
+        hints[count++] = {ui::Button::square, "Voice"};
     ui::HintLayout layout;
     layout.size = 34.0f;
     layout.text_size = 23.0f;
@@ -1314,12 +1330,12 @@ void Chat::draw(const discord::Snapshot &s, DrawList &list) const
             else
                 ui::text(list, ink_.fonts.regular, fit(ink_.fonts.regular, status_line(*u), 26.0f, card.w - 60.0f),
                          card.cx(), card.y + 362.0f, 26.0f, kDim, gfx::Align::center);
-            const ui::Hint hints[] = {{ui::Button::circle, "Close"}};
+            const ui::Hint hints[] = {{ui::Button::cross, "Call"}, {ui::Button::circle, "Close"}};
             ui::HintLayout layout;
             layout.size = 30.0f;
             layout.text_size = 22.0f;
             layout.cy = card.y + card.h - 40.0f;
-            ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints, 1, card.x + card.w - 30.0f, true, layout);
+            ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints, 2, card.x + card.w - 30.0f, true, layout);
         }
     if (size_note_ > 0.0f)
     {

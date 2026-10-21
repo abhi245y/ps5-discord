@@ -3,7 +3,7 @@
 //
 //   - a header with its icon, name and size, and the voice pill;
 //   - its banner (or invite splash, else art);
-//   - Voice rooms: who is in each (Join waits for the voice milestone);
+//   - Voice rooms: who is in each, and Cross joins one;
 //   - Text channels: by latest activity, with unread counts and the last line
 //     when its history is already loaded.
 // Up/Down pick the row, Left/Right walk it, Cross opens a channel.
@@ -67,7 +67,6 @@ void Server::open(const std::string &guild_id)
         zone_ = kChannels;
     }
     guild_id_ = guild_id;
-    soon_ = 0.0f;
 }
 
 const discord::Guild *Server::find(const discord::Snapshot &s) const
@@ -111,7 +110,6 @@ Rect Server::item_rect(int zone, int index) const
 
 bool Server::update(const discord::Snapshot &s, const hui::InputFrame &input, float dt, hui::ui::Feedback &feedback)
 {
-    soon_ = std::max(0.0f, soon_ - dt);
     const discord::Guild *g = find(s);
     if (!g || input.is_pressed(Action::back))
     {
@@ -155,8 +153,8 @@ bool Server::update(const discord::Snapshot &s, const hui::InputFrame &input, fl
         }
         else
         {
-            soon_ = 2.0f; // ponytail: Join lands with the voice milestone (docs/voice.md)
-            feedback.play(hui::audio::Cue::error);
+            room_ = rooms(*g)[static_cast<std::size_t>(index_[kRooms])]->id;
+            feedback.play(hui::audio::Cue::open);
         }
     }
 
@@ -185,14 +183,14 @@ void Server::draw(const discord::Snapshot &s, DrawList &list) const
     art_circle(list, ink_, g->art, initial_of(g->name), kMargin + kIconR, kIconCy, kIconR, g->icon_url);
     list.ring(kMargin + kIconR, kIconCy, kIconR + 3.0f, 3.0f, kLine);
     const float tx = kMargin + kIconR * 2.0f + 32.0f;
-    const float title_w = s.voice.connected ? 1000.0f : 1600.0f;
+    const float title_w = s.voice.active() ? 1000.0f : 1600.0f;
     ui::text(list, ink_.fonts.display, fit(ink_.fonts.display, g->name, 60.0f, title_w), tx, kIconCy - 4.0f, 60.0f, kText);
     const std::vector<const discord::Channel *> chans = channels(*g);
     std::string sub = compact(g->members) + " members";
     if (g->unread > 0)
         sub += " · " + std::to_string(g->unread) + " mentions";
     ui::text(list, ink_.fonts.regular, sub, tx, kIconCy + 44.0f, 27.0f, kDim);
-    voice_pill(list, ink_, s.voice, 46.0f, 64.0f);
+    voice_dock(list, ink_, s, 46.0f, 64.0f, kRight);
 
     // Banner.
     const Rect banner{kMargin, kBannerY, kRowWidth, kBannerH};
@@ -253,22 +251,18 @@ void Server::draw(const discord::Snapshot &s, DrawList &list) const
         }
         if (focused)
         {
-            // Join, greyed until voice works; Cross says so.
+            // Cross joins the focused room; the room's own screen follows it.
+            const bool here = s.voice.active() && s.voice.channel_id == room.id;
             const Rect join{r.x + r.w - 236.0f, ay - 28.0f, 208.0f, 56.0f};
             list.rounded_rect(join, 28.0f, Color::rgb(0x16181d, 0.85f));
-            if (soon_ > 0.0f)
-                list.bordered_rect(join, 28.0f, Color::rgb(0, 0.0f), 2.0f, kCoral);
-            ui::text(list, ink_.fonts.semibold, "Join · soon", join.cx(), join.cy() + 9.0f, 24.0f, kDim,
-                     gfx::Align::center);
+            ui::text(list, ink_.fonts.semibold, here ? "In call" : "Join", join.cx(), join.cy() + 9.0f, 24.0f,
+                     here ? kOnline : kText, gfx::Align::center);
         }
         if (empty)
             list.pop_opacity();
         if (focused)
             focus_outline(list, r, kCardRadius + 4.0f, 1.0f);
     }
-    if (soon_ > 0.0f)
-        ui::text(list, ink_.fonts.regular, "Voice is coming soon. For now you can see who is in each room.", kRight,
-                 kRoomsLabel, 24.0f, kCoral, gfx::Align::right);
 
     // Text channels.
     row_label(list, ink_, kChannelsLabel, "Text channels", std::to_string(chans.size()));
@@ -314,13 +308,16 @@ void Server::draw(const discord::Snapshot &s, DrawList &list) const
             focus_outline(list, r, 20.0f, 1.0f);
     }
 
-    const ui::Hint hints[] = {{ui::Button::cross, "Select"}, {ui::Button::circle, "Back"}};
+    ui::Hint hints[3] = {{ui::Button::cross, "Select"}, {ui::Button::circle, "Back"}};
+    int count = 2;
+    if (s.voice.active())
+        hints[count++] = {ui::Button::square, "Voice"};
     ui::HintLayout layout;
     layout.size = 34.0f;
     layout.text_size = 23.0f;
     layout.cy = kHintsBaseline;
     layout.item_gap = 38.0f;
-    ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints, 2, kRight, true, layout);
+    ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints, count, kRight, true, layout);
 }
 
 } // namespace screens

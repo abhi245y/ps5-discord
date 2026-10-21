@@ -448,6 +448,47 @@ Message message_from(const json &m, const std::string &me_id)
     return out;
 }
 
+VoiceState voice_state_of(const std::string &state)
+{
+    if (state == "joining")
+        return VoiceState::joining;
+    if (state == "connecting")
+        return VoiceState::connecting;
+    if (state == "securing")
+        return VoiceState::securing;
+    if (state == "connected")
+        return VoiceState::connected;
+    if (state == "error")
+        return VoiceState::error;
+    return VoiceState::idle;
+}
+
+// The room's name, server and member count for the voice screens: a guild room
+// by its channel id, a DM call by the other person's name.
+void resolve_voice(Snapshot &s)
+{
+    Voice &v = s.voice;
+    v.room_name.clear();
+    v.guild_name.clear();
+    v.member_count = 0;
+    if (!v.active())
+        return;
+    const auto seats = s.seats.find(v.channel_id);
+    v.member_count = seats == s.seats.end() ? 0 : static_cast<int>(seats->second.size());
+    for (const Guild &g : s.guilds)
+        for (const Room &r : g.rooms)
+            if (r.id == v.channel_id)
+            {
+                v.room_name = r.name;
+                v.guild_name = g.name;
+            }
+    if (v.room_name.empty())
+        for (const auto &[user_id, channel] : s.dm_by_user)
+            if (channel == v.channel_id)
+                if (const User *u = find_user(s, user_id))
+                    v.room_name = u->name;
+}
+
 // Rebuilds the account part of s from /api/chat, keeping loaded messages and mentions.
 void apply_tree(Snapshot &s, const json &t)
 {
@@ -671,21 +712,33 @@ void apply_tree(Snapshot &s, const json &t)
         recent.resize(8);
     s.recent = recent;
 
-    // Your own voice connection.
-    s.voice = {};
-    const std::string my_room = text(t, "my_voice");
-    if (!my_room.empty() && rooms.count(my_room))
+    // Who is in each voice channel and DM call, for the voice screens.
+    s.seats.clear();
+    for (const auto &[channel, states] : voice.items())
     {
-        s.voice.connected = true;
-        s.voice.room_name = rooms[my_room].name;
-        s.voice.guild_name = rooms[my_room].guild_name;
-        const auto states = voice.find(my_room);
-        s.voice.member_count = states != voice.end() && states->is_array() ? static_cast<int>(states->size()) : 0;
-        if (states != voice.end() && states->is_array())
-            for (const json &st : *states)
-                if (text(st, "user_id") == s.me.id)
-                    s.voice.muted = st.value("self_mute", false);
+        std::vector<VoiceSeat> &seats = s.seats[channel];
+        if (states.is_array())
+            for (const json &st : states)
+                seats.push_back({text(st, "user_id"), st.value("self_mute", false), st.value("self_deaf", false)});
     }
+    // DM calls going on or ringing; a ring lists the people it still rings.
+    s.calls.clear();
+    if (t.contains("calls") && t["calls"].is_object())
+        for (const auto &[channel, c] : t["calls"].items())
+        {
+            Call call;
+            call.channel_id = channel;
+            for (const auto &[user_id, dm] : s.dm_by_user)
+                if (dm == channel)
+                    call.peer_id = user_id;
+            if (c.contains("ringing") && c["ringing"].is_array())
+                for (const json &id : c["ringing"])
+                    if (id.is_string())
+                        call.ringing.push_back(id.get<std::string>());
+            s.calls.push_back(call);
+        }
+    // The voice state itself comes from /api/voice (poll_voice); here only its names.
+    resolve_voice(s);
 }
 
 } // namespace
@@ -894,6 +947,9 @@ void Client::run()
             if (now - last_mentions_ms_ >= 30000)
                 poll_mentions();
         }
+        // Quick while in or joining voice, so the screens follow it; slower otherwise.
+        if (now - last_voice_ms_ >= (snapshot_.voice.active() ? 1000 : 4000))
+            poll_voice();
         for (;;)
         {
             Request request;
@@ -1006,6 +1062,31 @@ void Client::poll_chat()
     publish();
 }
 
+// GET /api/voice. A core without the route (or not answering) is idle.
+void Client::poll_voice()
+{
+    const Reply reply = http(port_, "GET", "/api/voice");
+    last_voice_ms_ = now_ms();
+    const json v = reply.status == 200 ? json::parse(reply.body, nullptr, false) : json::object();
+    std::lock_guard<std::mutex> lock(mutex_);
+    Voice &voice = snapshot_.voice;
+    voice = Voice{};
+    if (v.is_object())
+    {
+        voice.state = voice_state_of(text(v, "state"));
+        voice.channel_id = text(v, "channel");
+        voice.guild_id = text(v, "guild");
+        voice.muted = v.value("mute", false);
+        voice.deafened = v.value("deaf", false);
+        voice.ping_ms = static_cast<int>(v.value("ping_ms", 0.0));
+        voice.secure = v.value("secure", false);
+        voice.since_ms = static_cast<std::int64_t>(v.value("since_ms", 0.0));
+        voice.error = text(v, "error");
+    }
+    resolve_voice(snapshot_);
+    publish();
+}
+
 void Client::run_events()
 {
     while (!stop_)
@@ -1040,6 +1121,11 @@ bool Client::poll_events()
     {
         const std::string type = text(ev, "t");
         const std::string channel = text(ev, "channel_id");
+        if (type == "call" || text(ev, "type") == "call") // a DM call changed: its calls come with the tree
+        {
+            last_chat_ms_ = 0;
+            continue;
+        }
         if (type == "KEY")
         {
             keys_.push_back({static_cast<std::uint16_t>(ev.value("usage", 0.0)),
@@ -1306,6 +1392,41 @@ void Client::handle(const Request &request)
             hui::sys::log("[CLIENT] %s failed (%d/%d)", request.kind == Request::Kind::edit ? "edit" : "delete",
                           reply.status, discord_status);
         break; // the gateway's MESSAGE_UPDATE / MESSAGE_DELETE changes the list
+    }
+    case Request::Kind::voice_join:
+    case Request::Kind::voice_call:
+    case Request::Kind::voice_answer:
+    case Request::Kind::voice_decline:
+    case Request::Kind::voice_leave:
+    case Request::Kind::voice_set: {
+        const char *path = "/api/voice/leave";
+        json body = json::object();
+        switch (request.kind)
+        {
+        case Request::Kind::voice_join:
+            path = "/api/voice/join";
+            body = {{"guild", request.guild_id}, {"channel", request.channel_id}};
+            break;
+        case Request::Kind::voice_call:
+        case Request::Kind::voice_answer:
+        case Request::Kind::voice_decline:
+            path = request.kind == Request::Kind::voice_call     ? "/api/voice/call"
+                   : request.kind == Request::Kind::voice_answer ? "/api/voice/answer"
+                                                                 : "/api/voice/decline";
+            body = {{"channel", request.channel_id}};
+            break;
+        case Request::Kind::voice_set:
+            path = "/api/voice/set";
+            body = {{"mute", request.mute}, {"deaf", request.deaf}};
+            break;
+        default:
+            break;
+        }
+        const Reply reply = http(port_, "POST", path, body.dump());
+        if (reply.status != 202)
+            hui::sys::log("[CLIENT] %s answered %d", path, reply.status);
+        last_voice_ms_ = 0; // the new state comes on the next poll
+        break;
     }
     case Request::Kind::open_dm: {
         const Reply reply = http(port_, "POST", "/api/dm", json{{"user", request.user_id}}.dump());

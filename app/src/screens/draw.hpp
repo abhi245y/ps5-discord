@@ -74,6 +74,8 @@ void mic_off(DrawList &list, float cx, float cy, float s, Color c);
 
 // The pill at the top right of every screen while in voice: room, count, muted.
 void voice_pill(DrawList &list, const Ink &ink, const discord::Voice &voice, float y, float h);
+// The same on a chat or server page: the room's faces too. Nothing while idle.
+void voice_dock(DrawList &list, const Ink &ink, const discord::Snapshot &snapshot, float y, float h, float right);
 
 // 213515 -> "213.5K": member counts of big servers.
 std::string compact(int n);

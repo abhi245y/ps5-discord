@@ -30,6 +30,7 @@ struct HomeOpen
     std::string guild_id; // empty for a DM
     std::string channel_id; // empty: the server's page, or the DM with user_id once it exists
     std::string user_id;
+    bool join = false; // a live room: join its voice (channel_id, guild_id)
 };
 
 class Home

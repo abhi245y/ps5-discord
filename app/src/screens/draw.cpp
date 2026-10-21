@@ -287,22 +287,96 @@ void mic_off(DrawList &list, float cx, float cy, float s, Color c)
     list.line(cx - s * 0.42f, cy - s * 0.5f, cx + s * 0.42f, cy + s * 0.42f, s * 0.08f, c);
 }
 
+// "Joining Raid Night…", "In Raid Night · 12", "Voice lost": what the voice pill and dock say.
+std::string voice_status(const discord::Voice &voice)
+{
+    const std::string room = voice.room_name.empty() ? std::string("voice") : voice.room_name;
+    switch (voice.state)
+    {
+    case discord::VoiceState::joining:
+        return "Joining " + room + "…";
+    case discord::VoiceState::connecting:
+        return "Connecting…";
+    case discord::VoiceState::securing:
+        return "Securing…";
+    case discord::VoiceState::connected:
+        if (voice.guild_id.empty()) // a DM call
+            return "Call with " + room;
+        return "In " + room + " · " + std::to_string(voice.member_count);
+    case discord::VoiceState::error:
+        return "Voice lost";
+    case discord::VoiceState::idle:
+        break;
+    }
+    return {};
+}
+
+// The state's dot: coral while live, red when it failed, dim while it is still coming up.
+Color voice_dot(const discord::Voice &voice)
+{
+    if (voice.state == discord::VoiceState::error)
+        return kDnd;
+    return voice.state == discord::VoiceState::connected ? kCoral : kDim;
+}
+
 void voice_pill(DrawList &list, const Ink &ink, const discord::Voice &voice, float y, float h)
 {
-    if (!voice.connected)
+    if (!voice.active())
         return;
-    std::string text = "In " + voice.room_name + " · " + std::to_string(voice.member_count);
-    if (voice.muted)
-        text += " · muted";
+    const std::string text = voice_status(voice) + (voice.muted && voice.state == discord::VoiceState::connected ? " · muted" : "");
     const float right = 1920.0f - style::kMargin;
     const float tw = ink.fonts.regular.measure(text, 24.0f);
-    const float w = tw + (voice.muted ? 120.0f : 84.0f);
+    const bool muted = voice.muted && voice.state == discord::VoiceState::connected;
+    const float w = tw + (muted ? 120.0f : 84.0f);
     const Rect pill{right - w, y, w, h};
     list.rounded_rect(pill, pill.h * 0.5f, kRaised);
-    list.circle(pill.x + 36.0f, pill.cy(), 9.0f, kCoral);
+    list.circle(pill.x + 36.0f, pill.cy(), 9.0f, voice_dot(voice));
     hui::ui::text(list, ink.fonts.regular, text, pill.x + 60.0f, pill.cy() + 9.0f, 24.0f, kText);
-    if (voice.muted)
+    if (muted)
         mic_off(list, right - 38.0f, pill.cy(), 30.0f, kDim);
+}
+
+void voice_dock(DrawList &list, const Ink &ink, const discord::Snapshot &s, float y, float h, float right)
+{
+    const discord::Voice &voice = s.voice;
+    if (!voice.active())
+        return;
+    const std::string text = voice_status(voice);
+    const bool muted = voice.muted && voice.state == discord::VoiceState::connected;
+    const auto seats = s.seats.find(voice.channel_id);
+    const std::size_t people = seats == s.seats.end() ? 0 : seats->second.size();
+    // Faces: up to four, overlapping; a "+N" chip for the rest.
+    constexpr std::size_t kFaces = 4;
+    constexpr float kFaceR = 20.0f, kFaceStep = 28.0f;
+    const std::size_t shown = std::min(people, kFaces);
+    const float faces_w = shown == 0 ? 0.0f : kFaceStep * static_cast<float>(shown - 1) + kFaceR * 2.0f + 16.0f;
+    const float more_w = people > shown ? 64.0f : 0.0f;
+    const float tw = ink.fonts.regular.measure(text, 24.0f);
+    const float icons_w = muted ? 44.0f : 0.0f;
+    const float w = 60.0f + tw + faces_w + more_w + icons_w + 24.0f;
+    const Rect dock{right - w, y, w, h};
+    list.rounded_rect(dock, dock.h * 0.5f, kRaised);
+    list.circle(dock.x + 36.0f, dock.cy(), 9.0f, voice_dot(voice));
+    hui::ui::text(list, ink.fonts.regular, text, dock.x + 60.0f, dock.cy() + 9.0f, 24.0f, kText);
+    float x = dock.x + 60.0f + tw + 24.0f;
+    if (seats != s.seats.end())
+        for (std::size_t i = 0; i < shown; ++i)
+        {
+            const discord::User *u = discord::find_user(s, seats->second[i].user_id);
+            if (!u)
+                continue;
+            const float cx = x + kFaceR;
+            list.circle(cx, dock.cy(), kFaceR + 3.0f, kRaised);
+            discord::User face = *u;
+            face.voice_room.clear();
+            avatar(list, ink, face, cx, dock.cy(), kFaceR, false);
+            x += kFaceStep;
+        }
+    if (more_w > 0.0f)
+        hui::ui::text(list, ink.fonts.semibold, "+" + std::to_string(people - shown), x + 14.0f, dock.cy() + 8.0f,
+                      21.0f, kDim);
+    if (muted)
+        mic_off(list, right - 38.0f, dock.cy(), 30.0f, kDim);
 }
 
 std::string compact(int n)

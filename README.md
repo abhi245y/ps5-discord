@@ -20,6 +20,7 @@ Builds on Linux with clang (no llvm-devel needed).
 
 ```sh
 make deps                        # pinned ps5-payload-sdk, mbedTLS, zlib, cJSON, qrcodegen, SQLite
+make dave                        # OpenSSL + mlspp + libdave into .deps/dave (slow; needs full perl)
 make                             # build/ps5-discord.elf
 make test                        # host self-checks (needs the app's deps: cd app && make deps)
 cd app && make                   # app folder in app/dist/PPSA99072, core bundled (build it first)
@@ -29,6 +30,13 @@ make stop PS5_HOST=<ps5-ip>
 
 `make host` builds the same core for Linux (state in the current directory) for
 testing against Discord without the console.
+
+**Voice needs libdave.** Since March 2026 Discord refuses voice calls (all but stage
+channels) from clients without DAVE end-to-end encryption. `make deps` does not fetch
+it: run `make dave` once per machine. Without `.deps/dave` the build still succeeds and
+the tests still pass, but it links a no-DAVE stub and every voice join fails (close code
+4017). Before any release or a build on a fresh machine, run `make dave` and check the
+"building the no-DAVE stub" warning does not appear.
 
 ## Use
 

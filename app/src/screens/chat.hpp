@@ -25,12 +25,23 @@ class Chat
     {
         return channel_id_;
     }
+    bool dm() const // a DM channel
+    {
+        return guild_id_.empty();
+    }
     void open(const discord::Snapshot &snapshot, const std::string &guild_id, const std::string &channel_id,
               std::vector<discord::Request> &requests);
     // Returns false when the screen asks to be left (Circle with nothing open).
     bool update(const discord::Snapshot &snapshot, const hui::InputFrame &input, float dt,
                 hui::ui::Feedback &feedback, std::vector<discord::Request> &requests);
     void draw(const discord::Snapshot &snapshot, DrawList &list) const;
+    // Square (or Cross on the DM's profile) asked for voice: once, then false.
+    bool take_voice()
+    {
+        const bool out = voice_;
+        voice_ = false;
+        return out;
+    }
 
   private:
     struct Row // one laid-out message, page coordinates measured up from the composer
@@ -64,10 +75,6 @@ class Chat
     bool can_send(const discord::Snapshot &s) const;
     bool start_typing(const discord::Snapshot &s, hui::ui::Feedback &feedback);
     const discord::User *dm_person(const discord::Snapshot &s) const;
-    bool dm() const
-    {
-        return guild_id_.empty();
-    }
     std::vector<const discord::Channel *> chips(const discord::Snapshot &snapshot) const;
 
     void draw_header(const discord::Snapshot &snapshot, DrawList &list) const;
@@ -96,6 +103,7 @@ class Chat
     std::string reply_to_; // message id the composer answers
     hui::tween::Spring scroll_; // pixels the list is pushed down (history above revealed)
     hui::tween::Spring menu_show_;
+    bool voice_ = false; // see take_voice
 };
 
 } // namespace screens

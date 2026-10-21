@@ -437,6 +437,7 @@ int main(int argc, char **argv)
         ++frames;
         if (!tour.capture().empty())
         {
+            discord::sample_picture(snapshot, tour.capture()); // states only the input cannot reach
             render(tour.capture());
             tour.capture_done();
         }

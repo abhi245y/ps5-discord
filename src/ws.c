@@ -92,7 +92,15 @@ int ws_open(ws_conn *ws, const char *url)
     host[hlen] = 0;
     snprintf(path, sizeof path, "%s%s", rest[hlen] == '/' ? "" : "/", rest + hlen);
 
-    if (tls_connect(&ws->tls, host, "443") != 0)
+    // host may carry ":port" (voice endpoints do); the default is 443.
+    char name[256], port[8] = "443";
+    snprintf(name, sizeof name, "%s", host);
+    char *colon = strrchr(name, ':');
+    if (colon) {
+        *colon = 0;
+        snprintf(port, sizeof port, "%s", colon + 1);
+    }
+    if (tls_connect(&ws->tls, name, port) != 0)
         return -1;
 
     char req[1024];

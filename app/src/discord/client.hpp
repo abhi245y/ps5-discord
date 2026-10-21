@@ -70,6 +70,7 @@ class Client
     void run();
     void poll_state();
     void poll_chat();
+    void poll_voice();
     bool poll_events(); // false: the core did not answer
     void poll_mentions();
     void handle(const Request &request);
@@ -97,6 +98,7 @@ class Client
     long events_next_ = -1; // -1: skip the backlog on first contact
     std::atomic<std::int64_t> last_chat_ms_{0}; // the events thread zeroes it to ask for a refresh
     std::int64_t last_mentions_ms_ = 0;
+    std::int64_t last_voice_ms_ = 0; // a voice command zeroes it: the state comes back at once
     std::string browser_error_; // client thread only; retained across state polls
     bool prefetched_ = false; // recent conversations' history asked for once after sign-in
     std::atomic<bool> ready_{false}; // read by the image thread too

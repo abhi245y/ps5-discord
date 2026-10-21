@@ -14,6 +14,7 @@
 #include "log.h"
 #include "props.h"
 #include "status.h"
+#include "voice.h"
 #include "ws.h"
 #include "zstream.h"
 
@@ -22,7 +23,7 @@
 // Same value the web client sent in build 641004 (docs/gateway.md).
 #define CAPABILITIES 1734653
 
-enum { OP_DISPATCH = 0, OP_HEARTBEAT = 1, OP_IDENTIFY = 2, OP_RESUME = 6, OP_RECONNECT = 7,
+enum { OP_DISPATCH = 0, OP_HEARTBEAT = 1, OP_IDENTIFY = 2, OP_VOICE_STATE = 4, OP_RESUME = 6, OP_RECONNECT = 7,
        OP_INVALID_SESSION = 9, OP_HELLO = 10, OP_HEARTBEAT_ACK = 11, OP_GUILD_SUBSCRIPTIONS_BULK = 37 };
 
 typedef struct {
@@ -118,6 +119,9 @@ static void on_dispatch(gateway *g, const char *t, cJSON *d)
         const char *url = cJSON_GetStringValue(cJSON_GetObjectItem(d, "resume_gateway_url"));
         const char *name = cJSON_GetStringValue(
             cJSON_GetObjectItem(cJSON_GetObjectItem(d, "user"), "username"));
+        const char *me = cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetObjectItem(d, "user"), "id"));
+        voice_set_self(me ? me : "");
+        voice_on_ready(d);
         snprintf(g->session_id, sizeof g->session_id, "%s", sid ? sid : "");
         snprintf(g->resume_url, sizeof g->resume_url, "%s", url ? url : "");
         status_user(name, cJSON_GetArraySize(cJSON_GetObjectItem(d, "guilds")),
@@ -129,6 +133,10 @@ static void on_dispatch(gateway *g, const char *t, cJSON *d)
     } else if (strcmp(t, "RESUMED") == 0) {
         status_state("ready");
         LOG("gateway: RESUMED");
+    } else if (strcmp(t, "VOICE_STATE_UPDATE") == 0) {
+        voice_on_state(d);
+    } else if (strcmp(t, "VOICE_SERVER_UPDATE") == 0) {
+        voice_on_server(d);
     } else {
         // Event names only; message contents stay out of the console log.
         status_event();
@@ -276,9 +284,26 @@ int gateway_subscribe(const char *guild_id)
     return 0;
 }
 
+// Op 4: join, move, leave or change mute/deaf in a voice channel.
+static int send_voice_state(gateway *g, const voice_op4 *v)
+{
+    cJSON *d = cJSON_CreateObject();
+    cJSON_AddItemToObject(d, "guild_id", v->guild[0] ? cJSON_CreateString(v->guild) : cJSON_CreateNull());
+    cJSON_AddItemToObject(d, "channel_id", v->channel[0] ? cJSON_CreateString(v->channel) : cJSON_CreateNull());
+    cJSON_AddBoolToObject(d, "self_mute", v->mute);
+    cJSON_AddBoolToObject(d, "self_deaf", v->deaf);
+    cJSON_AddFalseToObject(d, "self_video");
+    cJSON_AddNumberToObject(d, "flags", 2);
+    LOG("gateway: voice state %s", v->channel[0] ? "join" : "leave");
+    return send_json(g, op_msg(OP_VOICE_STATE, d));
+}
+
 // Called on the gateway thread between reads.
 static int send_pending(gateway *g)
 {
+    voice_op4 v;
+    if (g->session_id[0] && voice_take_request(&v) && send_voice_state(g, &v) != 0)
+        return -1;
     char guild[32];
     pthread_mutex_lock(&pending_lock);
     snprintf(guild, sizeof guild, "%s", pending_subscribe);

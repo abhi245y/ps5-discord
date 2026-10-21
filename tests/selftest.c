@@ -7,11 +7,14 @@
 #include <zlib.h>
 
 #include <stdlib.h>
+#include <unistd.h>
 
 #include <cJSON.h>
 
 #include "../src/chat.h"
 #include "../src/ratelimit.h"
+#include "../src/voice.h"
+#include "../src/voice_proto.h"
 #include "../src/ws.h"
 #include "../src/zstream.h"
 
@@ -153,6 +156,245 @@ static void test_chat(void)
     free(t);
 }
 
+static cJSON *parse_free(char *s)
+{
+    cJSON *j = cJSON_Parse(s);
+    free(s);
+    assert(j);
+    return j;
+}
+
+static void test_gcm(void)
+{
+    // Expected packet from an independent AES-GCM (python cryptography): key 00..1f,
+    // counter 0x01020304, nonce = counter then 8 zero bytes, AAD = the 12-byte header.
+    uint8_t key[32];
+    for (int i = 0; i < 32; i++)
+        key[i] = (uint8_t)i;
+    const uint8_t want[47] = {
+        0x80, 0x78, 0x00, 0x2a, 0x00, 0x00, 0x03, 0xe8, 0xde, 0xad, 0xbe, 0xef, // header (clear)
+        0x4e, 0x25, 0xa8, 0x2e, 0x37, 0xf7, 0x0a, 0x10, 0x96, 0x82, 0xb7, 0x8b, 0x81, 0xf2, 0x84, // ciphertext
+        0xed, 0xbe, 0xa5, 0x34, 0xe2, 0x79, 0xd0, 0xcb, 0xe0, 0xe6, 0x7c, 0xbe, 0x90, 0xc5, 0xe8, 0x5f, // ... tag
+        0x01, 0x02, 0x03, 0x04}; // counter, big-endian
+    const uint8_t plain[27] = {0x80, 0x78, 0x00, 0x2a, 0x00, 0x00, 0x03, 0xe8, 0xde, 0xad, 0xbe, 0xef,
+                               'o', 'p', 'u', 's', ' ', 'f', 'r', 'a', 'm', 'e', ' ', '0', '1', '2', '3'};
+    uint8_t sealed[64], opened[64];
+    assert(voice_gcm_seal(key, 0x01020304, plain, sizeof plain, sealed, sizeof sealed) == sizeof want);
+    assert(memcmp(sealed, want, sizeof want) == 0);
+    assert(voice_gcm_open(key, sealed, sizeof want, opened, sizeof opened) == sizeof plain);
+    assert(memcmp(opened, plain, sizeof plain) == 0);
+    sealed[13] ^= 1; // a flipped ciphertext bit: the tag fails
+    assert(voice_gcm_open(key, sealed, sizeof want, opened, sizeof opened) == 0);
+    sealed[13] ^= 1;
+    sealed[sizeof want - 1] ^= 1; // a flipped counter changes the nonce: the tag fails
+    assert(voice_gcm_open(key, sealed, sizeof want, opened, sizeof opened) == 0);
+
+    // CSRCs and the extension preamble are part of the clear header (rtpsize).
+    uint8_t csrc[] = {0x82, 0x78, 0, 1, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 'x'};
+    assert(voice_rtp_header_len(csrc, sizeof csrc) == 20);
+    uint8_t ext[] = {0x90, 0x78, 0, 1, 0, 0, 0, 1, 0, 0, 0, 2, 0xbe, 0xde, 0, 1, 0, 0, 0, 0, 'x'};
+    assert(voice_rtp_header_len(ext, sizeof ext) == 20);
+    assert(voice_rtp_header_len(ext, 16) == 0);  // preamble cut short
+    assert(voice_rtp_header_len(ext, 8) == 0);
+}
+
+static void test_ip_discovery(void)
+{
+    uint8_t req[74], rep[74] = {0};
+    assert(voice_ip_discovery_request(req, 0x01020304) == 74);
+    assert(req[0] == 0 && req[1] == 1 && req[2] == 0 && req[3] == 70 && req[4] == 1 && req[7] == 4);
+    rep[1] = 2;
+    rep[3] = 70;
+    memcpy(rep + 8, "203.0.113.7", 11);
+    rep[72] = 0xc3;
+    rep[73] = 0x50; // port 50000
+    char addr[64];
+    uint16_t port = 0;
+    assert(voice_ip_discovery_parse(rep, 74, addr, &port) == 0 && strcmp(addr, "203.0.113.7") == 0 && port == 50000);
+    rep[1] = 1;
+    assert(voice_ip_discovery_parse(rep, 74, addr, &port) != 0); // a request, not a reply
+    rep[1] = 2;
+    memset(rep + 8, 'x', 64);
+    assert(voice_ip_discovery_parse(rep, 74, addr, &port) != 0); // no terminating NUL
+    assert(voice_ip_discovery_parse(rep, 73, addr, &port) != 0);
+}
+
+static void test_voice_json(void)
+{
+    cJSON *j = parse_free(voice_json_identify("41", "2", "sess", "tok", 1));
+    cJSON *d = cJSON_GetObjectItem(j, "d");
+    assert(cJSON_GetNumberValue(cJSON_GetObjectItem(j, "op")) == 0);
+    assert(strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(d, "server_id")), "41") == 0);
+    assert(strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(d, "session_id")), "sess") == 0);
+    assert(strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(d, "token")), "tok") == 0);
+    assert(cJSON_GetNumberValue(cJSON_GetObjectItem(d, "max_dave_protocol_version")) == 1);
+    cJSON_Delete(j);
+
+    j = parse_free(voice_json_heartbeat(123456, 9));
+    d = cJSON_GetObjectItem(j, "d");
+    assert(cJSON_GetNumberValue(cJSON_GetObjectItem(j, "op")) == 3);
+    assert(cJSON_GetNumberValue(cJSON_GetObjectItem(d, "t")) == 123456);
+    assert(cJSON_GetNumberValue(cJSON_GetObjectItem(d, "seq_ack")) == 9);
+    cJSON_Delete(j);
+
+    j = parse_free(voice_json_select_udp("203.0.113.7", 50000, VOICE_MODE_GCM));
+    d = cJSON_GetObjectItem(j, "d");
+    cJSON *data = cJSON_GetObjectItem(d, "data");
+    assert(cJSON_GetNumberValue(cJSON_GetObjectItem(j, "op")) == 1);
+    assert(strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(d, "protocol")), "udp") == 0);
+    assert(strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(data, "address")), "203.0.113.7") == 0);
+    assert(cJSON_GetNumberValue(cJSON_GetObjectItem(data, "port")) == 50000);
+    assert(strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(data, "mode")), "aead_aes256_gcm_rtpsize") == 0);
+    cJSON_Delete(j);
+
+    j = parse_free(voice_json_resume("41", "sess", "tok", 7));
+    d = cJSON_GetObjectItem(j, "d");
+    assert(cJSON_GetNumberValue(cJSON_GetObjectItem(j, "op")) == 7);
+    assert(strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(d, "server_id")), "41") == 0);
+    assert(cJSON_GetNumberValue(cJSON_GetObjectItem(d, "seq_ack")) == 7);
+    cJSON_Delete(j);
+
+    j = parse_free(voice_json_transition(23, 0x1234));
+    assert(cJSON_GetNumberValue(cJSON_GetObjectItem(j, "op")) == 23);
+    assert(cJSON_GetNumberValue(cJSON_GetObjectItem(cJSON_GetObjectItem(j, "d"), "transition_id")) == 0x1234);
+    cJSON_Delete(j);
+}
+
+static void test_bin_frame(void)
+{
+    const uint8_t frame[] = {0x00, 0x2a, 25, 'a', 'b', 'c'};
+    voice_bin b;
+    assert(voice_bin_parse(frame, sizeof frame, &b) == 0);
+    assert(b.seq == 42 && b.op == 25 && b.len == 3 && memcmp(b.payload, "abc", 3) == 0);
+    assert(voice_bin_parse(frame, 2, &b) != 0);
+    const uint8_t wrap[] = {0xff, 0xff, 30};
+    assert(voice_bin_parse(wrap, sizeof wrap, &b) == 0 && b.seq == 65535 && b.op == 30 && b.len == 0);
+    uint8_t out[8];
+    assert(voice_bin_build(out, sizeof out, 26, (const uint8_t *)"kp", 2) == 3 && out[0] == 26 && out[1] == 'k');
+    assert(voice_bin_build(out, 2, 26, (const uint8_t *)"kp", 2) == 0);
+}
+
+// The voice state machine without a socket: a join, the server's confirmation (no server
+// details yet, so no thread starts), a leave. Runs before any thread exists.
+static void test_voice_state(void)
+{
+    voice_op4 op;
+    cJSON *j = parse_free(voice_state_json());
+    assert(strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(j, "state")), "idle") == 0);
+    assert(cJSON_IsTrue(cJSON_GetObjectItem(j, "mute")) && cJSON_IsFalse(cJSON_GetObjectItem(j, "deaf")));
+    assert(cJSON_GetNumberValue(cJSON_GetObjectItem(j, "since_ms")) == 0);
+    cJSON_Delete(j);
+    voice_refuse("Not in a call.");
+    j = parse_free(voice_state_json());
+    assert(strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(j, "refused")), "Not in a call.") == 0);
+    cJSON_Delete(j);
+    voice_refuse("");
+    assert(voice_set_flags(0, -1) == -1); // not in a call
+    assert(voice_take_request(&op) == 0);
+
+    voice_set_self("1");
+    voice_join(NULL, "55"); // a DM call
+    assert(voice_take_request(&op) == 1 && strcmp(op.channel, "55") == 0 && op.guild[0] == 0 && op.mute == 1);
+    assert(voice_take_request(&op) == 0); // sent once
+    j = parse_free(voice_state_json());
+    assert(strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(j, "state")), "joining") == 0);
+    assert(strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(j, "channel")), "55") == 0);
+    cJSON_Delete(j);
+
+    cJSON *vs = cJSON_Parse("{\"user_id\":\"9\",\"channel_id\":\"77\",\"session_id\":\"x\"}");
+    voice_on_state(vs); // someone else: ignored
+    cJSON_Delete(vs);
+    vs = cJSON_Parse("{\"user_id\":\"1\",\"channel_id\":\"55\",\"session_id\":\"abc\",\"guild_id\":null}");
+    voice_on_state(vs); // our state: joining until the server details arrive
+    cJSON_Delete(vs);
+    j = parse_free(voice_state_json());
+    assert(strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(j, "state")), "joining") == 0);
+    cJSON_Delete(j);
+
+    assert(voice_set_flags(0, 1) == 0);
+    assert(voice_take_request(&op) == 1 && strcmp(op.channel, "55") == 0 && op.mute == 0 && op.deaf == 1);
+    assert(voice_set_flags(1, 0) == 0);
+    voice_take_request(&op);
+
+    voice_leave();
+    assert(voice_take_request(&op) == 1 && op.channel[0] == 0); // leave: op 4 with null channel
+    j = parse_free(voice_state_json());
+    assert(strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(j, "state")), "idle") == 0);
+    assert(strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(j, "channel")), "") == 0);
+    cJSON_Delete(j);
+
+    // A fresh gateway session leaves only the ghost our own previous run left, and
+    // rejoins the wanted call. The same account in a call elsewhere is left alone.
+    char dir[] = "/tmp/voice-ready-XXXXXX";
+    assert(mkdtemp(dir));
+    voice_init(dir);
+    cJSON *ready = cJSON_Parse("{\"session_id\":\"A\",\"guilds\":[]}");
+    voice_on_ready(ready); // first run: nothing to leave
+    cJSON_Delete(ready);
+    assert(voice_take_request(&op) == 0);
+    ready = cJSON_Parse("{\"session_id\":\"B\",\"guilds\":[{\"id\":\"9\",\"voice_states\":"
+                        "[{\"user_id\":\"1\",\"session_id\":\"X\",\"channel_id\":\"56\"}]}]}");
+    voice_on_ready(ready); // in voice on another device: no leave
+    cJSON_Delete(ready);
+    assert(voice_take_request(&op) == 0);
+    ready = cJSON_Parse("{\"session_id\":\"C\",\"guilds\":[{\"id\":\"9\",\"voice_states\":"
+                        "[{\"user_id\":\"1\",\"session_id\":\"B\",\"channel_id\":\"56\"}]}]}");
+    voice_on_ready(ready); // our previous run's ghost: leave it
+    cJSON_Delete(ready);
+    assert(voice_take_request(&op) == 1 && op.channel[0] == 0 && strcmp(op.guild, "9") == 0);
+    voice_join("9", "56");
+    voice_take_request(&op);
+    ready = cJSON_Parse("{\"session_id\":\"D\",\"guilds\":[]}");
+    voice_on_ready(ready); // reconnected mid-call: rejoin
+    cJSON_Delete(ready);
+    assert(voice_take_request(&op) == 1 && strcmp(op.channel, "56") == 0 && strcmp(op.guild, "9") == 0);
+    char file[64];
+    snprintf(file, sizeof file, "%s/voice_session", dir);
+    remove(file);
+    rmdir(dir);
+    j = parse_free(voice_state_json());
+    assert(strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(j, "state")), "joining") == 0);
+    cJSON_Delete(j);
+    voice_leave();
+    voice_take_request(&op);
+}
+
+static void test_calls(void)
+{
+    cJSON *c = cJSON_Parse("{\"channel_id\":\"20\",\"message_id\":\"77\",\"ringing\":[\"2\"],"
+                           "\"voice_states\":[{\"user_id\":\"2\",\"channel_id\":\"20\",\"self_deaf\":true}]}");
+    chat_dispatch("CALL_CREATE", c);
+    cJSON_Delete(c);
+    char *t = chat_tree_json();
+    assert(strstr(t, "\"calls\":{\"20\":{\"ringing\":[\"2\"],\"message_id\":\"77\",\"caller\":\"\"}}"));
+    assert(strstr(t, "\"self_deaf\":true"));  // the voice state keeps deafen for the app
+    free(t);
+    assert(chat_call_active("20") && !chat_call_active("99"));
+    char me[32];
+    assert(chat_me_id(me, sizeof me) && strcmp(me, "1") == 0);
+    char *e = chat_events_json(0, 0);
+    assert(e && strstr(e, "\"t\":\"CALL\"") && strstr(e, "\"channel\":\"20\""));
+    free(e);
+
+    // The ring message's author becomes the caller, and a re-sent call keeps it.
+    c = cJSON_Parse("{\"id\":\"77\",\"channel_id\":\"20\",\"type\":3,\"content\":\"\",\"author\":{\"id\":\"2\"}}");
+    chat_dispatch("MESSAGE_CREATE", c);
+    cJSON_Delete(c);
+    c = cJSON_Parse("{\"channel_id\":\"20\",\"message_id\":\"77\",\"ringing\":[]}");
+    chat_dispatch("CALL_UPDATE", c);
+    cJSON_Delete(c);
+    t = chat_tree_json();
+    assert(strstr(t, "\"calls\":{\"20\":{\"ringing\":[],\"message_id\":\"77\",\"caller\":\"2\"}}"));
+    free(t);
+
+    c = cJSON_Parse("{\"channel_id\":\"20\"}");
+    chat_dispatch("CALL_DELETE", c);
+    cJSON_Delete(c);
+    t = chat_tree_json();
+    assert(strstr(t, "\"calls\":{}") && !chat_call_active("20"));
+    free(t);
+}
+
 static void test_ratelimit(void)
 {
     char limited[] = "{\"message\":\"You are being rate limited.\",\"retry_after\":0.75,\"global\":false}";
@@ -173,6 +415,12 @@ int main(void)
     test_ratelimit();
     test_ws_frame();
     test_zstream();
+    test_gcm();
+    test_ip_discovery();
+    test_voice_json();
+    test_bin_frame();
+    test_voice_state();
+    test_calls();
     puts("selftest ok");
     return 0;
 }
