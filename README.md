@@ -19,9 +19,9 @@ Status: alpha (0.2.0-alpha.1). Text chat works; voice does not exist yet.
 Builds on Linux with clang (no llvm-devel needed).
 
 ```sh
-make deps                        # pinned ps5-payload-sdk, mbedTLS, zlib, cJSON, qrcodegen
+make deps                        # pinned ps5-payload-sdk, mbedTLS, zlib, cJSON, qrcodegen, SQLite
 make                             # build/ps5-discord.elf
-make test                        # host self-checks
+make test                        # host self-checks (needs the app's deps: cd app && make deps)
 cd app && make                   # app folder in app/dist/PPSA99072, core bundled (build it first)
 make deploy PS5_HOST=<ps5-ip>    # stop the running copy, send the new one to elfldr (9021)
 make stop PS5_HOST=<ps5-ip>
@@ -37,7 +37,17 @@ testing against Discord without the console.
    home screen. The app starts the core itself through elfldr (port 9021), so elfldr must
    be running.
 3. Scan the QR code it shows: Discord app, Settings, Scan QR Code.
-4. The session token is kept in `/data/ps5-discord/token`; later runs skip the QR.
+4. If QR login fails, press Cross on **Try browser login**. Sign in on Discord's website,
+   complete any verification, then close the browser to return. The core imports and
+   validates the active console user's browser session automatically, including an
+   existing signed-in session. Closed the browser too soon? Cross opens it again; Square
+   cancels and returns to QR login.
+5. The session token is kept in `/data/ps5-discord/token`; later runs skip the QR.
+
+Browser login is experimental on this branch. It waits up to ten minutes, reads
+WebKit storage without modifying it, and saves the validated session atomically
+with owner-only permissions. No watchdog is used. Tested with a real human
+verification challenge.
 
 The core still runs on its own too: send `ps5-discord-core-*.elf` to elfldr and use the
 status page.

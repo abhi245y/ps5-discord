@@ -75,7 +75,8 @@ std::uintptr_t core_dlsym(const char *lib, const char *sym)
     to.sin_port = htons(9041);
     to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     char buf[512];
-    const int n = std::snprintf(buf, sizeof buf, "GET /api/dlsym?pid=%d&lib=%s&sym=%s HTTP/1.0\r\n\r\n",
+    const int n = std::snprintf(buf, sizeof buf, "GET /api/dlsym?pid=%d&lib=%s&sym=%s HTTP/1.0\r\n"
+                                "X-Discord-Native: 1\r\n\r\n",
                                 static_cast<int>(getpid()), lib, sym);
     std::string raw;
     if (connect(fd, reinterpret_cast<sockaddr *>(&to), sizeof to) == 0 && send(fd, buf, n, 0) == n)

@@ -34,6 +34,7 @@ static void json_assert_failed(const char *what, int line)
 }
 #define JSON_ASSERT(x) ((x) ? (void)0 : json_assert_failed(#x, __LINE__))
 #include "nlohmann/json.hpp"
+#include "discord/read_state.hpp"
 
 namespace discord
 {
@@ -165,7 +166,7 @@ Reply http(int port, const char *method, const std::string &path, const std::str
     char head[512];
     const int n = std::snprintf(head, sizeof head,
                                 "%s %s HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
-                                "Content-Length: %zu\r\n\r\n",
+                                "X-Discord-Native: 1\r\nContent-Length: %zu\r\n\r\n",
                                 method, path.c_str(), body.size());
     std::string request(head, static_cast<std::size_t>(n));
     request += body;
@@ -476,7 +477,7 @@ void apply_tree(Snapshot &s, const json &t)
         const auto r = reads.find(channel);
         if (r == reads.end())
             return out;
-        out.second = static_cast<int>(r->value("mentions", 0.0));
+        out.second = mention_count(*r);
         const std::string last_read = text(*r, "last_read");
         out.first = !last_message.empty() && snowflake(last_message) > snowflake(last_read);
         return out;
@@ -943,15 +944,17 @@ void Client::poll_state()
     const Connection before = snapshot_.connection;
     if (s == "ready")
         snapshot_.connection = Connection::ready;
-    else if (s == "login" || s == "scanned")
+    else if (s == "login" || s == "scanned" || s == "browser")
         snapshot_.connection = Connection::signing_in;
     else if (s == "connecting" && before == Connection::ready)
         snapshot_.connection = Connection::reconnecting;
     else
         snapshot_.connection = Connection::connecting;
     snapshot_.login_scanned = s == "scanned";
+    snapshot_.login_browser = s == "browser";
+    if (s == "browser" || s == "ready") browser_error_.clear();
     snapshot_.login_qr = text(state, "qr");
-    snapshot_.login_note = text(state, "note");
+    snapshot_.login_note = browser_error_.empty() ? text(state, "note") : browser_error_;
     snapshot_.login_qr_size = static_cast<int>(state.value("qr_size", 0.0));
     snapshot_.status_message.clear();
     const bool was_ready = ready_;
@@ -1187,6 +1190,19 @@ void Client::handle(const Request &request)
 {
     switch (request.kind)
     {
+    case Request::Kind::browser_login:
+    case Request::Kind::browser_cancel: {
+        browser_error_.clear();
+        const bool cancel = request.kind == Request::Kind::browser_cancel;
+        const Reply reply = http(port_, "POST", cancel ? "/api/browser-cancel" : "/api/browser-login", "{}");
+        if (reply.status == 409)
+            browser_error_ = "Browser login is not available right now. Try again in a moment.";
+        else if (reply.status != 200 && reply.status != 202)
+            browser_error_ = cancel ? "Could not cancel browser login. Try again."
+                                    : "Could not start browser login. Check elfldr, then try again.";
+        poll_state();
+        break;
+    }
     case Request::Kind::open_channel:
     case Request::Kind::prefetch:
     case Request::Kind::load_older: {

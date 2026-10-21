@@ -306,6 +306,14 @@ int main(int argc, char **argv)
             snapshot.login_qr[static_cast<std::size_t>(i)] = ((i * 7919) % 13) < 6 ? '1' : '0';
         settle();
         render("00-signin");
+        snapshot.login_browser = true;
+        snapshot.login_qr.clear();
+        snapshot.login_qr_size = 0;
+        snapshot.login_note = "Opening Discord. Sign in, then close the browser to return here.";
+        settle();
+        render("00-browser-signin");
+        snapshot.login_browser = false;
+        snapshot.login_note.clear();
         snapshot.connection = discord::Connection::reconnecting;
         settle();
         render("00-reconnecting");

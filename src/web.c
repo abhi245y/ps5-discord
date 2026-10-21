@@ -19,6 +19,7 @@
 #include "log.h"
 #include "ratelimit.h"
 #include "status.h"
+#include "browser_auth.h"
 
 #ifdef __PROSPERO__
 #include <ps5/kernel.h>
@@ -310,6 +311,32 @@ static void api_dlsym(int c, const char *query)
     reply(c, "200 OK", "application/json", json, strlen(json));
 }
 
+// The line is among the headers: body text cannot impersonate one.
+static const char *header_line(const char *req, const char *body, const char *line)
+{
+    const char *at = strstr(req, line);
+    return at && at < body ? at : NULL;
+}
+
+// Host, when sent, names this console: loopback, localhost or the address it was reached on.
+static int host_ok(int c, const char *req, const char *body)
+{
+    const char *h = header_line(req, body, "\r\nHost: ");
+    if (!h)
+        return 1; // the app's IME lookup and other non-browser clients
+    h += 8;
+    size_t n = strcspn(h, ":\r");
+    char self[16] = "127.0.0.1";
+    struct sockaddr_in a;
+    socklen_t alen = sizeof a;
+    if (getsockname(c, (struct sockaddr *)&a, &alen) == 0 && a.sin_family == AF_INET) {
+        unsigned ip = ntohl(a.sin_addr.s_addr);
+        snprintf(self, sizeof self, "%u.%u.%u.%u", ip >> 24, (ip >> 16) & 255, (ip >> 8) & 255, ip & 255);
+    }
+    return (n == 9 && (strncmp(h, "127.0.0.1", 9) == 0 || strncmp(h, "localhost", 9) == 0)) ||
+           (n == strlen(self) && strncmp(h, self, n) == 0);
+}
+
 // local: the peer is on this console (the native app). Chat data is only served to it.
 static void handle(int c, int local)
 {
@@ -332,7 +359,7 @@ static void handle(int c, int local)
         req[len] = 0;
     }
     char method[8], target[512];
-    if (sscanf(req, "%7s %511s", method, target) != 2) {
+    if (!body || sscanf(req, "%7s %511s", method, target) != 2) {
         reply(c, "400 Bad Request", "text/plain", "bad request", 11);
         return;
     }
@@ -341,6 +368,18 @@ static void handle(int c, int local)
         *query++ = 0;
     const char *path = target;
     int get = strcmp(method, "GET") == 0, post = strcmp(method, "POST") == 0;
+    // A page in the console's own browser connects from 127.x too. Browsers always
+    // send Host, so a name other than ours is DNS rebinding. The custom header makes
+    // a cross-origin request need a preflight, which this server never grants.
+    if (!host_ok(c, req, body)) {
+        reply(c, "403 Forbidden", "text/plain", "host", 4);
+        return;
+    }
+    if (strncmp(path, "/api/", 5) == 0 && !(get && strcmp(path, "/api/state") == 0) &&
+        !header_line(req, body, "\r\nX-Discord-Native: 1\r\n")) {
+        reply(c, "403 Forbidden", "text/plain", "native app only", 15);
+        return;
+    }
     if (!local && strncmp(path, "/api/", 5) == 0 && strcmp(path, "/api/state") != 0 &&
         strcmp(path, "/api/quit") != 0) {
         reply(c, "403 Forbidden", "text/plain", "local only", 10);
@@ -351,6 +390,14 @@ static void handle(int c, int local)
         reply(c, "200 OK", "text/html; charset=utf-8", web_index_html, web_index_html_len - 1);
     } else if (get && strcmp(path, "/api/state") == 0) {
         reply_json(c, status_json());
+    } else if (post && strcmp(path, "/api/browser-login") == 0) {
+        if (browser_auth_request() == 0)
+            reply(c, "202 Accepted", "application/json", "{\"ok\":true}", 11);
+        else
+            reply(c, "409 Conflict", "application/json", "{\"ok\":false}", 12);
+    } else if (post && strcmp(path, "/api/browser-cancel") == 0) {
+        browser_auth_cancel();
+        reply(c, "200 OK", "application/json", "{\"ok\":true}", 11);
     } else if (get && strcmp(path, "/api/chat") == 0) {
         reply_json(c, chat_tree_json());
     } else if (get && strcmp(path, "/api/events") == 0) {
@@ -426,7 +473,7 @@ static void *follow_app(void *arg)
     (void)arg;
     for (;;) {
         sleep(5);
-        if (app_seen && time(NULL) - app_seen > APP_GONE_SECONDS) {
+        if (app_seen && time(NULL) - app_seen > APP_GONE_SECONDS && !browser_auth_keepalive()) {
             LOG("the app closed: the core leaves with it");
             _exit(0);
         }

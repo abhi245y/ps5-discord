@@ -13,6 +13,8 @@ struct Request
 {
     enum class Kind
     {
+        browser_login, // open Discord and import its session on-console
+        browser_cancel,
         open_channel, // load history and subscribe to the guild
         load_older,   // the next page of history above what is loaded
         send,         // post content to channel_id

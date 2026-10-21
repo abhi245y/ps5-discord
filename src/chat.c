@@ -1,6 +1,7 @@
 #include "chat.h"
 
 #include <pthread.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -412,7 +413,9 @@ static void load_ready(cJSON *d)
         cJSON *r = read_state(id);
         set_string(r, "last_read", str(c, "last_message_id"));
         cJSON_DeleteItemFromObject(r, "mentions");
-        cJSON_AddNumberToObject(r, "mentions", cJSON_GetNumberValue(cJSON_GetObjectItem(c, "mention_count")));
+        const double count = cJSON_GetNumberValue(cJSON_GetObjectItem(c, "mention_count"));
+        cJSON_AddNumberToObject(r, "mentions",
+                               count >= 0 && count <= INT_MAX ? count : 0);
     }
 }
 

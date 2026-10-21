@@ -36,4 +36,9 @@ fetch https://github.com/nayuki/QR-Code-generator/archive/refs/tags/v1.8.0.tar.g
     2ec0a4d33d6f521c942eeaf473d42d5fe139abcfa57d2beffe10c5cf7d34ae60 "$deps/qrcodegen-1.8.0.tar.gz"
 [[ -d $deps/src/QR-Code-generator-1.8.0 ]] || tar -xzf "$deps/qrcodegen-1.8.0.tar.gz" -C "$deps/src"
 
+fetch https://www.sqlite.org/2025/sqlite-amalgamation-3500400.zip \
+    1d3049dd0f830a025a53105fc79fd2ab9431aea99e137809d064d8ee8356b032 \
+    "$deps/sqlite-amalgamation-3500400.zip"
+[[ -d $deps/src/sqlite-amalgamation-3500400 ]] || unzip -q "$deps/sqlite-amalgamation-3500400.zip" -d "$deps/src"
+
 echo "deps ready in $deps"

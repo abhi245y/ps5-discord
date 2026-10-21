@@ -31,8 +31,11 @@ void draw_sign_in(DrawList &list, const Ink &ink, const discord::Snapshot &s, fl
 {
     list.rounded_rect({0, 0, 1920, 1080}, 0.0f, kGround);
     const float left = 104.0f;
-    ui::text(list, ink.fonts.display, "Sign in with your phone", left, 250.0f, 66.0f, kText);
-    const char *steps[] = {"Open Discord on your phone", "Settings  ›  Scan QR Code", "Approve the login"};
+    ui::text(list, ink.fonts.display, s.login_browser ? "Finish signing in" : "Sign in with your phone",
+             left, 250.0f, 66.0f, kText);
+    const char *qr_steps[] = {"Open Discord on your phone", "Settings  ›  Scan QR Code", "Approve the login"};
+    const char *browser_steps[] = {"Sign in on Discord's website", "Complete any verification", "Close browser to return here"};
+    const char *const *steps = s.login_browser ? browser_steps : qr_steps;
     for (int i = 0; i < 3; ++i)
     {
         const float cy = 370.0f + i * 128.0f;
@@ -46,17 +49,22 @@ void draw_sign_in(DrawList &list, const Ink &ink, const discord::Snapshot &s, fl
     spinner(list, status.x + 66.0f, status.cy(), 26.0f, time);
     if (!s.login_note.empty() && !s.login_scanned)
         ui::paragraph(list, ink.fonts.regular, s.login_note, status.x + 120.0f, status.y + 34.0f, 22.0f,
-                      status.w - 150.0f, 28.0f, kCoral, 3, gfx::Align::left);
+                      status.w - 150.0f, 28.0f, s.login_browser ? kDim : kCoral, 3, gfx::Align::left);
     else
         ui::text(list, ink.fonts.regular,
                  s.login_scanned ? "Scanned. Approve the login on your phone." : "Waiting for scan…",
                  status.x + 120.0f, status.cy() + 12.0f, 33.0f, kDim);
-    // Always shown: Discord can demand a captcha after approval, and the app cannot show one.
-    ui::paragraph(list, ink.fonts.regular,
-                  "Back at the QR code after approving? Discord may want a captcha, which this app cannot show. "
-                  "Sign in once on discord.com in a browser, wait a while, then scan again.",
-                  left, 906.0f, 25.0f, 940.0f, 33.0f, kDim, 2);
-    ui::text(list, ink.fonts.regular, "Unofficial client  ·  your password never touches this console", left, 1000.0f,
+    if (!s.login_scanned) // mid-approval, Cross would throw the phone's login away
+    {
+        ui::text(list, ink.fonts.regular,
+                 s.login_browser ? "Closed the browser too soon? Open it again." : "Having trouble with the QR code?",
+                 left, 890.0f, 25.0f, kDim);
+        const Rect alternative{left, 908.0f, 940.0f, 66.0f};
+        list.rounded_rect(alternative, 18.0f, kCoral);
+        ui::text(list, ink.fonts.semibold, s.login_browser ? "Open Discord again" : "Try browser login",
+                 alternative.cx(), alternative.y + 44.0f, 32.0f, kGround, gfx::Align::center);
+    }
+    ui::text(list, ink.fonts.regular, "Unofficial client  ·  sign in directly with Discord", left, 1000.0f,
              25.0f, kFaint);
 
     // The QR card: the core's code, drawn module by module.
@@ -89,12 +97,16 @@ void draw_sign_in(DrawList &list, const Ink &ink, const discord::Snapshot &s, fl
         spinner(list, card.cx(), card.cy(), 46.0f, time);
     }
 
-    const ui::Hint hints[] = {{ui::Button::circle, "Back"}};
+    const ui::Hint browser_hints[] = {
+        {ui::Button::cross, "Open again"}, {ui::Button::square, "Cancel"}, {ui::Button::circle, "Back"}};
+    const ui::Hint qr_hints[] = {{ui::Button::cross, "Browser login"}, {ui::Button::circle, "Back"}};
+    const ui::Hint *hints = s.login_browser ? browser_hints : s.login_scanned ? qr_hints + 1 : qr_hints;
+    const int hint_count = s.login_browser ? 3 : s.login_scanned ? 1 : 2;
     ui::HintLayout layout;
     layout.size = 34.0f;
     layout.text_size = 23.0f;
     layout.cy = kHintsBaseline;
-    ui::draw_hints(list, ink.fonts, hint_glyphs(), hints, 1, 1920.0f - kMargin, true, layout);
+    ui::draw_hints(list, ink.fonts, hint_glyphs(), hints, hint_count, 1920.0f - kMargin, true, layout);
 }
 
 void draw_waiting(DrawList &list, const Ink &ink, const discord::Snapshot &s, float time)

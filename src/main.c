@@ -19,6 +19,8 @@
 #include "gateway.h"
 #include "log.h"
 #include "remote_auth.h"
+#include "browser_auth.h"
+#include "browser_storage.h"
 #include "status.h"
 #include "web.h"
 #include "tls.h"
@@ -47,26 +49,29 @@ static int read_token(char *out, size_t cap)
     return n > 0 ? 0 : -1;
 }
 
-static void save_token(const char *token)
-{
-    mkdir(DATA_DIR, 0700);
-    FILE *f = fopen(TOKEN_PATH, "w");
-    if (!f) {
-        LOG("could not save token to %s", TOKEN_PATH);
-        return;
-    }
-    fputs(token, f);
-    fclose(f);
-    chmod(TOKEN_PATH, 0600);
-}
-
 static void login(char *token, size_t cap)
 {
-    for (int backoff = 2; remote_auth_login(token, cap) != 0; backoff = backoff < 30 ? backoff * 2 : 30) {
+    browser_auth_allow(1);
+    for (int backoff = 2;;) {
+        int browser = browser_auth_pending();
+        int result = browser ? browser_auth_login(token, cap) : remote_auth_login(token, cap);
+        if (result == 0) {
+            browser_auth_allow(0);
+            if (session_save(DATA_DIR, token) != 0)
+                LOG("could not persist session; login will be required on next launch");
+            return;
+        }
+        status_state("login");
+        // A browser attempt ended (cancelled, timed out) or is starting: no wait for the next step.
+        if (browser || browser_auth_pending()) {
+            backoff = 2;
+            continue;
+        }
         LOG("login failed, new QR in %d s", backoff);
-        sleep((unsigned)backoff);
+        for (int i = 0; i < backoff * 10 && !browser_auth_pending(); ++i)
+            usleep(100000);
+        backoff = backoff < 30 ? backoff * 2 : 30;
     }
-    save_token(token);
 }
 
 static int claim_instance(void)

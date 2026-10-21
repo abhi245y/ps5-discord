@@ -48,7 +48,7 @@ PS5_CLANG ?= clang
 USE_CCACHE ?= 0
 # The payload SDK wrappers find LLVM through llvm-config; tools/llvm-config stands in
 # when the system has none (Fedora without llvm-devel).
-export LLVM_CONFIG ?= $(if $(shell command -v llvm-config),llvm-config,$(abspath tools/llvm-config))
+export LLVM_CONFIG ?= $(or $(shell command -v llvm-config),$(abspath tools/llvm-config))
 export BUILD_JOBS USE_CCACHE PS5_CLANG
 export HOST_CXX HOST_TEST_CXXFLAGS HOST_TEST_LDFLAGS
 export APP_DEFINITIONS APP_INCLUDE_PATHS APP_STATIC_ARCHIVES APP_IMPORT_STUBS APP_RUNTIME_MODULES

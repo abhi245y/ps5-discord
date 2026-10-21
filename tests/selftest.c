@@ -88,6 +88,9 @@ static void test_chat(void)
         "{\"id\":\"16\",\"type\":0,\"allow\":\"1024\",\"deny\":\"0\"}]}]}],"
         "\"merged_members\":[[{\"user_id\":\"1\",\"roles\":[\"16\"]}]],"
         "\"private_channels\":[{\"id\":\"20\",\"type\":1,\"recipient_ids\":[\"2\"]}]}");
+    cJSON_AddItemToObject(ready, "read_state", cJSON_Parse(
+        "{\"entries\":[{\"id\":\"11\"},{\"id\":\"20\",\"mention_count\":null},"
+        "{\"id\":\"14\",\"mention_count\":3}]}"));
     chat_dispatch("READY", ready);
     cJSON_Delete(ready);
     char *t = chat_tree_json();
@@ -98,6 +101,12 @@ static void test_chat(void)
     assert(strstr(t, "\"club\""));                    // a role of ours allows it back
     assert(strstr(strstr(t, "\"news\""), "\"can_send\":false")); // read-only
     assert(strstr(strstr(t, "\"general\""), "\"can_send\":true"));
+    cJSON *decoded = cJSON_Parse(t);
+    cJSON *reads = cJSON_GetObjectItem(decoded, "reads");
+    assert(cJSON_GetNumberValue(cJSON_GetObjectItem(cJSON_GetObjectItem(reads, "11"), "mentions")) == 0);
+    assert(cJSON_GetNumberValue(cJSON_GetObjectItem(cJSON_GetObjectItem(reads, "20"), "mentions")) == 0);
+    assert(cJSON_GetNumberValue(cJSON_GetObjectItem(cJSON_GetObjectItem(reads, "14"), "mentions")) == 3);
+    cJSON_Delete(decoded);
     free(t);
 
     cJSON *m = cJSON_Parse("{\"id\":\"30\",\"channel_id\":\"11\",\"content\":\"hi\","

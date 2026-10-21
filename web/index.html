@@ -119,7 +119,7 @@ $("stop").addEventListener("click", async () => {
     setTimeout(() => { b.classList.remove("armed"); b.textContent = "Stop payload"; }, 3000);
     return;
   }
-  await fetch("/api/quit", {method: "POST"}).catch(() => {});
+  await fetch("/api/quit", {method: "POST", headers: {"X-Discord-Native": "1"}}).catch(() => {});
   b.classList.remove("armed"); b.textContent = "Stopped";
 });
 

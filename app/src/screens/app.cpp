@@ -115,10 +115,22 @@ class DiscordApp final : public app::Concept
     void update(const hui::InputFrame &input, float dt, app::Feedback &feedback) override
     {
         time_ += dt;
+        browser_cooldown_ = std::max(0.0f, browser_cooldown_ - dt);
         std::vector<discord::Request> requests;
         if (context_.snapshot.connection != discord::Connection::ready)
         {
-            // Sign-in and waiting screens take no input beyond the system's.
+            const auto &s = context_.snapshot;
+            // Cross starts browser login, or reopens the browser during one; Square cancels it.
+            const bool open = input.is_pressed(Action::confirm) && !s.login_scanned;
+            const bool cancel = input.is_pressed(Action::west) && s.login_browser;
+            if (s.connection == discord::Connection::signing_in && (open || cancel) && browser_cooldown_ == 0.0f)
+            {
+                discord::Request request;
+                request.kind = cancel ? discord::Request::Kind::browser_cancel : discord::Request::Kind::browser_login;
+                requests.push_back(request);
+                browser_cooldown_ = 3.0f;
+                feedback.play(hui::audio::Cue::select);
+            }
         }
         else if (route_ == Route::home)
         {
@@ -235,6 +247,7 @@ class DiscordApp final : public app::Concept
     Chat chat_;
     Route route_ = Route::home;
     bool from_server_ = false; // the open chat came from a server's page
+    float browser_cooldown_ = 0.0f;
     std::string waiting_dm_; // a friend whose new DM is being made, opened when it lands
     static constexpr float kToastSeconds = 5.0f;
     std::uint64_t notice_seen_ = 0; // notices only come from live messages, so any new one is news

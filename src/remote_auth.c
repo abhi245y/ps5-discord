@@ -1,4 +1,5 @@
 #include "remote_auth.h"
+#include "browser_auth.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -125,8 +126,8 @@ static int redeem_ticket(mbedtls_pk_context *pk, const char *ticket, char *out, 
         // Discord wants a captcha this console cannot show (often right after a
         // device was logged out). Never worked around: the person waits it out.
         if (res.body && strstr(res.body, "captcha-required"))
-            status_note("Discord asked for a captcha, which this app cannot show. Sign in once on discord.com "
-                        "in a browser, wait a while, then scan again.");
+            status_note("Discord asked for a captcha, which the QR sign-in cannot show. "
+                        "Press Cross to sign in through the browser instead.");
     } else {
         unsigned char tok[256];
         int n = decrypt_b64(pk, cJSON_GetStringValue(cJSON_GetObjectItem(j, "encrypted_token")), tok,
@@ -178,12 +179,15 @@ int remote_auth_login(char *out, size_t cap)
     int interval = 0, acked = 1;
     char ticket[512] = "";
     for (;;) {
+        if (browser_auth_pending())
+            break;
         int64_t now = now_ms(), wake = next_beat && next_beat < deadline ? next_beat : deadline;
         if (now >= deadline) {
             LOG("remote auth: QR expired");
             break;
         }
-        int r = ws_recv(&ws, (int)(wake - now));
+        int wait_ms = (int)(wake - now);
+        int r = ws_recv(&ws, wait_ms > 1000 ? 1000 : wait_ms);
         if (r == 0) {
             if (next_beat && now_ms() >= next_beat) {
                 if (!acked) {
@@ -263,7 +267,7 @@ int remote_auth_login(char *out, size_t cap)
     ws_close(&ws, 1000);
     status_qr(NULL);
 
-    if (ticket[0] && redeem_ticket(&pk, ticket, out, cap) == 0) {
+    if (!browser_auth_pending() && ticket[0] && redeem_ticket(&pk, ticket, out, cap) == 0) {
         LOG("remote auth: logged in");
         status_note(NULL);
         result = 0;
