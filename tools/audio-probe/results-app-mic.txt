@@ -1,0 +1,184 @@
+start: app mic probe
+module=0x6d open=8009ac440 input=8009acee0 close=8009acde0
+initial user rc=0x00000000 user=0x<user-id>
+open user=0x<user-id> type=0 rate=16000 param=0 -> 0x30000007
+  rms= 8829.2 peak=21908 rc=0x00000100
+  rms= 6532.8 peak=29667 rc=0x00000100
+  rms= 4941.4 peak=23353 rc=0x00000100
+  rms=  451.4 peak= 2837 rc=0x00000100
+  rms=   54.1 peak=  218 rc=0x00000100
+  rms= 3676.1 peak=17367 rc=0x00000100
+  rms= 4734.5 peak=27999 rc=0x00000100
+  rms= 7938.5 peak=29736 rc=0x00000100
+  rms= 1681.6 peak=17937 rc=0x00000100
+  rms= 1084.2 peak= 4991 rc=0x00000100
+  close -> 0x00000000
+open user=0x<user-id> type=0 rate=16000 param=1 -> 0x30000007
+  rms=10560.5 peak=29690 rc=0x00000100
+  rms= 9000.2 peak=30595 rc=0x00000100
+  rms=  424.6 peak= 3238 rc=0x00000100
+  rms=   49.0 peak=  189 rc=0x00000100
+  rms=   25.6 peak=   98 rc=0x00000100
+  rms=   18.9 peak=   81 rc=0x00000100
+  rms= 2174.1 peak=13301 rc=0x00000100
+  rms= 9643.5 peak=30136 rc=0x00000100
+  rms= 7324.1 peak=30074 rc=0x00000100
+  rms= 8097.6 peak=29764 rc=0x00000100
+  close -> 0x00000000
+open user=0x<user-id> type=0 rate=48000 param=0 -> 0x30000007
+  rms= 4464.6 peak=14006 rc=0x00000100
+  rms= 1569.8 peak= 5780 rc=0x00000100
+  rms=  551.1 peak= 2326 rc=0x00000100
+  rms=  219.7 peak=  590 rc=0x00000100
+  rms= 7078.0 peak=27196 rc=0x00000100
+  rms= 8737.5 peak=29758 rc=0x00000100
+  rms= 9879.0 peak=29339 rc=0x00000100
+  rms= 5244.5 peak=25606 rc=0x00000100
+  rms= 3560.8 peak=12207 rc=0x00000100
+  rms= 1631.1 peak= 7169 rc=0x00000100
+  close -> 0x00000000
+open user=0x<user-id> type=0 rate=48000 param=1 -> 0x30000007
+  rms= 3664.7 peak=14975 rc=0x00000100
+  rms= 5013.0 peak=14639 rc=0x00000100
+  rms= 3630.0 peak= 8998 rc=0x00000100
+  rms= 1416.3 peak= 4469 rc=0x00000100
+  rms=  669.7 peak= 2530 rc=0x00000100
+  rms=  132.0 peak=  467 rc=0x00000100
+  rms=   80.9 peak=  253 rc=0x00000100
+  rms=   74.5 peak=  242 rc=0x00000100
+  rms=   42.6 peak=  140 rc=0x00000100
+  rms=   43.4 peak=  174 rc=0x00000100
+  close -> 0x00000000
+open user=0x<user-id> type=1 rate=16000 param=0 -> 0x30000007
+  rms= 4200.7 peak=29198 rc=0x00000100
+  rms= 7256.2 peak=30292 rc=0x00000100
+  rms= 5174.5 peak=30598 rc=0x00000100
+  rms= 7849.1 peak=30672 rc=0x00000100
+  rms= 6756.4 peak=29596 rc=0x00000100
+  rms= 5041.6 peak=18164 rc=0x00000100
+  rms= 1626.8 peak= 7755 rc=0x00000100
+  rms= 4018.3 peak=23911 rc=0x00000100
+  rms=  969.7 peak= 5662 rc=0x00000100
+  rms= 1997.5 peak= 7881 rc=0x00000100
+  close -> 0x00000000
+open user=0x<user-id> type=1 rate=16000 param=1 -> 0x30000007
+  rms=  170.4 peak= 1084 rc=0x00000100
+  rms= 3962.5 peak=13788 rc=0x00000100
+  rms=  866.3 peak= 4762 rc=0x00000100
+  rms= 8220.9 peak=29827 rc=0x00000100
+  rms= 5079.4 peak=24292 rc=0x00000100
+  rms= 1781.4 peak=19780 rc=0x00000100
+  rms= 9822.2 peak=31058 rc=0x00000100
+  rms= 3772.6 peak=28581 rc=0x00000100
+  rms= 7069.0 peak=28024 rc=0x00000100
+  rms= 5796.6 peak=26058 rc=0x00000100
+  close -> 0x00000000
+open user=0x<user-id> type=1 rate=48000 param=0 -> 0x30000007
+  rms= 3541.8 peak=11039 rc=0x00000100
+  rms= 7989.8 peak=30060 rc=0x00000100
+  rms= 9727.9 peak=30572 rc=0x00000100
+  rms= 8400.5 peak=27813 rc=0x00000100
+  rms= 6533.0 peak=15129 rc=0x00000100
+  rms= 7049.7 peak=16338 rc=0x00000100
+  rms= 1901.3 peak= 8392 rc=0x00000100
+  rms=  287.2 peak=  946 rc=0x00000100
+  rms=  296.1 peak=  970 rc=0x00000100
+  rms= 4911.7 peak=18277 rc=0x00000100
+  close -> 0x00000000
+open user=0x<user-id> type=1 rate=48000 param=1 -> 0x30000007
+  rms= 8539.2 peak=24684 rc=0x00000100
+  rms= 6326.0 peak=21102 rc=0x00000100
+  rms= 1999.3 peak=10314 rc=0x00000100
+  rms= 1799.9 peak= 8239 rc=0x00000100
+  rms= 4699.1 peak=15724 rc=0x00000100
+  rms= 2891.7 peak= 9553 rc=0x00000100
+  rms= 5796.3 peak=29604 rc=0x00000100
+  rms= 7540.6 peak=30172 rc=0x00000100
+  rms= 4869.5 peak=30327 rc=0x00000100
+  rms= 1093.6 peak= 3405 rc=0x00000100
+  close -> 0x00000000
+open user=0x<user-id> type=2 rate=16000 param=0 -> 0x80260104
+open user=0x<user-id> type=2 rate=16000 param=1 -> 0x80260104
+open user=0x<user-id> type=2 rate=48000 param=0 -> 0x80260104
+open user=0x<user-id> type=2 rate=48000 param=1 -> 0x80260104
+open user=0x<user-id> type=3 rate=16000 param=0 -> 0x80260104
+open user=0x<user-id> type=3 rate=16000 param=1 -> 0x80260104
+open user=0x<user-id> type=3 rate=48000 param=0 -> 0x80260104
+open user=0x<user-id> type=3 rate=48000 param=1 -> 0x80260104
+open user=0x<user-id> type=4 rate=16000 param=0 -> 0x80260104
+open user=0x<user-id> type=4 rate=16000 param=1 -> 0x80260104
+open user=0x<user-id> type=4 rate=48000 param=0 -> 0x80260104
+open user=0x<user-id> type=4 rate=48000 param=1 -> 0x80260104
+open user=0x<user-id> type=5 rate=16000 param=0 -> 0x30000007
+  rms= 2319.7 peak=11948 rc=0x00000100
+  rms= 2282.8 peak=13893 rc=0x00000100
+  rms=  825.9 peak= 3360 rc=0x00000100
+  rms=  596.2 peak= 2078 rc=0x00000100
+  rms= 1049.2 peak= 9690 rc=0x00000100
+  rms= 2485.3 peak=11117 rc=0x00000100
+  rms= 3132.9 peak=12618 rc=0x00000100
+  rms= 1555.8 peak= 7886 rc=0x00000100
+  rms= 1308.7 peak= 6113 rc=0x00000100
+  rms= 1582.6 peak= 8788 rc=0x00000100
+  close -> 0x00000000
+open user=0x<user-id> type=5 rate=16000 param=1 -> 0x30000007
+  rms= 1996.5 peak= 6764 rc=0x00000100
+  rms= 1496.8 peak= 7721 rc=0x00000100
+  rms=  328.4 peak= 1311 rc=0x00000100
+  rms= 1043.2 peak= 5128 rc=0x00000100
+  rms= 1745.3 peak= 8158 rc=0x00000100
+  rms=  872.8 peak= 5177 rc=0x00000100
+  rms= 2163.8 peak= 8194 rc=0x00000100
+  rms= 1298.1 peak= 8480 rc=0x00000100
+  rms= 1555.2 peak= 7976 rc=0x00000100
+  rms= 3617.3 peak= 9575 rc=0x00000100
+  close -> 0x00000000
+open user=0x<user-id> type=5 rate=48000 param=0 -> 0x30000007
+  rms= 3177.5 peak=10174 rc=0x00000100
+  rms= 2968.7 peak=10762 rc=0x00000100
+  rms= 1852.1 peak= 7004 rc=0x00000100
+  rms= 1003.9 peak= 2557 rc=0x00000100
+  rms= 1055.9 peak= 2716 rc=0x00000100
+  rms=  413.1 peak= 1629 rc=0x00000100
+  rms=  350.2 peak=  889 rc=0x00000100
+  rms=  359.4 peak= 1134 rc=0x00000100
+  rms=  499.4 peak= 1395 rc=0x00000100
+  rms=  606.1 peak= 2017 rc=0x00000100
+  close -> 0x00000000
+open user=0x<user-id> type=5 rate=48000 param=1 -> 0x30000007
+  rms= 1077.4 peak= 3320 rc=0x00000100
+  rms=  784.8 peak= 2168 rc=0x00000100
+  rms=  965.1 peak= 2119 rc=0x00000100
+  rms= 1113.1 peak= 2745 rc=0x00000100
+  rms= 1902.8 peak= 5038 rc=0x00000100
+  rms= 2257.4 peak= 8043 rc=0x00000100
+  rms= 3131.1 peak=12236 rc=0x00000100
+  rms= 2482.1 peak=10262 rc=0x00000100
+  rms= 1818.8 peak= 5957 rc=0x00000100
+  rms= 1310.1 peak= 3775 rc=0x00000100
+  close -> 0x00000000
+open user=0xff type=0 rate=16000 param=0 -> 0x809b0001
+open user=0xff type=0 rate=16000 param=1 -> 0x809b0001
+open user=0xff type=0 rate=48000 param=0 -> 0x809b0001
+open user=0xff type=0 rate=48000 param=1 -> 0x809b0001
+open user=0xff type=1 rate=16000 param=0 -> 0x809b0001
+open user=0xff type=1 rate=16000 param=1 -> 0x809b0001
+open user=0xff type=1 rate=48000 param=0 -> 0x809b0001
+open user=0xff type=1 rate=48000 param=1 -> 0x809b0001
+open user=0xff type=2 rate=16000 param=0 -> 0x80260104
+open user=0xff type=2 rate=16000 param=1 -> 0x80260104
+open user=0xff type=2 rate=48000 param=0 -> 0x80260104
+open user=0xff type=2 rate=48000 param=1 -> 0x80260104
+open user=0xff type=3 rate=16000 param=0 -> 0x80260104
+open user=0xff type=3 rate=16000 param=1 -> 0x80260104
+open user=0xff type=3 rate=48000 param=0 -> 0x80260104
+open user=0xff type=3 rate=48000 param=1 -> 0x80260104
+open user=0xff type=4 rate=16000 param=0 -> 0x80260104
+open user=0xff type=4 rate=16000 param=1 -> 0x80260104
+open user=0xff type=4 rate=48000 param=0 -> 0x80260104
+open user=0xff type=4 rate=48000 param=1 -> 0x80260104
+open user=0xff type=5 rate=16000 param=0 -> 0x809b0001
+open user=0xff type=5 rate=16000 param=1 -> 0x809b0001
+open user=0xff type=5 rate=48000 param=0 -> 0x809b0001
+open user=0xff type=5 rate=48000 param=1 -> 0x809b0001
+done: 12 open(s)

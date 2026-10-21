@@ -1,0 +1,72 @@
+t=8ms start: sceAudioIn probe, 60 s hard limit, grain=256 frames
+t=15ms symbols: open=8008b4440 input=8008b4ee0 close=8008b4de0 init=8008b4410
+t=16ms sceAudioInInit rc=0x00000000
+t=17ms sceUserServiceInitialize rc=0x00000000
+t=20ms sceUserServiceGetForegroundUser rc=0x00000000 user=0x<user-id>
+t=24ms open user=0x<user-id> type=0 freq=16000 param=0 -> 0x809b0081
+t=25ms open user=0x<user-id> type=0 freq=16000 param=1 -> 0x809b0081
+t=26ms open user=0x<user-id> type=0 freq=48000 param=0 -> 0x809b0081
+t=26ms open user=0x<user-id> type=0 freq=48000 param=1 -> 0x809b0081
+t=27ms open user=0x<user-id> type=1 freq=16000 param=0 -> 0x809b0081
+t=28ms open user=0x<user-id> type=1 freq=16000 param=1 -> 0x809b0081
+t=28ms open user=0x<user-id> type=1 freq=48000 param=0 -> 0x809b0081
+t=29ms open user=0x<user-id> type=1 freq=48000 param=1 -> 0x809b0081
+t=30ms open user=0x<user-id> type=2 freq=16000 param=0 -> 0x809b0081
+t=30ms open user=0x<user-id> type=2 freq=16000 param=1 -> 0x809b0081
+t=31ms open user=0x<user-id> type=2 freq=48000 param=0 -> 0x809b0081
+t=32ms open user=0x<user-id> type=2 freq=48000 param=1 -> 0x809b0081
+t=32ms open user=0x<user-id> type=3 freq=16000 param=0 -> 0x809b0081
+t=33ms open user=0x<user-id> type=3 freq=16000 param=1 -> 0x809b0081
+t=34ms open user=0x<user-id> type=3 freq=48000 param=0 -> 0x809b0081
+t=35ms open user=0x<user-id> type=3 freq=48000 param=1 -> 0x809b0081
+t=35ms open user=0x<user-id> type=4 freq=16000 param=0 -> 0x809b0081
+t=36ms open user=0x<user-id> type=4 freq=16000 param=1 -> 0x809b0081
+t=37ms open user=0x<user-id> type=4 freq=48000 param=0 -> 0x809b0081
+t=37ms open user=0x<user-id> type=4 freq=48000 param=1 -> 0x809b0081
+t=38ms open user=0x<user-id> type=5 freq=16000 param=0 -> 0x809b0081
+t=39ms open user=0x<user-id> type=5 freq=16000 param=1 -> 0x809b0081
+t=40ms open user=0x<user-id> type=5 freq=48000 param=0 -> 0x809b0081
+t=40ms open user=0x<user-id> type=5 freq=48000 param=1 -> 0x809b0081
+t=41ms open user=0x<user-id> type=6 freq=16000 param=0 -> 0x80260104
+t=41ms open user=0x<user-id> type=6 freq=16000 param=1 -> 0x80260104
+t=42ms open user=0x<user-id> type=6 freq=48000 param=0 -> 0x80260104
+t=43ms open user=0x<user-id> type=6 freq=48000 param=1 -> 0x80260104
+t=43ms open user=0x<user-id> type=7 freq=16000 param=0 -> 0x80260104
+t=44ms open user=0x<user-id> type=7 freq=16000 param=1 -> 0x80260104
+t=45ms open user=0x<user-id> type=7 freq=48000 param=0 -> 0x80260104
+t=45ms open user=0x<user-id> type=7 freq=48000 param=1 -> 0x80260104
+t=46ms open user=0xff type=0 freq=16000 param=0 -> 0x809b0001
+t=46ms open user=0xff type=0 freq=16000 param=1 -> 0x809b0001
+t=47ms open user=0xff type=0 freq=48000 param=0 -> 0x809b0001
+t=48ms open user=0xff type=0 freq=48000 param=1 -> 0x809b0001
+t=48ms open user=0xff type=1 freq=16000 param=0 -> 0x809b0001
+t=49ms open user=0xff type=1 freq=16000 param=1 -> 0x809b0001
+t=50ms open user=0xff type=1 freq=48000 param=0 -> 0x809b0001
+t=50ms open user=0xff type=1 freq=48000 param=1 -> 0x809b0001
+t=51ms open user=0xff type=2 freq=16000 param=0 -> 0x809b0001
+t=52ms open user=0xff type=2 freq=16000 param=1 -> 0x809b0001
+t=53ms open user=0xff type=2 freq=48000 param=0 -> 0x809b0001
+t=53ms open user=0xff type=2 freq=48000 param=1 -> 0x809b0001
+t=54ms open user=0xff type=3 freq=16000 param=0 -> 0x809b0001
+t=55ms open user=0xff type=3 freq=16000 param=1 -> 0x809b0001
+t=56ms open user=0xff type=3 freq=48000 param=0 -> 0x809b0001
+t=56ms open user=0xff type=3 freq=48000 param=1 -> 0x809b0001
+t=57ms open user=0xff type=4 freq=16000 param=0 -> 0x809b0001
+t=58ms open user=0xff type=4 freq=16000 param=1 -> 0x809b0001
+t=58ms open user=0xff type=4 freq=48000 param=0 -> 0x809b0001
+t=59ms open user=0xff type=4 freq=48000 param=1 -> 0x809b0001
+t=60ms open user=0xff type=5 freq=16000 param=0 -> 0x809b0001
+t=60ms open user=0xff type=5 freq=16000 param=1 -> 0x809b0001
+t=61ms open user=0xff type=5 freq=48000 param=0 -> 0x809b0001
+t=62ms open user=0xff type=5 freq=48000 param=1 -> 0x809b0001
+t=62ms open user=0xff type=6 freq=16000 param=0 -> 0x80260104
+t=63ms open user=0xff type=6 freq=16000 param=1 -> 0x80260104
+t=64ms open user=0xff type=6 freq=48000 param=0 -> 0x80260104
+t=64ms open user=0xff type=6 freq=48000 param=1 -> 0x80260104
+t=65ms open user=0xff type=7 freq=16000 param=0 -> 0x80260104
+t=66ms open user=0xff type=7 freq=16000 param=1 -> 0x80260104
+t=67ms open user=0xff type=7 freq=48000 param=0 -> 0x80260104
+t=68ms open user=0xff type=7 freq=48000 param=1 -> 0x80260104
+t=68ms summary: 0 successful open(s)
+t=69ms sceUserServiceTerminate rc=0x00000000
+t=69ms done in 69 ms
