@@ -21,7 +21,7 @@
 #define HANG_FRAMES 40    // 800 ms after the last speech frame: no drop-outs between words
 #define MIC_LAG_FRAMES 4  // more mic than this waiting (80 ms): drop the oldest, keep latency low
 #define MIC_GAP_MS 100    // no mic data this long while speaking: fill with silence
-#define MAX_PEERS 16
+#define MAX_PEERS 64 // speakers we decode at once; matches the 64 users voice.c tracks
 #define MIC_CAP (VAU_RATE / 2) // half a second of mic; older samples go
 #define OUT_CAP 8              // playback frames queued for the app (160 ms)
 #define OUT_FRAME_BYTES (4 * VAU_FRAME) // one stereo 20 ms frame as bytes
