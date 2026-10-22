@@ -28,6 +28,10 @@ fetch https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz 
     bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16 "$deps/zlib-1.3.2.tar.gz"
 [[ -d $deps/src/zlib-1.3.2 ]] || tar -xzf "$deps/zlib-1.3.2.tar.gz" -C "$deps/src"
 
+fetch https://downloads.xiph.org/releases/opus/opus-1.6.1.tar.gz \
+    6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1 "$deps/opus-1.6.1.tar.gz"
+[[ -d $deps/src/opus-1.6.1 ]] || tar -xzf "$deps/opus-1.6.1.tar.gz" -C "$deps/src"
+
 fetch https://github.com/DaveGamble/cJSON/archive/refs/tags/v1.7.18.tar.gz \
     3aa806844a03442c00769b83e99970be70fbef03735ff898f4811dd03b9f5ee5 "$deps/cJSON-1.7.18.tar.gz"
 [[ -d $deps/src/cJSON-1.7.18 ]] || tar -xzf "$deps/cJSON-1.7.18.tar.gz" -C "$deps/src"

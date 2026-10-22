@@ -26,6 +26,7 @@
 #include "platform/ps5/display_egl.hpp"
 #include "platform/ps5/ime.hpp"
 #include "platform/ps5/usb_keyboard.hpp"
+#include "platform/ps5/voice_audio.hpp"
 #include "platform/ps5/pad.hpp"
 #include "platform/ps5/system.hpp"
 #include "ui/fonts.hpp"
@@ -288,6 +289,11 @@ int main()
     const int tracks = music.init(mixer, std::string(kAssets) + "/audio/music",
                                   static_cast<std::uint64_t>(sys::monotonic_us()));
     sys::log("[HUI] music songs=%d", tracks);
+    // Voice audio: the mic and the core's audio socket. Its playback is a
+    // voice ring on the mixer, attached before the audio thread starts.
+    ps5::VoiceAudio voice_audio;
+    voice_audio.start(pad.user());
+    mixer.attach_voice(&voice_audio.playback());
     ps5::AudioOut audio_out;
     audio_out.start(mixer);
     audio::SoundBank sounds;
@@ -441,7 +447,15 @@ int main()
         }
 
         if (!tour) // the tour runs on the sample account
+        {
             client.take(snapshot);
+            // The mic is open while connected and neither muted nor deafened (deafen mutes too,
+            // as in Discord); playback while not deafened.
+            const bool linked = snapshot.voice.state == discord::VoiceState::connected;
+            const bool hearing = !snapshot.voice.deafened;
+            voice_audio.set_wanted(linked, linked && hearing && !snapshot.voice.muted, linked && hearing);
+            snapshot.voice.mic_level = voice_audio.mic_level();
+        }
         snapshot.utc_offset_minutes = utc_offset;
         for (const discord::Image &image : client.take_images())
             if (image.w > 0)
@@ -582,6 +596,7 @@ int main()
             {
                 sys::log("[HUI] closing: %s",
                          quit_requested ? "quit requested" : "tour evidence window over");
+                voice_audio.stop();
                 pad.close();
                 sys::quit();
             }
@@ -592,11 +607,12 @@ int main()
             stats.format(summary, sizeof(summary));
             sys::log("[HUI] %s draws=%zu shapes=%zu", summary, renderer.last_draw_calls(),
                      renderer.last_instances());
-            sys::log("[HUI] audio grains=%llu errors=%llu voices=%d music=%s underruns=%llu",
+            sys::log("[HUI] audio grains=%llu errors=%llu voices=%d music=%s underruns=%llu voice_underruns=%llu",
                      static_cast<unsigned long long>(audio_out.grains()),
                      static_cast<unsigned long long>(audio_out.errors()), mixer.active_voices(),
                      music.current().c_str(),
-                     static_cast<unsigned long long>(mixer.stream_underruns()));
+                     static_cast<unsigned long long>(mixer.stream_underruns()),
+                     static_cast<unsigned long long>(mixer.voice_underruns()));
             stats.reset();
             if (frames % 3600 < 600)
                 log_heap(frames);

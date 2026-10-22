@@ -66,6 +66,11 @@ class Mixer
     static constexpr std::size_t kQueue = 256;
     static constexpr std::size_t kStreams = 2;     // music decks, for crossfades
     static constexpr std::size_t kMaxGrain = 1024; // frames per render call
+    // Voice playback latency (48 kHz frames): prime at 60 ms, drop back to 100 ms
+    // once more than 200 ms has piled up.
+    static constexpr std::size_t kVoicePrime = 2880;
+    static constexpr std::size_t kVoiceKeep = 4800;
+    static constexpr std::size_t kVoiceMax = 9600;
 
     Mixer();
 
@@ -86,6 +91,13 @@ class Mixer
     bool swap_stream(std::size_t slot, StreamRing *ring);
     // Ramps a stream's gain to gain over seconds (0 = at once).
     bool set_stream_gain(std::size_t slot, float gain, float seconds);
+    // Voice chat playback: a ring the link thread fills (stereo S16 converted to
+    // float). Plays at unity, outside the buses, so the music volume and ducking
+    // do not touch it. Attach before the audio thread starts; the ring is not owned.
+    void attach_voice(StreamRing *ring)
+    {
+        voice_ = ring;
+    }
 
     // ---- audio thread ----
     // Renders frames of interleaved stereo S16 at kSampleRate.
@@ -98,6 +110,11 @@ class Mixer
     std::uint64_t stream_underruns() const
     {
         return underruns_.load(std::memory_order_relaxed);
+    }
+    // Grains where voice playback ran dry and went back to priming.
+    std::uint64_t voice_underruns() const
+    {
+        return voice_underruns_.load(std::memory_order_relaxed);
     }
     std::uint64_t dropped_commands() const
     {
@@ -148,6 +165,7 @@ class Mixer
 
     bool post(const Command &command);
     void render_chunk(std::int16_t *out, int frames);
+    void pull_voice(int frames);
     void apply(const Command &command);
     Voice &allocate_voice();
     static float tone_sample(Voice &voice);
@@ -169,6 +187,10 @@ class Mixer
     std::array<float, kStreams> stream_step_{};
     std::array<std::array<float, kMaxGrain * 2>, kStreams> stream_buffer_{};
     std::atomic<std::uint64_t> underruns_{0};
+    StreamRing *voice_ = nullptr;
+    bool voice_primed_ = false;
+    std::array<float, kMaxGrain * 2> voice_buffer_{};
+    std::atomic<std::uint64_t> voice_underruns_{0};
 };
 
 } // namespace hui::audio

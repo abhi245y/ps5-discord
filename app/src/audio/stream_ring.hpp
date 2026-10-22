@@ -73,6 +73,15 @@ class StreamRing
         tail_.store(head_.load(std::memory_order_acquire), std::memory_order_release);
     }
 
+    // Consumer side only: drops the oldest frames so that at most frames remain.
+    void keep_latest(std::size_t frames)
+    {
+        const std::size_t tail = tail_.load(std::memory_order_relaxed);
+        const std::size_t head = head_.load(std::memory_order_acquire);
+        if (head - tail > frames)
+            tail_.store(head - frames, std::memory_order_release);
+    }
+
   private:
     std::vector<float> samples_;
     std::size_t capacity_;

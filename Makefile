@@ -22,12 +22,18 @@ ZLIB := .deps/src/zlib-1.3.2
 CJSON := .deps/src/cJSON-1.7.18
 QRGEN := .deps/src/QR-Code-generator-1.8.0/c
 SQLITE := .deps/src/sqlite-amalgamation-3500400
+OPUS := .deps/src/opus-1.6.1
+# Opus, fixed-point C only (no asm, no float API). The source lists come from the tarball.
+-include $(OPUS)/celt_sources.mk $(OPUS)/silk_sources.mk $(OPUS)/opus_sources.mk
+OPUS_SRC := $(addprefix $(OPUS)/,$(CELT_SOURCES) $(SILK_SOURCES) $(SILK_SOURCES_FIXED) $(OPUS_SOURCES))
+OPUS_FLAGS := -DOPUS_BUILD -DFIXED_POINT=1 -DDISABLE_FLOAT_API -DVAR_ARRAYS '-DPACKAGE_VERSION="1.6.1"'
+OPUS_INCLUDES := -I$(OPUS)/include -I$(OPUS)/celt -I$(OPUS)/silk -I$(OPUS)/silk/fixed
 
 APP_SRC := src/main.c src/log.c src/status.c src/web.c src/chat.c src/gateway.c src/remote_auth.c src/browser_auth.c src/browser_storage.c src/http.c src/props.c src/ws.c src/tls.c src/zstream.c src/ratelimit.c \
-	src/voice.c src/voice_proto.c
+	src/voice.c src/voice_proto.c src/voice_audio.c
 ZLIB_SRC := $(addprefix $(ZLIB)/,adler32.c crc32.c inffast.c inflate.c inftrees.c zutil.c)
-DEP_SRC = $(wildcard $(MBED)/library/*.c) $(ZLIB_SRC) $(CJSON)/cJSON.c $(QRGEN)/qrcodegen.c $(SQLITE)/sqlite3.c
-INCLUDES := -Isrc -I$(MBED)/include -I$(ZLIB) -I$(CJSON) -I$(QRGEN) -I$(SQLITE)
+DEP_SRC = $(wildcard $(MBED)/library/*.c) $(ZLIB_SRC) $(CJSON)/cJSON.c $(QRGEN)/qrcodegen.c $(SQLITE)/sqlite3.c $(OPUS_SRC)
+INCLUDES := -Isrc -I$(MBED)/include -I$(ZLIB) -I$(CJSON) -I$(QRGEN) -I$(SQLITE) $(OPUS_INCLUDES)
 SQLITE_FLAGS := -DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_MEMSTATUS=0 -DSQLITE_TEMP_STORE=3 -DSQLITE_MAX_MMAP_SIZE=0
 
 PS5_CC := $(SDK)/bin/prospero-clang
@@ -62,9 +68,9 @@ HOST_DAVE_TEST :=
 endif
 # The SDK wrappers find LLVM through llvm-config; use the system one if present.
 export LLVM_CONFIG ?= $(or $(shell command -v llvm-config),$(abspath tools/llvm-config))
-PS5_CFLAGS := -std=gnu11 -O2 -Wall $(INCLUDES) $(PS5_DAVE_INC) -D__unix__ -DCORE_FOLLOWS_APP=$(CORE_FOLLOWS_APP) \
+PS5_CFLAGS := -std=gnu11 -O2 -Wall $(INCLUDES) $(OPUS_FLAGS) $(PS5_DAVE_INC) -D__unix__ -DCORE_FOLLOWS_APP=$(CORE_FOLLOWS_APP) \
 	'-DMBEDTLS_USER_CONFIG_FILE="platform/mbedtls_config_ps5.h"' $(SQLITE_FLAGS)
-HOST_CFLAGS := -std=gnu11 -O1 -g -Wall $(INCLUDES) $(HOST_DAVE_INC) $(SQLITE_FLAGS)
+HOST_CFLAGS := -std=gnu11 -O1 -g -Wall $(INCLUDES) $(OPUS_FLAGS) $(HOST_DAVE_INC) $(SQLITE_FLAGS)
 
 PS5_OBJ = $(patsubst %.c,build/ps5/%.o,$(APP_SRC) $(PS5_DAVE_SRC) src/platform/entropy_ps5.c build/ca_bundle.c build/web_index.c $(DEP_SRC))
 HOST_OBJ = $(patsubst %.c,build/host/%.o,$(APP_SRC) $(HOST_DAVE_SRC) build/ca_bundle.c build/web_index.c $(DEP_SRC))
@@ -111,12 +117,16 @@ test: build/host/selftest build/host/browser-storage-test build/host/client-read
 	$(if $(HOST_DAVE_TEST),./build/host/dave-test)
 
 # The external sender is libdave's test helper (C++, tests/dave): it signs the group's proposals.
-build/host/dave-test: tests/dave_session.c tests/dave/external_sender.cpp tests/dave/external_sender_wrapper.cpp
+# The media leg links the engine's packet code, Opus and mbedTLS (GCM) as objects.
+DAVE_TEST_LIB = build/host/src/voice_audio.o build/host/src/voice_proto.o build/host/$(CJSON)/cJSON.o \
+	$(patsubst %.c,build/host/%.o,$(OPUS_SRC) $(wildcard $(MBED)/library/*.c))
+build/host/dave-test: tests/dave_session.c tests/dave/external_sender.cpp tests/dave/external_sender_wrapper.cpp \
+		$(DAVE_TEST_LIB)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) -Itests -c tests/dave_session.c -o build/host/dave_session.o
 	$(CXX) -std=c++17 -Wall -I$(DAVE_HOST)/include -I$(DAVE_HOST)/include/mlspp -Itests/dave -c tests/dave/external_sender.cpp -o build/host/external_sender.o
 	$(CXX) -std=c++17 -Wall -I$(DAVE_HOST)/include -I$(DAVE_HOST)/include/mlspp -Itests/dave -c tests/dave/external_sender_wrapper.cpp -o build/host/external_sender_wrapper.o
-	$(CXX) -o $@ build/host/dave_session.o build/host/external_sender.o build/host/external_sender_wrapper.o $(HOST_DAVE_LINK)
+	$(CXX) -o $@ build/host/dave_session.o build/host/external_sender.o build/host/external_sender_wrapper.o $(DAVE_TEST_LIB) $(HOST_DAVE_LINK)
 
 build/host/client-read-state-test: tests/client_read_state.cpp app/src/discord/read_state.hpp
 	@mkdir -p $(@D)
@@ -126,7 +136,7 @@ build/host/browser-storage-test: tests/browser_storage.c src/browser_storage.c $
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ $^ -lm
 build/host/selftest: tests/selftest.c src/ws.c src/tls.c src/zstream.c src/log.c src/status.c src/chat.c src/ratelimit.c \
-		src/voice.c src/voice_proto.c $(HOST_DAVE_SRC) \
+		src/voice.c src/voice_proto.c src/voice_audio.c $(OPUS_SRC) $(HOST_DAVE_SRC) \
 		$(CJSON)/cJSON.c $(QRGEN)/qrcodegen.c $(ZLIB_SRC) \
 		$(ZLIB)/deflate.c $(ZLIB)/trees.c $(wildcard $(MBED)/library/*.c) build/ca_bundle.c
 	@mkdir -p $(@D)

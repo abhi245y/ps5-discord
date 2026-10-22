@@ -370,6 +370,8 @@ void voice_dock(DrawList &list, const Ink &ink, const discord::Snapshot &s, floa
             discord::User face = *u;
             face.voice_room.clear();
             avatar(list, ink, face, cx, dock.cy(), kFaceR, false);
+            if (seats->second[i].speaking)
+                list.ring(cx, dock.cy(), kFaceR + 3.0f, 3.0f, kCoral);
             x += kFaceStep;
         }
     if (more_w > 0.0f)

@@ -1,5 +1,6 @@
 // Host self-checks for the pure parts: websocket framing and zlib-stream reassembly.
 // make test
+#include <arpa/inet.h>
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -14,6 +15,7 @@
 #include "../src/chat.h"
 #include "../src/ratelimit.h"
 #include "../src/voice.h"
+#include "../src/voice_audio.h"
 #include "../src/voice_proto.h"
 #include "../src/ws.h"
 #include "../src/zstream.h"
@@ -193,8 +195,8 @@ static void test_gcm(void)
     uint8_t csrc[] = {0x82, 0x78, 0, 1, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 'x'};
     assert(voice_rtp_header_len(csrc, sizeof csrc) == 20);
     uint8_t ext[] = {0x90, 0x78, 0, 1, 0, 0, 0, 1, 0, 0, 0, 2, 0xbe, 0xde, 0, 1, 0, 0, 0, 0, 'x'};
-    assert(voice_rtp_header_len(ext, sizeof ext) == 20);
-    assert(voice_rtp_header_len(ext, 16) == 0);  // preamble cut short
+    assert(voice_rtp_header_len(ext, sizeof ext) == 16); // the body is encrypted, not clear
+    assert(voice_rtp_header_len(ext, 15) == 0);  // preamble cut short
     assert(voice_rtp_header_len(ext, 8) == 0);
 }
 
@@ -409,6 +411,119 @@ static void test_ratelimit(void)
     assert(ratelimit_retry_after(NULL, 5.0) == 0);
 }
 
+// Voice audio: Opus, VAD, RTP (with the extension and padding), the transport packet, the
+// playback queue and mixer, the loopback rule of the audio socket.
+static void test_audio(void)
+{
+    OpusEncoder *e = vau_encoder_new();
+    OpusDecoder *d = vau_decoder_new();
+    assert(e && d);
+    // A square tone, ten frames. The decoded energy of the later frames must be near the input.
+    int16_t pcm[VAU_FRAME], out[2 * VAU_FRAME];
+    uint8_t opus[VAU_MAX_PKT];
+    double in_e = 0, out_e = 0;
+    for (int f = 0; f < 10; f++) {
+        for (int i = 0; i < VAU_FRAME; i++)
+            pcm[i] = (f * VAU_FRAME + i) % 100 < 50 ? 6000 : -6000;
+        int n = opus_encode(e, pcm, VAU_FRAME, opus, sizeof opus);
+        assert(n > 0 && (f < 5 || n < 200)); // 64 kbps is about 160 bytes per 20 ms once warmed up
+        assert(opus_decode(d, opus, n, out, VAU_FRAME, 0) == VAU_FRAME);
+        if (f >= 5)
+            for (int i = 0; i < VAU_FRAME; i++) {
+                in_e += (double)pcm[i] * pcm[i];
+                out_e += (double)out[2 * i] * out[2 * i];
+            }
+    }
+    double ratio = out_e / in_e;
+    assert(ratio > 0.5 && ratio < 2.0);
+    opus_encoder_destroy(e);
+    opus_decoder_destroy(d);
+
+    // VAD: speech starts it (soft speech at the controller's mic too), and it holds for
+    // 800 ms after the last speech frame so it does not drop out between words.
+    vau_vad v = {0};
+    int16_t quiet[VAU_FRAME] = {0}, loud[VAU_FRAME], soft[VAU_FRAME];
+    for (int i = 0; i < VAU_FRAME; i++) {
+        loud[i] = i % 100 < 50 ? 6000 : -6000;
+        soft[i] = i % 100 < 50 ? 200 : -200;
+    }
+    assert(vau_vad_frame(&v, quiet, VAU_FRAME) == 0);
+    assert(vau_vad_frame(&v, loud, VAU_FRAME) == 1);
+    for (int i = 0; i < 39; i++)
+        assert(vau_vad_frame(&v, quiet, VAU_FRAME) == 1);
+    assert(vau_vad_frame(&v, quiet, VAU_FRAME) == 0);
+    assert(vau_vad_frame(&v, soft, VAU_FRAME) == 1);
+
+    // RTP: a plain header, then one with CSRC-less extension (body 4 bytes) and 2 padding octets.
+    uint8_t h[12];
+    vau_rtp_header(h, 0xfffe, 0x01020304, 0xaabbccdd);
+    vau_rtp r;
+    assert(vau_rtp_parse(h, 12, &r) == 0 && r.seq == 0xfffe && r.ts == 0x01020304 && r.ssrc == 0xaabbccdd);
+    assert(r.off == 12 && r.len == 0);
+    uint8_t ext[] = {0xb0, 0x78, 0, 1, 0, 0, 0, 1, 0, 0, 0, 2, 0xbe, 0xde, 0, 1, 0x10, 0x20, 0x30, 0x40,
+                     'a', 'b', 'c', 0, 2};
+    assert(vau_rtp_parse(ext, sizeof ext, &r) == 0 && r.off == 20 && r.len == 3 && ext[r.off] == 'a');
+    ext[1] = 0x79; // not Opus
+    assert(vau_rtp_parse(ext, sizeof ext, &r) == -1);
+    assert(vau_rtp_parse(h, 11, &r) == -1);
+
+    // Transport: a sealed packet with an extension opens to its Opus payload (ext stripped).
+    uint8_t key[32];
+    for (int i = 0; i < 32; i++)
+        key[i] = (uint8_t)(i * 7 + 3);
+    uint8_t sealed[64], got[64];
+    ext[1] = 0x78;
+    size_t sn = voice_gcm_seal(key, 7, ext, sizeof ext, sealed, sizeof sealed);
+    assert(sn == sizeof ext + 20);
+    uint32_t ssrc = 0;
+    assert(vau_open_packet(NULL, key, sealed, sn, got, sizeof got, &ssrc) == 3 && memcmp(got, "abc", 3) == 0);
+    assert(ssrc == 2); // the ssrc bytes of the ext packet above
+    key[0] ^= 1;
+    assert(vau_open_packet(NULL, key, sealed, sn, got, sizeof got, &ssrc) == 0);
+    key[0] ^= 1;
+    // The silence frame is never decrypted, and our own send path packs the same way.
+    uint8_t silence[3] = {0xf8, 0xff, 0xfe};
+    size_t built = vau_build_packet(NULL, key, 9, 1, 960, 3, silence, 3, sealed, sizeof sealed);
+    assert(built == 12 + 3 + 20);
+    assert(vau_open_packet(NULL, key, sealed, built, got, sizeof got, &ssrc) == 3 && ssrc == 9);
+
+    // Playback: two frames to start, the oldest drops when full; the mixer adds and clamps.
+    vau_fifo *f = calloc(1, sizeof *f);
+    assert(f);
+    int16_t one[2 * VAU_FRAME], two[2 * VAU_FRAME], mixed[2 * VAU_FRAME];
+    for (int i = 0; i < 2 * VAU_FRAME; i++)
+        one[i] = 1000, two[i] = -300;
+    vau_fifo_push(f, one);
+    assert(vau_fifo_pop(f, mixed) == 0); // not primed yet
+    vau_fifo_push(f, one);
+    assert(vau_fifo_pop(f, mixed) == 1 && mixed[0] == 1000);
+    for (int i = 0; i < VAU_FIFO + 2; i++)
+        vau_fifo_push(f, two);
+    assert(f->count == VAU_FIFO);
+    free(f);
+    int32_t acc[2 * VAU_FRAME] = {0};
+    vau_mix_add(acc, one);
+    vau_mix_add(acc, one);
+    vau_mix_add(acc, two);
+    vau_mix_out(acc, mixed);
+    assert(mixed[0] == 1700);
+    for (int i = 0; i < 2 * VAU_FRAME; i++)
+        acc[i] = i % 2 ? 40000 : -40000;
+    vau_mix_out(acc, mixed);
+    assert(mixed[0] == -32768 && mixed[1] == 32767);
+
+    // The audio socket serves loopback only.
+    assert(vau_loopback(htonl(0x7f000001)));
+    assert(!vau_loopback(htonl(0x0a000001)));
+
+    cJSON *j = parse_free(voice_json_speaking(1, 42));
+    assert(cJSON_GetNumberValue(cJSON_GetObjectItem(j, "op")) == 5);
+    cJSON *dd = cJSON_GetObjectItem(j, "d");
+    assert(cJSON_GetNumberValue(cJSON_GetObjectItem(dd, "speaking")) == 1);
+    assert(cJSON_GetNumberValue(cJSON_GetObjectItem(dd, "ssrc")) == 42);
+    cJSON_Delete(j);
+}
+
 int main(void)
 {
     test_chat();
@@ -421,6 +536,7 @@ int main(void)
     test_bin_frame();
     test_voice_state();
     test_calls();
+    test_audio();
     puts("selftest ok");
     return 0;
 }

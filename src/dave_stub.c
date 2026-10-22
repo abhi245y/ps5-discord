@@ -49,6 +49,13 @@ bool daveCommitResultIsIgnored(DAVECommitResultHandle commitResult) { (void)comm
 void daveCommitResultDestroy(DAVECommitResultHandle commitResult) { (void)commitResult; }
 void daveWelcomeResultDestroy(DAVEWelcomeResultHandle welcomeResult) { (void)welcomeResult; }
 
+void daveEncryptorAssignSsrcToCodec(DAVEEncryptorHandle encryptor, uint32_t ssrc, DAVECodec codecType) {
+    (void)encryptor; (void)ssrc; (void)codecType;
+}
+size_t daveEncryptorGetMaxCiphertextByteSize(DAVEEncryptorHandle encryptor, DAVEMediaType mediaType, size_t frameSize) {
+    (void)encryptor; (void)mediaType;
+    return frameSize;
+}
 DAVEEncryptorHandle daveEncryptorCreate(void) { return NULL; }
 void daveEncryptorDestroy(DAVEEncryptorHandle encryptor) { (void)encryptor; }
 void daveEncryptorSetKeyRatchet(DAVEEncryptorHandle encryptor, DAVEKeyRatchetHandle keyRatchet) {

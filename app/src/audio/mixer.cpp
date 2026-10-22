@@ -246,6 +246,31 @@ void Mixer::render(std::int16_t *out, int frames)
     active_.store(active, std::memory_order_relaxed);
 }
 
+// Fills voice_buffer_ with frames of voice playback (silence while priming).
+void Mixer::pull_voice(int frames)
+{
+    const std::size_t count = static_cast<std::size_t>(frames) * 2;
+    std::fill(voice_buffer_.begin(), voice_buffer_.begin() + static_cast<std::ptrdiff_t>(count), 0.0f);
+    if (voice_ == nullptr)
+        return;
+    if (voice_->available() > kVoiceMax)
+        voice_->keep_latest(kVoiceKeep); // the link fell behind: the oldest audio goes
+    if (!voice_primed_)
+    {
+        if (voice_->available() < kVoicePrime)
+            return;
+        voice_primed_ = true;
+    }
+    const std::size_t got = voice_->read(voice_buffer_.data(), static_cast<std::size_t>(frames));
+    if (got < static_cast<std::size_t>(frames))
+    {
+        voice_primed_ = false; // run dry: silence until the buffer is back to 60 ms
+        voice_underruns_.fetch_add(1, std::memory_order_relaxed);
+        std::fill(voice_buffer_.begin() + static_cast<std::ptrdiff_t>(got * 2),
+                  voice_buffer_.begin() + static_cast<std::ptrdiff_t>(count), 0.0f);
+    }
+}
+
 void Mixer::render_chunk(std::int16_t *out, int frames)
 {
     // Pull this grain from each music stream; a short read plays silence.
@@ -263,6 +288,8 @@ void Mixer::render_chunk(std::int16_t *out, int frames)
                 underruns_.fetch_add(1, std::memory_order_relaxed);
         }
     }
+
+    pull_voice(frames);
 
     for (int frame = 0; frame < frames; ++frame)
     {
@@ -305,6 +332,8 @@ void Mixer::render_chunk(std::int16_t *out, int frames)
             left += l * gain * voice.left;
             right += r * gain * voice.right;
         }
+        left += voice_buffer_[static_cast<std::size_t>(frame) * 2];
+        right += voice_buffer_[static_cast<std::size_t>(frame) * 2 + 1];
         const float music = bus_gain_[static_cast<std::size_t>(Bus::music)];
         for (std::size_t s = 0; s < kStreams; ++s)
         {

@@ -18,10 +18,13 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#include "platform/ps5/sce_module.hpp"
 #include "platform/ps5/system.hpp"
 
 namespace
 {
+
+using hui::ps5::resolve;
 
 struct ImeDialogParam
 {
@@ -55,45 +58,7 @@ extern "C"
     int sceSysmoduleLoadModule(std::uint16_t id);
     int sceKernelLoadStartModule(const char *path, std::size_t argc, const void *argv, std::uint32_t flags,
                                  void *option, int *result);
-    int sceKernelDlsym(int handle, const char *symbol, void **address);
     const char *sceKernelGetFsSandboxRandomWord();
-}
-
-// Asks the core where sym sits in this process (0 if it could not say). A
-// native title's own dlsym finds nothing on 13.00; the core reads the app's
-// library table through the kernel.
-std::uintptr_t core_dlsym(const char *lib, const char *sym)
-{
-    const int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0)
-        return 0;
-    timeval timeout{3, 0};
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
-    sockaddr_in to{};
-    to.sin_len = sizeof to;
-    to.sin_family = AF_INET;
-    to.sin_port = htons(9041);
-    to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    char buf[512];
-    const int n = std::snprintf(buf, sizeof buf, "GET /api/dlsym?pid=%d&lib=%s&sym=%s HTTP/1.0\r\n"
-                                "X-Discord-Native: 1\r\n\r\n",
-                                static_cast<int>(getpid()), lib, sym);
-    std::string raw;
-    if (connect(fd, reinterpret_cast<sockaddr *>(&to), sizeof to) == 0 && send(fd, buf, n, 0) == n)
-        for (ssize_t r; (r = recv(fd, buf, sizeof buf, 0)) > 0;)
-            raw.append(buf, static_cast<std::size_t>(r));
-    close(fd);
-    const std::size_t at = raw.find("\"addr\":");
-    return at == std::string::npos ? 0 : std::strtoull(raw.c_str() + at + 7, nullptr, 10);
-}
-
-// One function: this process's dlsym first, then the core.
-template <typename F> void resolve(int handle, const char *lib, const char *sym, F &out)
-{
-    void *p = nullptr;
-    if (handle < 0 || sceKernelDlsym(handle, sym, &p) != 0 || !p)
-        p = reinterpret_cast<void *>(core_dlsym(lib, sym));
-    out = reinterpret_cast<F>(p);
 }
 
 // The dialog's functions, resolved at run time: a native title does not get

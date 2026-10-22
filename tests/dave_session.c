@@ -6,10 +6,18 @@
 #include <string.h>
 
 #include <dave/dave.h>
+#include <opus.h>
 
 #include "dave/external_sender_wrapper.h"
+#include "voice_audio.h"
 
 static int reported;
+
+// The engine logs through log_printf; this check keeps quiet.
+void log_printf(const char *fmt, ...)
+{
+    (void)fmt;
+}
 
 static void on_failure(const char *source, const char *reason, void *user)
 {
@@ -94,6 +102,40 @@ int main(void)
 
     printf("dave ok: two members, frame %zu -> %zu encrypted -> %zu decrypted, failures reported %d\n",
            sizeof frame, n, m, reported);
+
+    // The media leg as the engine runs it: mic PCM -> Opus -> DAVE -> RTP -> GCM, then GCM open
+    // -> DAVE decrypt -> Opus decode. Ten 20 ms frames of a square tone; later frames must match.
+    OpusEncoder *oe = vau_encoder_new();
+    OpusDecoder *od = vau_decoder_new();
+    assert(oe && od);
+    uint8_t key[32];
+    for (int i = 0; i < 32; i++)
+        key[i] = (uint8_t)(i * 11 + 5);
+    double in_e = 0, out_e = 0;
+    for (int f = 0; f < 10; f++) {
+        int16_t pcm[VAU_FRAME], dec_pcm[2 * VAU_FRAME];
+        uint8_t opus[VAU_MAX_PKT], pkt[VAU_MAX_PKT], back[VAU_MAX_PKT];
+        for (int i = 0; i < VAU_FRAME; i++)
+            pcm[i] = (f * VAU_FRAME + i) % 100 < 50 ? 6000 : -6000;
+        int k = opus_encode(oe, pcm, VAU_FRAME, opus, sizeof opus);
+        assert(k > 0);
+        size_t len = vau_build_packet(enc, key, 0, (uint16_t)f, (uint32_t)(f * VAU_FRAME), (uint32_t)(f + 1),
+                                      opus, (size_t)k, pkt, sizeof pkt);
+        assert(len > 0);
+        size_t got = vau_open_packet(dec, key, pkt, len, back, sizeof back, NULL);
+        assert(got == (size_t)k && memcmp(back, opus, got) == 0);
+        assert(opus_decode(od, back, (opus_int32)got, dec_pcm, VAU_FRAME, 0) == VAU_FRAME);
+        if (f >= 5)
+            for (int i = 0; i < VAU_FRAME; i++) {
+                in_e += (double)pcm[i] * pcm[i];
+                out_e += (double)dec_pcm[2 * i] * dec_pcm[2 * i];
+            }
+    }
+    double ratio = out_e / in_e;
+    assert(ratio > 0.5 && ratio < 2.0);
+    printf("media ok: 10 frames through Opus, DAVE, RTP and GCM, energy ratio %.2f\n", ratio);
+    opus_encoder_destroy(oe);
+    opus_decoder_destroy(od);
     daveCommitResultDestroy(cr);
     daveWelcomeResultDestroy(wr);
     daveKeyRatchetDestroy(ratchet_a);

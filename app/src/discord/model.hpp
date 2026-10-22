@@ -206,6 +206,8 @@ struct Voice
     bool secure = false;       // the DAVE session is up
     std::int64_t since_ms = 0; // when it became connected (epoch ms), 0 otherwise
     std::string error;         // a sentence, when state is error
+    std::set<std::string> speaking; // user ids heard lately, us included while we send
+    float mic_level = 0.0f;    // our own mic, 0..1 (the console's meter; host: sample)
 
     bool active() const
     {
@@ -223,6 +225,7 @@ struct VoiceSeat
     std::string user_id;
     bool muted = false;
     bool deafened = false;
+    bool speaking = false; // the core heard them in the last ~300 ms (Voice::speaking)
 };
 
 // A DM call going on, or ringing (the chat tree's "calls").

@@ -83,7 +83,11 @@ std::vector<Face> faces_in(const discord::Snapshot &s, const std::string &channe
     std::vector<Face> out;
     if (const auto seats = s.seats.find(channel); seats != s.seats.end())
         for (const discord::VoiceSeat &seat : seats->second)
-            out.push_back({person_for(s, seat.user_id), false, seat.muted, seat.deafened});
+        {
+            discord::User who = person_for(s, seat.user_id);
+            who.speaking = seat.speaking; // the seat knows (strangers have no User entry to flag)
+            out.push_back({who, false, seat.muted, seat.deafened});
+        }
     if (const discord::Call *call = call_in(s, channel))
         for (const std::string &id : call->ringing)
             if (std::none_of(out.begin(), out.end(), [&](const Face &f) { return f.user.id == id; }))
@@ -149,6 +153,17 @@ Color connection_dot(const discord::Voice &v)
     default:
         return kIdle;
     }
+}
+
+// Our own mic as a bar: the level of the last grain (square root, so quiet speech shows).
+// Empty while muted.
+void mic_meter(DrawList &list, float x, float cy, float w, float level, bool muted)
+{
+    constexpr float kH = 10.0f;
+    list.rounded_rect({x, cy - kH * 0.5f, w, kH}, kH * 0.5f, kRaisedHigh);
+    if (!muted && level > 0.0f)
+        list.rounded_rect({x, cy - kH * 0.5f, std::max(kH, w * std::sqrt(std::min(1.0f, level))), kH}, kH * 0.5f,
+                          kOnline);
 }
 
 // A small round badge on a face: the icon drawn by icon on a ground-coloured disc.
@@ -338,6 +353,13 @@ void VoiceRoom::draw(const discord::Snapshot &s, DrawList &list) const
                                  (v.state == discord::VoiceState::connected ? " · " + elapsed_text(s.now_ms - v.since_ms)
                                                                               : std::string());
         ui::text(list, ink_.fonts.regular, line, kMargin + 28.0f, 150.0f, 28.0f, kDim);
+        if (v.state == discord::VoiceState::connected)
+        {
+            // The meter sits after the line: "Mic" then the bar.
+            const float x = kMargin + 28.0f + ink_.fonts.regular.measure(line, 28.0f) + 40.0f;
+            ui::text(list, ink_.fonts.regular, "Mic", x, 150.0f, 24.0f, kDim);
+            mic_meter(list, x + 66.0f, 143.0f, 200.0f, v.mic_level, v.muted);
+        }
     }
     else
         ui::text(list, ink_.fonts.regular, "Not in voice", kMargin, 150.0f, 28.0f, kDim);

@@ -14,11 +14,8 @@ size_t voice_rtp_header_len(const uint8_t *p, size_t len)
     if (len < 12 || (p[0] >> 6) != 2)
         return 0;
     size_t n = 12 + 4 * (size_t)(p[0] & 0x0f);
-    if (p[0] & 0x10) { // extension: 4-byte preamble, then length in 32-bit words
-        if (len < n + 4)
-            return 0;
-        n += 4 + 4 * (size_t)(p[n + 2] << 8 | p[n + 3]);
-    }
+    if (p[0] & 0x10) // extension: only its 4-byte preamble is clear; the words are encrypted (rtpsize)
+        n += 4;
     return n <= len ? n : 0;
 }
 
@@ -155,6 +152,15 @@ char *voice_json_select_udp(const char *address, uint16_t port, const char *mode
     cJSON_AddStringToObject(d, "protocol", "udp");
     cJSON_AddItemToObject(d, "data", data);
     return op_json(1, d);
+}
+
+char *voice_json_speaking(int speaking, uint32_t ssrc)
+{
+    cJSON *d = cJSON_CreateObject();
+    cJSON_AddNumberToObject(d, "speaking", speaking ? 1 : 0);
+    cJSON_AddNumberToObject(d, "delay", 0);
+    cJSON_AddNumberToObject(d, "ssrc", (double)ssrc);
+    return op_json(5, d);
 }
 
 char *voice_json_transition(int op, int64_t transition_id)

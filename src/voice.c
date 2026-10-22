@@ -15,6 +15,7 @@
 #include <dave/dave.h>
 #include "log.h"
 #include "tls.h"
+#include "voice_audio.h"
 #include "voice_proto.h"
 #include "ws.h"
 
@@ -44,6 +45,8 @@ typedef struct {
     int hb_acked;
     int dave_version, pending_version, dave_ready;
     DAVESessionHandle dave;
+    uint8_t ext_sender[512]; // op 25, sent once per call: a reset session needs it again
+    size_t ext_sender_len;
     char users[MAX_USERS][IDS]; // who is in the call, for DAVE
     int n_users;
     char err[256];
@@ -64,6 +67,7 @@ static int64_t joined_ms, since_ms;
 static int op4_due;
 static voice_op4 op4;
 static vthread *cur; // the connection that may report; NULL when none
+static vthread *att_owner; // the connection the audio engine serves (voice_audio.c)
 
 static int64_t mono_ms(void)
 {
@@ -160,6 +164,7 @@ static char session_file[256]; // our last gateway session id, to spot our own g
 void voice_init(const char *data_dir)
 {
     snprintf(session_file, sizeof session_file, "%s/voice_session", data_dir);
+    vau_init();
 }
 
 // The guild where READY shows us in voice under session prev (our previous run), or NULL.
@@ -233,6 +238,7 @@ void voice_leave(void)
 int voice_set_flags(int m, int d)
 {
     pthread_mutex_lock(&lock);
+    int now_mute, now_deaf;
     int in_call = state != V_IDLE && state != V_ERROR;
     if (in_call) {
         if (m >= 0)
@@ -244,7 +250,10 @@ int voice_set_flags(int m, int d)
         copy(op4.channel, sizeof op4.channel, want_channel);
         op4_due = 1;
     }
+    now_mute = mute;
+    now_deaf = deaf;
     pthread_mutex_unlock(&lock);
+    vau_set_flags(now_mute, now_deaf);
     return in_call ? 0 : -1;
 }
 
@@ -319,6 +328,8 @@ void voice_on_server(cJSON *d)
 
 char *voice_state_json(void)
 {
+    char ids[8][VAU_ID];
+    int ns = vau_speaking(ids, 8); // before our lock: the engine never takes ours
     pthread_mutex_lock(&lock);
     if (state == V_JOINING && mono_ms() - joined_ms > JOIN_TIMEOUT_MS) {
         // Discord never confirmed the channel (not a voice room, or no permission).
@@ -339,6 +350,9 @@ char *voice_state_json(void)
     cJSON_AddNumberToObject(o, "since_ms", (double)since_ms);
     cJSON_AddStringToObject(o, "error", err_text);
     cJSON_AddStringToObject(o, "refused", refused);
+    cJSON *speaking = cJSON_AddArrayToObject(o, "speaking");
+    for (int i = 0; i < ns; i++)
+        cJSON_AddItemToArray(speaking, cJSON_CreateString(ids[i]));
     pthread_mutex_unlock(&lock);
     char *s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
@@ -372,6 +386,30 @@ static int fatal(vthread *t, const char *msg)
     return -2;
 }
 
+// The audio engine reads this connection's session: give it the current state, or take it back.
+static void audio_dave(vthread *t, int detach)
+{
+    pthread_mutex_lock(&lock);
+    if (cur == t && att_owner == t) {
+        if (detach)
+            vau_dave_state(NULL, 0, 0);
+        else
+            vau_dave_state(t->dave, t->dave_version, t->dave_ready);
+    }
+    pthread_mutex_unlock(&lock);
+}
+
+// The connection's socket ends: the engine must let go of its UDP socket and keys.
+static void audio_release(vthread *t)
+{
+    pthread_mutex_lock(&lock);
+    if (att_owner == t) {
+        att_owner = NULL;
+        vau_detach();
+    }
+    pthread_mutex_unlock(&lock);
+}
+
 static void update_state(vthread *t)
 {
     pthread_mutex_lock(&lock);
@@ -382,6 +420,7 @@ static void update_state(vthread *t)
         set_state_locked(V_CONNECTED);
     }
     pthread_mutex_unlock(&lock);
+    audio_dave(t, 0);
 }
 
 static int udp_open(vthread *t, const char *ip, int port)
@@ -428,22 +467,34 @@ static void dave_failed(const char *source, const char *reason, void *user)
 
 static void dave_start(vthread *t, int version)
 {
-    t->dave_version = version;
+    t->dave_version = t->pending_version = version; // a commit's transition keeps the version
     if (version <= 0)
         return;
     if (!t->dave)
         t->dave = daveSessionCreate(NULL, "", dave_failed, NULL);
-    if (t->dave)
+    if (t->dave) {
+        vau_lock();
         daveSessionInit(t->dave, (uint16_t)version, strtoull(t->channel_id, NULL, 10), t->user_id);
+        // Discord sends the external sender once per call; after a reset (a new epoch when
+        // the others left) the session has lost it and would refuse every proposal and welcome.
+        if (t->ext_sender_len)
+            daveSessionSetExternalSender(t->dave, t->ext_sender, t->ext_sender_len);
+        vau_unlock();
+    }
 }
 
 static void dave_reset(vthread *t, int version)
 {
-    if (t->dave)
+    audio_dave(t, 1); // the engine lets go of the old session before it is destroyed
+    if (t->dave) {
+        vau_lock();
         daveSessionDestroy(t->dave);
+        vau_unlock();
+    }
     t->dave = NULL;
     t->dave_ready = 0;
     dave_start(t, version);
+    audio_dave(t, 0);
 }
 
 static void users_add(vthread *t, const char *id)
@@ -502,6 +553,16 @@ static int on_session(vthread *t, cJSON *d)
         t->key[i] = (uint8_t)cJSON_GetNumberValue(cJSON_GetArrayItem(k, i));
     t->healthy = 1;
     dave_start(t, (int)num(d, "dave_protocol_version"));
+    pthread_mutex_lock(&lock);
+    if (cur == t) {
+        att_owner = t;
+        vau_attach(t->udp, t->key, t->ssrc, t->user_id);
+        // op 11 (who is already here) arrives before this and attach starts a clean peer
+        // table: list them again so their audio can be matched to them.
+        for (int i = 0; i < t->n_users; i++)
+            vau_expect_user(t->users[i]);
+    }
+    pthread_mutex_unlock(&lock);
     update_state(t);
     LOG("voice: session up, DAVE version %d", t->dave_version);
     return send_key_package(t) == 0 ? 0 : -1; // Discord's clients send it at once, not only on op 24
@@ -514,7 +575,9 @@ static int send_key_package(vthread *t)
         return 0;
     uint8_t *kp = NULL;
     size_t len = 0;
+    vau_lock();
     daveSessionGetMarshalledKeyPackage(t->dave, &kp, &len);
+    vau_unlock();
     LOG("voice: DAVE key package %zu bytes", len);
     int r = kp ? send_bin(t, 26, kp, len) : 0;
     daveFree(kp);
@@ -547,6 +610,8 @@ static int on_dave_json(vthread *t, int op, cJSON *d)
         }
         return 0;
     case 22: // EXECUTE_TRANSITION
+        // A transition announced by a commit or welcome (no op 21) keeps the version:
+        // pending_version is only changed by op 21, and starts as the current one.
         t->dave_version = t->pending_version;
         update_state(t);
         return 0;
@@ -580,7 +645,9 @@ static void dave_proposals(vthread *t, const uint8_t *p, size_t n)
     size_t n_ids = recognized(t, ids);
     uint8_t *out = NULL;
     size_t out_len = 0;
+    vau_lock();
     daveSessionProcessProposals(t->dave, p, n, ids, n_ids, &out, &out_len);
+    vau_unlock();
     LOG("voice: DAVE proposals with %zu recognized users, commit %zu bytes", n_ids, out_len);
     if (out && out_len)
         send_bin(t, 28, out, out_len);
@@ -602,13 +669,17 @@ static void dave_commit_or_welcome(vthread *t, int op, const uint8_t *p, size_t 
     const char *ids[MAX_USERS + 1];
     int failed;
     if (op == 29) {
+        vau_lock();
         DAVECommitResultHandle r = daveSessionProcessCommit(t->dave, p + 2, n - 2);
+        vau_unlock();
         failed = !r || daveCommitResultIsFailed(r);
         if (r)
             daveCommitResultDestroy(r);
     } else {
         size_t n_ids = recognized(t, ids);
+        vau_lock();
         DAVEWelcomeResultHandle r = daveSessionProcessWelcome(t->dave, p + 2, n - 2, ids, n_ids);
+        vau_unlock();
         failed = !r;
         if (r)
             daveWelcomeResultDestroy(r);
@@ -636,8 +707,15 @@ static void on_binary(vthread *t, const uint8_t *msg, size_t len)
     LOG("voice: DAVE op %d, %zu bytes", b.op, b.len);
     switch (b.op) {
     case 25: // MLS_EXTERNAL_SENDER
-        if (t->dave)
+        if (b.len <= sizeof t->ext_sender) {
+            memcpy(t->ext_sender, b.payload, b.len);
+            t->ext_sender_len = b.len;
+        }
+        if (t->dave) {
+            vau_lock();
             daveSessionSetExternalSender(t->dave, b.payload, b.len);
+            vau_unlock();
+        }
         break;
     case 27:
         dave_proposals(t, b.payload, b.len);
@@ -688,19 +766,33 @@ static int on_text(vthread *t, const char *json)
     case 11: { // CLIENTS_CONNECT
         cJSON *u;
         cJSON_ArrayForEach(u, cJSON_GetObjectItem(d, "user_ids"))
-            if (cJSON_IsString(u))
+            if (cJSON_IsString(u)) {
                 users_add(t, u->valuestring);
+                vau_expect_user(u->valuestring);
+            }
         break;
     }
+    case 5: // SPEAKING: who an ssrc belongs to
+        vau_map_ssrc((uint32_t)num(d, "ssrc"), str(d, "user_id"));
+        break;
     case 13: // CLIENT_DISCONNECT
-        if (str(d, "user_id"))
+        if (str(d, "user_id")) {
             users_remove(t, str(d, "user_id"));
+            vau_forget_user(str(d, "user_id"));
+        }
         break;
     case 21:
     case 22:
     case 24:
         r = on_dave_json(t, op, d);
         break;
+    default: { // once per opcode: what the server sends that we do not use yet
+        static uint64_t seen;
+        if (op >= 0 && op < 64 && !(seen >> op & 1)) {
+            seen |= 1ull << op;
+            LOG("voice: op %d not handled", op);
+        }
+    }
     }
     cJSON_Delete(m);
     return r;
@@ -721,6 +813,11 @@ static int run_session(vthread *t)
     for (;;) {
         if (t->stop)
             return 0;
+        int speaking;
+        uint32_t ssrc;
+        while (vau_take_speaking(&speaking, &ssrc))
+            if (send_json(t, voice_json_speaking(speaking, ssrc)) != 0)
+                return -1;
         int64_t now = mono_ms();
         if (t->next_hb && now >= t->next_hb) {
             if (!t->hb_acked) {
@@ -734,7 +831,7 @@ static int run_session(vthread *t)
             t->next_hb = now + t->hb_ms;
             continue;
         }
-        int wait = 500;
+        int wait = vau_speaking_pending() ? 5 : 500;
         if (t->next_hb && t->next_hb - now < wait)
             wait = (int)(t->next_hb - now);
         int m = ws_recv(&t->ws, wait);
@@ -764,6 +861,7 @@ static int connect_once(vthread *t)
         return -1;
     }
     int code = run_session(t);
+    audio_release(t);
     ws_close(&t->ws, 1000);
     return code;
 }

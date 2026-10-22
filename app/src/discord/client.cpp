@@ -468,6 +468,13 @@ VoiceState voice_state_of(const std::string &state)
 void resolve_voice(Snapshot &s)
 {
     Voice &v = s.voice;
+    // Speaking rings: on the seats in our room, and on the account and friends (Home rows).
+    if (const auto room = s.seats.find(v.channel_id); room != s.seats.end())
+        for (VoiceSeat &seat : room->second)
+            seat.speaking = v.speaking.count(seat.user_id) > 0;
+    s.me.speaking = v.speaking.count(s.me.id) > 0;
+    for (User &u : s.friends)
+        u.speaking = v.speaking.count(u.id) > 0;
     v.room_name.clear();
     v.guild_name.clear();
     v.member_count = 0;
@@ -947,8 +954,12 @@ void Client::run()
             if (now - last_mentions_ms_ >= 30000)
                 poll_mentions();
         }
-        // Quick while in or joining voice, so the screens follow it; slower otherwise.
-        if (now - last_voice_ms_ >= (snapshot_.voice.active() ? 1000 : 4000))
+        // Quick while connected (the core's speaking window is ~300 ms, so rings follow it),
+        // quick while joining, slower otherwise.
+        const std::int64_t voice_every = snapshot_.voice.state == VoiceState::connected ? 250
+                                         : snapshot_.voice.active()                     ? 1000
+                                                                                        : 4000;
+        if (now - last_voice_ms_ >= voice_every)
             poll_voice();
         for (;;)
         {
@@ -1082,6 +1093,10 @@ void Client::poll_voice()
         voice.secure = v.value("secure", false);
         voice.since_ms = static_cast<std::int64_t>(v.value("since_ms", 0.0));
         voice.error = text(v, "error");
+        if (v.contains("speaking") && v["speaking"].is_array())
+            for (const json &id : v["speaking"])
+                if (id.is_string())
+                    voice.speaking.insert(id.get<std::string>());
     }
     resolve_voice(snapshot_);
     publish();

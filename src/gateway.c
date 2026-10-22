@@ -138,6 +138,9 @@ static void on_dispatch(gateway *g, const char *t, cJSON *d)
         status_note(NULL);
         LOG("gateway: RESUMED");
     } else if (strcmp(t, "VOICE_STATE_UPDATE") == 0) {
+        LOG("gateway: VOICE_STATE_UPDATE %s mute=%d", cJSON_GetObjectItem(d, "guild_id") &&
+            !cJSON_IsNull(cJSON_GetObjectItem(d, "guild_id")) ? "guild" : "call",
+            cJSON_IsTrue(cJSON_GetObjectItem(d, "self_mute")));
         voice_on_state(d);
     } else if (strcmp(t, "VOICE_SERVER_UPDATE") == 0) {
         voice_on_server(d);

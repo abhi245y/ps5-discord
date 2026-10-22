@@ -90,18 +90,25 @@ Snapshot sample_snapshot()
     s.friends_online = 48;
     s.dm_by_user["theo"] = "dm-theo";
 
-    // In a call: the raid room, muted, with the people who are in it.
+    // In a call: the raid room, unmuted (our mic meter shows), with the people who are in it.
+    // Mira and Theo are heard: their speaking rings show in the room, the dock and Home.
     s.voice.state = VoiceState::connected;
     s.voice.channel_id = "raid";
     s.voice.guild_id = "nightshift";
     s.voice.room_name = "Raid Night";
     s.voice.guild_name = "Night Shift";
-    s.voice.muted = true;
+    s.voice.muted = false;
     s.voice.ping_ms = 42;
     s.voice.secure = true;
     s.voice.since_ms = kNow - 42 * kMinute;
-    s.seats["raid"] = {{"me", true, false}, {"mira"}, {"theo"}, {"kenji", true, false}, {"ana"}, {"jo", false, true},
+    s.voice.speaking = {"mira", "theo"};
+    s.voice.mic_level = 0.55f;
+    s.seats["raid"] = {{"me"}, {"mira"}, {"theo"}, {"kenji", true, false}, {"ana"}, {"jo", false, true},
                        {"sam"}, {"lily"}, {"rin"}, {"alex"}, {"nova"}, {"zed"}};
+    for (VoiceSeat &seat : s.seats["raid"])
+        seat.speaking = s.voice.speaking.count(seat.user_id) > 0;
+    for (User &u : s.friends)
+        u.speaking = s.voice.speaking.count(u.id) > 0;
     s.voice.member_count = static_cast<int>(s.seats["raid"].size());
 
     Room raid{"raid", "nightshift", "Night Shift", "Raid Night", 0, {"mira", "ana", "lily", "nova"}, 12};
