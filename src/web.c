@@ -22,6 +22,7 @@
 #include "voice.h"
 #include "voice_audio.h"
 #include "controller_voice.h"
+#include "broadcast.h"
 #include "browser_auth.h"
 
 #ifdef __PROSPERO__
@@ -429,7 +430,24 @@ static void api_voice_output(int c, const char *body)
         refuse(c, "400 Bad Request", "tv must be true or false.");
 }
 
-// GET /api/voice: the call, plus the controller audio and the pick.
+// Go Live on or off: {"on": true|false} (broadcast.h). Needs the call and a USB controller.
+static void api_voice_broadcast(int c, const char *body)
+{
+    cJSON *in = cJSON_Parse(body ? body : "");
+    cJSON *on = cJSON_GetObjectItem(in, "on");
+    int ok = cJSON_IsBool(on), start = cJSON_IsTrue(on);
+    cJSON_Delete(in);
+    if (!ok)
+        refuse(c, "400 Bad Request", "on must be true or false.");
+    else if (!start)
+        bc_stop(), reply_ok(c);
+    else if (bc_start() == 0)
+        reply_ok(c);
+    else
+        refuse(c, "409 Conflict", bc_error());
+}
+
+// GET /api/voice: the call, plus the controller audio, the pick and the broadcast.
 static char *voice_json(void)
 {
     char *s = voice_state_json();
@@ -439,6 +457,9 @@ static char *voice_json(void)
         return NULL;
     cJSON_AddStringToObject(o, "controller", cv_state());
     cJSON_AddStringToObject(o, "output", cv_tv() ? "tv" : "controller");
+    cJSON *bc = cJSON_AddObjectToObject(o, "broadcast");
+    cJSON_AddStringToObject(bc, "state", bc_state());
+    cJSON_AddStringToObject(bc, "error", bc_error());
     s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     return s;
@@ -591,6 +612,8 @@ static void handle(int c, int local)
             api_voice_set(c, body);
         else if (strcmp(path, "/api/voice/output") == 0)
             api_voice_output(c, body);
+        else if (strcmp(path, "/api/voice/broadcast") == 0)
+            api_voice_broadcast(c, body);
         else
             reply(c, "404 Not Found", "text/plain", "not found", 9);
     } else if (post && strcmp(path, "/api/edit") == 0) {

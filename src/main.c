@@ -25,6 +25,7 @@
 #include "web.h"
 #include "voice.h"
 #include "controller_voice.h"
+#include "broadcast.h"
 #include "tls.h"
 
 #ifdef __PROSPERO__
@@ -121,6 +122,7 @@ int main(void)
     srand((unsigned)time(NULL) ^ (unsigned)getpid());
     voice_init(DATA_DIR);
     cv_init();
+    bc_init(DATA_DIR);
     if (tls_global_init() != 0) {
         LOG("tls init failed");
         return 1;

@@ -1095,6 +1095,11 @@ void Client::poll_voice()
         voice.error = text(v, "error");
         voice.controller = text(v, "controller");
         voice.output_tv = text(v, "output") != "controller";
+        if (v.contains("broadcast") && v["broadcast"].is_object())
+        {
+            voice.broadcast = text(v["broadcast"], "state");
+            voice.broadcast_error = text(v["broadcast"], "error");
+        }
         if (v.contains("speaking") && v["speaking"].is_array())
             for (const json &id : v["speaking"])
                 if (id.is_string())
@@ -1416,7 +1421,8 @@ void Client::handle(const Request &request)
     case Request::Kind::voice_decline:
     case Request::Kind::voice_leave:
     case Request::Kind::voice_set:
-    case Request::Kind::voice_output: {
+    case Request::Kind::voice_output:
+    case Request::Kind::voice_broadcast: {
         const char *path = "/api/voice/leave";
         json body = json::object();
         switch (request.kind)
@@ -1440,6 +1446,10 @@ void Client::handle(const Request &request)
         case Request::Kind::voice_output:
             path = "/api/voice/output";
             body = {{"tv", request.tv}};
+            break;
+        case Request::Kind::voice_broadcast:
+            path = "/api/voice/broadcast";
+            body = {{"on", request.on}};
             break;
         default:
             break;
