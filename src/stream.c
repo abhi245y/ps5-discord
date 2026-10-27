@@ -39,6 +39,9 @@
 #define WIDTH 1280       // broadcast.c asks Remote Play for 720p30
 #define HEIGHT 720
 #define FPS 30
+// The playout-delay header extension the reference clients put on video: with it Discord's
+// stream server drops every video packet (2026-10-28, error 2012 on viewers).
+#define VIDEO_EXT 0
 
 typedef struct {
     char endpoint[256], token[256], server_id[IDS], user_id[IDS], session_id[64];
@@ -208,7 +211,7 @@ static void send_frame_rtp(conn *c, const uint8_t *f, size_t n, uint32_t ts)
         next = next_nal(f, n, &pos, &len);
         int last_nal = next == NULL;
         if (nlen <= RTP_MTU) {
-            send_rtp(c, PT_H264, c->video_ssrc, c->seq_v++, ts, last_nal, 1, nal, nlen);
+            send_rtp(c, PT_H264, c->video_ssrc, c->seq_v++, ts, last_nal, VIDEO_EXT, nal, nlen);
         } else {
             uint8_t frag[RTP_MTU + 2];
             frag[0] = (uint8_t)((nal[0] & 0xe0) | 28);
@@ -217,7 +220,7 @@ static void send_frame_rtp(conn *c, const uint8_t *f, size_t n, uint32_t ts)
                 frag[1] = (uint8_t)((off == 1 ? 0x80 : 0) | (off + chunk == nlen ? 0x40 : 0) | (nal[0] & 0x1f));
                 memcpy(frag + 2, nal + off, chunk);
                 off += chunk;
-                send_rtp(c, PT_H264, c->video_ssrc, c->seq_v++, ts, last_nal && off == nlen, 1, frag, chunk + 2);
+                send_rtp(c, PT_H264, c->video_ssrc, c->seq_v++, ts, last_nal && off == nlen, VIDEO_EXT, frag, chunk + 2);
             }
         }
         nal = next;
@@ -757,11 +760,13 @@ static int on_text(conn *c, const char *json)
             r = send_key_package(c);
         }
         break;
-    default: {
+    default: { // once per opcode, with its payload: what the server tells a streamer
         static uint64_t seen;
         if (code >= 0 && code < 64 && !(seen >> code & 1)) {
             seen |= 1ull << code;
-            LOG("stream: op %d not handled", code);
+            char *p = d ? cJSON_PrintUnformatted(d) : NULL;
+            LOG("stream: op %d not handled: %.300s", code, p ? p : "");
+            free(p);
         }
     }
     }
