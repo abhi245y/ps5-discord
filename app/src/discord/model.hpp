@@ -208,6 +208,10 @@ struct Voice
     std::string error;         // a sentence, when state is error
     std::set<std::string> speaking; // user ids heard lately, us included while we send
     float mic_level = 0.0f;    // our own mic, 0..1 (the console's meter; host: sample)
+    std::string controller;       // the USB controller as the call's audio: "off", "on", "missing"
+    bool output_tv = true;        // the pick while the app is on screen: TV, or the controller
+    std::string broadcast;        // Go Live: "off", "starting", "live", "error"
+    std::string broadcast_error;  // why it stopped, when it did
 
     bool active() const
     {

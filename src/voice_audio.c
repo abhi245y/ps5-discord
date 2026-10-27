@@ -14,6 +14,7 @@
 #include <unistd.h>
 
 #include "log.h"
+#include "pcm_stream.h"
 #include "voice_proto.h"
 
 // ponytail: fixed thresholds, tuned by ear. add a knob when a mic needs another level.
@@ -260,6 +261,14 @@ static int mic_head, mic_count, mic_carry = -1;
 static uint8_t out_buf[OUT_CAP * OUT_FRAME_BYTES];
 static size_t out_len;
 
+// The external device (vau_ext_*). Its thread must never wait on the engine, which
+// holds mu through Opus and DAVE, so the two meet only in these rings under ext_mu.
+static pthread_mutex_t ext_mu = PTHREAD_MUTEX_INITIALIZER;
+static volatile int ext_on;
+static int16_t ext_mic[MIC_CAP];
+static int ext_mic_head, ext_mic_count;
+static ds5_pcm_stream ext_out; // playback with a 60 ms prefill (tools/ds5-usb-bridge)
+
 static int64_t now_ms(void)
 {
     struct timespec t;
@@ -385,6 +394,8 @@ static void read_mic(void)
     uint8_t buf[4096];
     for (int i = 0; i < 8 && client_fd >= 0; i++) {
         ssize_t r = recv(client_fd, buf, sizeof buf, MSG_DONTWAIT);
+        if (r > 0 && ext_on) // the device is the mic; keep draining the app's socket
+            continue;
         if (r > 0) {
             mic_push(buf, (size_t)r);
             st_mic_bytes += (unsigned)r;
@@ -429,6 +440,11 @@ static void send_opus(const uint8_t *opus, size_t n)
 {
     if (udp < 0 || (dave_version > 0 && (!encryptor || !dave_ready)))
         return;
+    // The RTP clock runs while we are silent too. Without this a pause looks like late
+    // packets to the listener, whose jitter buffer grows by the pause: seconds of delay.
+    int64_t now = now_ms();
+    if (last_tx_ms && now - last_tx_ms > 100)
+        ts += (uint32_t)((now - last_tx_ms) / 20 - 1) * VAU_FRAME;
     uint8_t pkt[VAU_MAX_PKT];
     size_t len = vau_build_packet(dave_version > 0 ? encryptor : NULL, key, my_ssrc, seq, ts, counter, opus, n,
                                   pkt, sizeof pkt);
@@ -618,7 +634,14 @@ static void play(void)
             vau_mix_add(acc, f);
             any = 1;
         }
-    if (any && client_fd >= 0) {
+    if (any && ext_on) {
+        vau_mix_out(acc, out);
+        pthread_mutex_lock(&ext_mu);
+        ds5_pcm_receive(&ext_out, (const uint8_t *)out, sizeof out); // little endian
+        pthread_mutex_unlock(&ext_mu);
+        st_out_bytes += sizeof out;
+        st_mixed++;
+    } else if (any && client_fd >= 0) {
         vau_mix_out(acc, out);
         out_push(out);
         st_mixed++;
@@ -640,10 +663,33 @@ static void keepalive(int64_t now)
     last_ka_ms = now;
 }
 
+// Moves the device's mic samples into the mic ring (bytes, as the app sends them).
+static void read_ext_mic(void)
+{
+    uint8_t b[2 * 1024];
+    for (;;) {
+        pthread_mutex_lock(&ext_mu);
+        int n = ext_mic_count < 1024 ? ext_mic_count : 1024;
+        for (int i = 0; i < n; i++) {
+            uint16_t v = (uint16_t)ext_mic[(ext_mic_head + i) % MIC_CAP];
+            b[2 * i] = (uint8_t)v;
+            b[2 * i + 1] = (uint8_t)(v >> 8);
+        }
+        ext_mic_head = (ext_mic_head + n) % MIC_CAP;
+        ext_mic_count -= n;
+        pthread_mutex_unlock(&ext_mu);
+        if (!n)
+            return;
+        mic_push(b, 2 * (size_t)n);
+        st_mic_bytes += 2u * (unsigned)n;
+    }
+}
+
 static void tick(void)
 {
     accept_client();
     read_mic();
+    read_ext_mic();
     if (!attached) { // no call: the mic is not wanted
         mic_count = 0;
         return;
@@ -867,4 +913,39 @@ int vau_speaking(char ids[][VAU_ID], int max)
             snprintf(ids[n++], VAU_ID, "%s", peers[i].user);
     pthread_mutex_unlock(&mu);
     return n;
+}
+
+void vau_ext_set(int on)
+{
+    pthread_mutex_lock(&ext_mu);
+    ext_mic_head = ext_mic_count = 0;
+    memset(&ext_out, 0, sizeof ext_out);
+    ext_on = on;
+    pthread_mutex_unlock(&ext_mu);
+}
+
+void vau_ext_mic(const int16_t *mono, size_t frames)
+{
+    pthread_mutex_lock(&ext_mu);
+    for (size_t i = 0; i < frames; i++) {
+        ext_mic[(ext_mic_head + ext_mic_count) % MIC_CAP] = mono[i];
+        if (ext_mic_count < MIC_CAP)
+            ext_mic_count++;
+        else
+            ext_mic_head = (ext_mic_head + 1) % MIC_CAP; // behind: the oldest goes
+    }
+    pthread_mutex_unlock(&ext_mu);
+}
+
+size_t vau_ext_playback(int16_t *stereo, size_t frames)
+{
+    pthread_mutex_lock(&ext_mu);
+    size_t n = ds5_pcm_playback(&ext_out, stereo, frames);
+    pthread_mutex_unlock(&ext_mu);
+    return n;
+}
+
+int vau_app_connected(void)
+{
+    return client_fd >= 0;
 }

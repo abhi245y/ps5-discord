@@ -29,6 +29,8 @@ struct Request
         voice_decline,// stop ringing us in channel_id
         voice_leave,  // leave whatever we are in
         voice_set,    // self mute and deafen: mute, deaf
+        voice_output, // the call's audio while the app is on screen: tv, or the USB controller
+        voice_broadcast, // Go Live on or off: on
     };
     Kind kind = Kind::open_channel;
     std::string guild_id; // empty for a DM
@@ -41,6 +43,8 @@ struct Request
     std::string nonce;    // set by the client for send: matches the gateway's echo
     bool mute = false;    // voice_set
     bool deaf = false;    // voice_set
+    bool tv = false;      // voice_output
+    bool on = false;      // voice_broadcast
 };
 
 } // namespace discord

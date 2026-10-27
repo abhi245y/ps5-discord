@@ -5,8 +5,10 @@
 //     connection pill (state, then the ping);
 //   - the faces: speaking ring, muted and deafened badges, Ringing for a call
 //     that has not been answered yet;
-//   - Mute, Deafen, Share screen (not yet available) and Leave.
+//   - Mute, Deafen, Go Live (the game, through Remote Play) and Leave.
 // Square mutes, Triangle deafens, Circle goes back and leaves the call running.
+// L1 moves the call's audio between the TV and the DualSense plugged in by USB (its mic
+// and its speaker or headphones). While a game covers the app it is always the controller.
 
 #include "screens/voice.hpp"
 
@@ -45,7 +47,7 @@ enum Control : int
 {
     kMute,
     kDeafen,
-    kShare, // drawn, never focused: screen share is not in this milestone
+    kShare, // Go Live
     kLeave,
     kControls,
 };
@@ -300,9 +302,7 @@ bool VoiceRoom::update(const discord::Snapshot &s, const hui::InputFrame &input,
     if (input.nav == Direction::left || input.nav == Direction::right)
     {
         int next = focus_ + (input.nav == Direction::right ? 1 : -1);
-        if (next == kShare) // drawn but not focusable
-            next += input.nav == Direction::right ? 1 : -1;
-        if (next >= 0 && next < kControls && next != kShare)
+        if (next >= 0 && next < kControls)
         {
             focus_ = next;
             feedback.play(hui::audio::Cue::focus, 1.0f + 0.02f * static_cast<float>(focus_));
@@ -314,12 +314,28 @@ bool VoiceRoom::update(const discord::Snapshot &s, const hui::InputFrame &input,
         set(!v.muted, v.deafened);
     if (input.is_pressed(Action::north) && live)
         set(v.muted, !v.deafened);
+    if (false && input.is_pressed(Action::page_prev) && live) // parked with controller audio
+    {
+        discord::Request r;
+        r.kind = discord::Request::Kind::voice_output;
+        r.tv = !v.output_tv;
+        requests.push_back(r);
+        feedback.play(hui::audio::Cue::toggle);
+    }
     if (input.is_pressed(Action::confirm))
     {
         if (focus_ == kMute && live)
             set(!v.muted, v.deafened);
         else if (focus_ == kDeafen && live)
             set(v.muted, !v.deafened);
+        else if (focus_ == kShare && live)
+        {
+            discord::Request r;
+            r.kind = discord::Request::Kind::voice_broadcast;
+            r.on = v.broadcast != "live" && v.broadcast != "starting";
+            requests.push_back(r);
+            feedback.play(hui::audio::Cue::toggle);
+        }
         else if (focus_ == kLeave)
         {
             discord::Request r;
@@ -366,6 +382,27 @@ void VoiceRoom::draw(const discord::Snapshot &s, DrawList &list) const
     if (here && v.state == discord::VoiceState::error)
         ui::text(list, ink_.fonts.regular, fit(ink_.fonts.regular, v.error, 26.0f, 1300.0f), kMargin, 196.0f, 26.0f,
                  kDnd);
+    else if (here && !v.broadcast.empty() && v.broadcast != "off")
+    {
+        // Go Live: what it is doing, or why it stopped.
+        const bool failed = v.broadcast == "error";
+        const std::string line = v.broadcast == "live"       ? "Live · the controller is the headset and plays the game"
+                                 : v.broadcast == "starting" ? "Going live…"
+                                                             : v.broadcast_error;
+        ui::text(list, ink_.fonts.regular, fit(ink_.fonts.regular, line, 26.0f, 1300.0f), kMargin, 196.0f, 26.0f,
+                 failed ? kDnd : kDim);
+    }
+    else if (false && here) // parked with controller audio
+    {
+        // Where the call's audio is.
+        const bool missing = v.controller == "missing";
+        const std::string line = v.controller == "on" ? "Audio on the controller"
+                                 : missing ? "Plug the controller in by USB to use its mic and speaker"
+                                           : "Audio on the TV · in a game it moves to a USB controller";
+        const bool failed = missing;
+        ui::text(list, ink_.fonts.regular, fit(ink_.fonts.regular, line, 26.0f, 1300.0f), kMargin, 196.0f, 26.0f,
+                 failed ? kDnd : kDim);
+    }
 
     // The connection, always in the top right.
     const std::string link = here ? connection_text(v) : std::string("Not connected");
@@ -401,8 +438,8 @@ void VoiceRoom::draw(const discord::Snapshot &s, DrawList &list) const
     for (int c = 0; c < kControls; ++c)
     {
         const float x = kCtrlX[c];
-        const bool share = c == kShare;
-        const bool lit = c == kMute ? v.muted : c == kDeafen ? v.deafened : false;
+        const bool share = false;
+        const bool lit = c == kMute ? v.muted : c == kDeafen ? v.deafened : c == kShare ? v.broadcast == "live" : false;
         const float alpha = share || (!usable && c != kLeave) ? 0.4f : 1.0f;
         list.push_opacity(alpha);
         Color fill = kRaised;
@@ -423,7 +460,7 @@ void VoiceRoom::draw(const discord::Snapshot &s, DrawList &list) const
             headphones(list, x, kCtrlY, 56.0f, kText, v.deafened);
             break;
         case kShare:
-            monitor(list, x, kCtrlY, 52.0f, kFaint);
+            monitor(list, x, kCtrlY, 52.0f, kText);
             break;
         case kLeave:
             hang_up(list, x, kCtrlY, 52.0f, kText);
@@ -431,7 +468,7 @@ void VoiceRoom::draw(const discord::Snapshot &s, DrawList &list) const
         }
         const char *label = c == kMute ? (v.muted ? "Unmute" : "Mute")
                             : c == kDeafen ? (v.deafened ? "Undeafen" : "Deafen")
-                            : c == kShare ? "Share screen"
+                            : c == kShare ? (v.broadcast == "live" || v.broadcast == "starting" ? "Stop live" : "Go Live")
                                           : "Leave";
         ui::text(list, ink_.fonts.semibold, label, x, kCtrlY + kCtrlR + 50.0f, 26.0f, kText, gfx::Align::center);
         list.pop_opacity();

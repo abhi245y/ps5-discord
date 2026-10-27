@@ -20,6 +20,10 @@
 #include "ratelimit.h"
 #include "status.h"
 #include "voice.h"
+#include "voice_audio.h"
+#include "controller_voice.h"
+#include "broadcast.h"
+#include "stream.h"
 #include "browser_auth.h"
 
 #ifdef __PROSPERO__
@@ -410,6 +414,70 @@ static void api_voice_set(int c, const char *body)
         refuse(c, "409 Conflict", "Not in a call.");
 }
 
+// Where the call's audio is while the app is on screen: {"tv": true} the app (TV and the
+// console's own mic), false the USB controller. With the app covered it is always the
+// controller, when one is plugged in (controller_voice.h).
+static void api_voice_output(int c, const char *body)
+{
+    cJSON *in = cJSON_Parse(body ? body : "");
+    cJSON *tv = cJSON_GetObjectItem(in, "tv");
+    int ok = cJSON_IsBool(tv);
+    if (ok)
+        cv_set_tv(cJSON_IsTrue(tv));
+    cJSON_Delete(in);
+    if (ok)
+        reply_ok(c);
+    else
+        refuse(c, "400 Bad Request", "tv must be true or false.");
+}
+
+// Go Live on or off: {"on": true|false} (broadcast.h). Needs the call and a USB controller.
+static void api_voice_broadcast(int c, const char *body)
+{
+    cJSON *in = cJSON_Parse(body ? body : "");
+    cJSON *on = cJSON_GetObjectItem(in, "on");
+    int ok = cJSON_IsBool(on), start = cJSON_IsTrue(on);
+    cJSON_Delete(in);
+    if (!ok)
+        refuse(c, "400 Bad Request", "on must be true or false.");
+    else if (!start) {
+        stream_stop();
+        bc_stop();
+        reply_ok(c);
+    } else if (bc_start() != 0)
+        refuse(c, "409 Conflict", bc_error());
+    else if (stream_start() != 0) {
+        bc_stop();
+        refuse(c, "409 Conflict", stream_error());
+    } else
+        reply_ok(c);
+}
+
+// GET /api/voice: the call, plus the controller audio, the pick and the broadcast.
+static char *voice_json(void)
+{
+    char *s = voice_state_json();
+    cJSON *o = cJSON_Parse(s ? s : "");
+    free(s);
+    if (!o)
+        return NULL;
+    cJSON_AddStringToObject(o, "controller", cv_state());
+    cJSON_AddStringToObject(o, "output", cv_tv() ? "tv" : "controller");
+    // One state for the app: the picture (broadcast.c) and Discord's side (stream.c).
+    const char *b = bc_state(), *st = stream_state();
+    int failed = strcmp(st, "error") == 0 || strcmp(b, "error") == 0;
+    cJSON *bc = cJSON_AddObjectToObject(o, "broadcast");
+    cJSON_AddStringToObject(bc, "state", failed ? "error"
+                                         : strcmp(b, "live") == 0 && strcmp(st, "live") == 0 ? "live"
+                                         : strcmp(b, "off") == 0 && strcmp(st, "off") == 0   ? "off"
+                                                                                           : "starting");
+    cJSON_AddStringToObject(bc, "error", strcmp(st, "error") == 0 ? stream_error() : bc_error());
+    cJSON_AddNumberToObject(bc, "viewers", stream_viewers());
+    s = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    return s;
+}
+
 // Where a system library's function sits in the app. A title's own dlsym finds
 // nothing on 13.00, so the app asks the core, which reads the app's library
 // table through the kernel; the app then calls the address itself.
@@ -543,7 +611,7 @@ static void handle(int c, int local)
     } else if (post && strcmp(path, "/api/dm") == 0) {
         api_dm(c, body);
     } else if (get && strcmp(path, "/api/voice") == 0) {
-        reply_json(c, voice_state_json());
+        reply_json(c, voice_json());
     } else if (post && strncmp(path, "/api/voice/", 11) == 0 && signed_in(c)) {
         if (strcmp(path, "/api/voice/join") == 0)
             api_voice_join(c, body);
@@ -555,6 +623,10 @@ static void handle(int c, int local)
             api_voice_leave(c);
         else if (strcmp(path, "/api/voice/set") == 0)
             api_voice_set(c, body);
+        else if (strcmp(path, "/api/voice/output") == 0)
+            api_voice_output(c, body);
+        else if (strcmp(path, "/api/voice/broadcast") == 0)
+            api_voice_broadcast(c, body);
         else
             reply(c, "404 Not Found", "text/plain", "not found", 9);
     } else if (post && strcmp(path, "/api/edit") == 0) {
@@ -602,6 +674,7 @@ static void *serve_one(void *arg)
 #if CORE_FOLLOWS_APP
 // Test builds: the app starts the core, so the core leaves with it. The app
 // polls every few seconds; once it has been seen, a long silence means it closed.
+// A game suspends the app the same way, so a wanted call keeps the core.
 #define APP_GONE_SECONDS 30
 static volatile time_t app_seen;
 
@@ -610,7 +683,8 @@ static void *follow_app(void *arg)
     (void)arg;
     for (;;) {
         sleep(5);
-        if (app_seen && time(NULL) - app_seen > APP_GONE_SECONDS && !browser_auth_keepalive()) {
+        if (app_seen && time(NULL) - app_seen > APP_GONE_SECONDS && !browser_auth_keepalive() &&
+            !voice_wanted()) {
             LOG("the app closed: the core leaves with it");
             _exit(0);
         }

@@ -273,6 +273,13 @@ void apply_voice(Snapshot &s, const Request &r)
         s.voice.muted = r.mute;
         s.voice.deafened = r.deaf;
         break;
+    case Request::Kind::voice_broadcast:
+        s.voice.broadcast = r.on ? "live" : "off";
+        break;
+    case Request::Kind::voice_output:
+        s.voice.output_tv = r.tv;
+        s.voice.controller = r.tv ? "off" : "on";
+        break;
     default:
         break;
     }

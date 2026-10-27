@@ -17,6 +17,7 @@
 #include "props.h"
 #include "status.h"
 #include "voice.h"
+#include "stream.h"
 #include "ws.h"
 #include "zstream.h"
 
@@ -144,6 +145,9 @@ static void on_dispatch(gateway *g, const char *t, cJSON *d)
         voice_on_state(d);
     } else if (strcmp(t, "VOICE_SERVER_UPDATE") == 0) {
         voice_on_server(d);
+    } else if (strncmp(t, "STREAM_", 7) == 0) {
+        LOG("gateway: %s", t);
+        stream_on_dispatch(t, d);
     } else {
         // Event names only; message contents stay out of the console log.
         status_event();
@@ -311,6 +315,10 @@ static int send_pending(gateway *g)
     voice_op4 v;
     if (g->session_id[0] && voice_take_request(&v) && send_voice_state(g, &v) != 0)
         return -1;
+    cJSON *op;
+    while (g->session_id[0] && (op = stream_take_gateway()))
+        if (send_json(g, op) != 0) // Go Live ops 18, 22, 19
+            return -1;
     char guild[32];
     pthread_mutex_lock(&pending_lock);
     snprintf(guild, sizeof guild, "%s", pending_subscribe);
