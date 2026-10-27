@@ -49,6 +49,34 @@ void bc_set_sink(const bc_sink *s)
     sink = s;
 }
 
+static char pair_state[16] = "idle", pair_error[160];
+
+int bc_paired(void)
+{
+    FILE *f = fopen(pair_file, "rb"); // access() refuses payloads on the console
+    if (f)
+        fclose(f);
+    return f != NULL;
+}
+
+const char *bc_pair_state(void)
+{
+    return pair_state;
+}
+
+const char *bc_pair_error(void)
+{
+    return pair_error;
+}
+
+static void set_pair(const char *s, const char *why)
+{
+    pthread_mutex_lock(&lock);
+    snprintf(pair_state, sizeof pair_state, "%s", s);
+    snprintf(pair_error, sizeof pair_error, "%s", why ? why : "");
+    pthread_mutex_unlock(&lock);
+}
+
 #ifndef __PROSPERO__
 int bc_start(void)
 {
@@ -63,9 +91,18 @@ void bc_stop(void)
 void bc_request_keyframe(void)
 {
 }
+
+int bc_pair(const char *pin)
+{
+    (void)pin;
+    set_pair("error", "Pairing needs the console.");
+    return -1;
+}
 #else
 
 #include <dlfcn.h>
+#include <stdlib.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <chiaki/regist.h>
@@ -78,6 +115,14 @@ void bc_request_keyframe(void)
 static ChiakiSession session;
 static volatile int want, running, connected, quit, ds5_done, live;
 static unsigned frames, audio_frames, keyframes;
+
+static int chiaki_ready(void)
+{
+    static int ok;
+    if (!ok)
+        ok = chiaki_lib_init() == CHIAKI_ERR_SUCCESS;
+    return ok;
+}
 
 static void rp_log(ChiakiLogLevel level, const char *msg, void *user)
 {
@@ -261,10 +306,8 @@ static const char *run(void)
     if (got != 1)
         return "Remote Play is not paired with this console.";
 
-    static int lib_ready;
-    if (!lib_ready && chiaki_lib_init() != CHIAKI_ERR_SUCCESS)
+    if (!chiaki_ready())
         return "Remote Play could not start.";
-    lib_ready = 1;
 
     static ChiakiLog log;
     chiaki_log_init(&log, CHIAKI_LOG_ERROR | CHIAKI_LOG_WARNING, rp_log, NULL);
@@ -340,6 +383,99 @@ static void *worker(void *arg)
     want = 0;
     running = 0;
     return NULL;
+}
+
+// ---- pairing ----------------------------------------------------------------------
+
+static volatile int regist_done;
+static ChiakiRegisteredHost regist_host;
+
+static void regist_cb(ChiakiRegistEvent *e, void *user)
+{
+    (void)user;
+    if (e->type == CHIAKI_REGIST_EVENT_TYPE_FINISHED_SUCCESS)
+        regist_host = *e->registered_host;
+    regist_done = e->type == CHIAKI_REGIST_EVENT_TYPE_FINISHED_SUCCESS ? 1 : 2;
+}
+
+static void *pair_main(void *arg)
+{
+    uint32_t pin = (uint32_t)(uintptr_t)arg;
+    const char *why = NULL;
+    uint64_t id = account_id();
+    static ChiakiLog log;
+    chiaki_log_init(&log, CHIAKI_LOG_ERROR | CHIAKI_LOG_WARNING, rp_log, NULL);
+    ChiakiRegistInfo info;
+    memset(&info, 0, sizeof info);
+    info.target = CHIAKI_TARGET_PS5_1;
+    info.host = "127.0.0.1";
+    info.pin = pin;
+    for (int i = 0; i < 8; i++) // little-endian, as Sony's account id is sent
+        info.psn_account_id[i] = (uint8_t)(id >> (8 * i));
+    ChiakiRegist regist;
+    regist_done = 0;
+    if (!id)
+        why = "The console user has no account id (sign in to PSN once on this user).";
+    else if (chiaki_regist_start(&regist, &log, &info, regist_cb, NULL) != CHIAKI_ERR_SUCCESS)
+        why = "Pairing could not start.";
+    else {
+        for (int i = 0; i < 300 && !regist_done; i++) // 30 s
+            usleep(100000);
+        if (!regist_done)
+            chiaki_regist_stop(&regist);
+        chiaki_regist_fini(&regist);
+        if (regist_done != 1)
+            why = regist_done ? "The console refused the PIN. Open Link Device again and use the new PIN."
+                              : "The console did not answer. Is Link Device open?";
+    }
+    if (!why) { // write it whole, then move it into place
+        char tmp[300];
+        snprintf(tmp, sizeof tmp, "%s.new", pair_file);
+        FILE *f = fopen(tmp, "wb");
+        int ok = f && fwrite(&regist_host, sizeof regist_host, 1, f) == 1;
+        if (f)
+            ok &= fclose(f) == 0;
+        if (ok) {
+            chmod(tmp, 0600);
+            ok = rename(tmp, pair_file) == 0;
+        }
+        if (!ok)
+            why = "Could not save the pairing.";
+        memset(&regist_host, 0, sizeof regist_host); // the keys stay only in the file
+    }
+    LOG("remote play: pairing %s%s%s", why ? "failed: " : "done", why ? why : "", "");
+    set_pair(why ? "error" : "paired", why);
+    return NULL;
+}
+
+int bc_pair(const char *pin)
+{
+    char *end = NULL;
+    unsigned long n = pin ? strtoul(pin, &end, 10) : 0;
+    if (!pin || strlen(pin) != 8 || *end) {
+        set_pair("error", "The PIN has 8 digits.");
+        return -1;
+    }
+    pthread_mutex_lock(&lock);
+    int busy = strcmp(pair_state, "pairing") == 0;
+    if (!busy)
+        snprintf(pair_state, sizeof pair_state, "pairing"), pair_error[0] = 0;
+    pthread_mutex_unlock(&lock);
+    if (busy)
+        return 0;
+    if (!chiaki_ready()) {
+        set_pair("error", "Remote Play could not start.");
+        return -1;
+    }
+    pthread_t t;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    if (pthread_create(&t, &attr, pair_main, (void *)(uintptr_t)n) != 0) {
+        set_pair("error", "Pairing could not start.");
+        return -1;
+    }
+    return 0;
 }
 
 int bc_start(void)

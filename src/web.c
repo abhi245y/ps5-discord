@@ -453,6 +453,19 @@ static void api_voice_broadcast(int c, const char *body)
         reply_ok(c);
 }
 
+// Remote Play pairing for Go Live: {"pin": "12345678"} from the console's Link Device screen.
+static void api_remoteplay_pair(int c, const char *body)
+{
+    cJSON *in = cJSON_Parse(body ? body : "");
+    const char *pin = cJSON_GetStringValue(cJSON_GetObjectItem(in, "pin"));
+    int r = bc_pair(pin);
+    cJSON_Delete(in);
+    if (r == 0)
+        reply_ok(c);
+    else
+        refuse(c, "400 Bad Request", bc_pair_error());
+}
+
 // GET /api/voice: the call, plus the controller audio, the pick and the broadcast.
 static char *voice_json(void)
 {
@@ -473,6 +486,9 @@ static char *voice_json(void)
                                                                                            : "starting");
     cJSON_AddStringToObject(bc, "error", strcmp(st, "error") == 0 ? stream_error() : bc_error());
     cJSON_AddNumberToObject(bc, "viewers", stream_viewers());
+    cJSON_AddBoolToObject(bc, "paired", bc_paired());
+    cJSON_AddStringToObject(bc, "pair_state", bc_pair_state());
+    cJSON_AddStringToObject(bc, "pair_error", bc_pair_error());
     s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     return s;
@@ -629,6 +645,8 @@ static void handle(int c, int local)
             api_voice_broadcast(c, body);
         else
             reply(c, "404 Not Found", "text/plain", "not found", 9);
+    } else if (post && strcmp(path, "/api/remoteplay/pair") == 0) {
+        api_remoteplay_pair(c, body);
     } else if (post && strcmp(path, "/api/edit") == 0) {
         api_change(c, body, 0);
     } else if (post && strcmp(path, "/api/delete") == 0) {

@@ -20,3 +20,10 @@ void bc_stop(void);
 void bc_request_keyframe(void); // a viewer lost the picture
 const char *bc_state(void); // "off", "starting", "live" or "error"
 const char *bc_error(void); // why it stopped or could not start; "" when none
+
+// Remote Play pairing with the console itself, once: the user opens Settings > System >
+// Remote Play > Link Device on the console and enters its 8-digit PIN in the app.
+int bc_paired(void);              // 1 when remoteplay.bin is there
+int bc_pair(const char *pin);     // starts pairing; 0 when started, -1 with bc_pair_error()
+const char *bc_pair_state(void);  // "idle", "pairing", "paired" or "error"
+const char *bc_pair_error(void);
