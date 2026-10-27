@@ -107,6 +107,20 @@ int voice_wanted(void)
     return w;
 }
 
+int voice_current(char guild_id[32], char channel_id[32], char user_id[32], char session[64])
+{
+    pthread_mutex_lock(&lock);
+    int ok = state == V_CONNECTED && channel[0] && session_id[0];
+    if (ok) {
+        copy(guild_id, IDS, guild);
+        copy(channel_id, IDS, channel);
+        copy(user_id, IDS, self_id);
+        copy(session, 64, session_id);
+    }
+    pthread_mutex_unlock(&lock);
+    return ok;
+}
+
 static void stop_locked(void)
 {
     if (cur) {

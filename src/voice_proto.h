@@ -29,7 +29,7 @@ char *voice_json_identify(const char *server_id, const char *user_id, const char
 char *voice_json_resume(const char *server_id, const char *session_id, const char *token, int64_t seq_ack);
 char *voice_json_heartbeat(int64_t nonce, int64_t seq_ack);
 char *voice_json_select_udp(const char *address, uint16_t port, const char *mode);
-// SPEAKING (op 5) for our own stream: {speaking: 1 | 0, delay: 0, ssrc}.
+// SPEAKING (op 5): {speaking: 1 voice | 2 soundshare | 0, delay: 0, ssrc}.
 char *voice_json_speaking(int speaking, uint32_t ssrc);
 // Any opcode with a {"transition_id":N} payload (op 23 ready, op 31 invalid commit).
 char *voice_json_transition(int op, int64_t transition_id);

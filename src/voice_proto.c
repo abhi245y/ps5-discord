@@ -157,7 +157,7 @@ char *voice_json_select_udp(const char *address, uint16_t port, const char *mode
 char *voice_json_speaking(int speaking, uint32_t ssrc)
 {
     cJSON *d = cJSON_CreateObject();
-    cJSON_AddNumberToObject(d, "speaking", speaking ? 1 : 0);
+    cJSON_AddNumberToObject(d, "speaking", speaking); // 1 voice, 2 soundshare (Go Live), 0 off
     cJSON_AddNumberToObject(d, "delay", 0);
     cJSON_AddNumberToObject(d, "ssrc", (double)ssrc);
     return op_json(5, d);

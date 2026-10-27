@@ -31,7 +31,7 @@ OPUS_INCLUDES := -I$(OPUS)/include -I$(OPUS)/celt -I$(OPUS)/silk -I$(OPUS)/silk/
 
 DS5 := tools/ds5-usb-bridge
 APP_SRC := src/main.c src/log.c src/status.c src/web.c src/chat.c src/gateway.c src/remote_auth.c src/browser_auth.c src/browser_storage.c src/http.c src/props.c src/ws.c src/tls.c src/zstream.c src/ratelimit.c \
-	src/voice.c src/voice_proto.c src/voice_audio.c src/controller_voice.c src/broadcast.c $(DS5)/pcm_stream.c
+	src/voice.c src/voice_proto.c src/voice_audio.c src/controller_voice.c src/broadcast.c src/stream.c $(DS5)/pcm_stream.c
 # Controller voice (console only): a loopback Remote Play session (vendored chiaki-ng,
 # third_party/README.md) and the DualSense USB runtime from tools/ds5-usb-bridge.
 CHIAKI := third_party/chiaki-ng

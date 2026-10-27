@@ -23,6 +23,7 @@
 #include "voice_audio.h"
 #include "controller_voice.h"
 #include "broadcast.h"
+#include "stream.h"
 #include "browser_auth.h"
 
 #ifdef __PROSPERO__
@@ -439,12 +440,17 @@ static void api_voice_broadcast(int c, const char *body)
     cJSON_Delete(in);
     if (!ok)
         refuse(c, "400 Bad Request", "on must be true or false.");
-    else if (!start)
-        bc_stop(), reply_ok(c);
-    else if (bc_start() == 0)
+    else if (!start) {
+        stream_stop();
+        bc_stop();
         reply_ok(c);
-    else
+    } else if (bc_start() != 0)
         refuse(c, "409 Conflict", bc_error());
+    else if (stream_start() != 0) {
+        bc_stop();
+        refuse(c, "409 Conflict", stream_error());
+    } else
+        reply_ok(c);
 }
 
 // GET /api/voice: the call, plus the controller audio, the pick and the broadcast.
@@ -457,9 +463,16 @@ static char *voice_json(void)
         return NULL;
     cJSON_AddStringToObject(o, "controller", cv_state());
     cJSON_AddStringToObject(o, "output", cv_tv() ? "tv" : "controller");
+    // One state for the app: the picture (broadcast.c) and Discord's side (stream.c).
+    const char *b = bc_state(), *st = stream_state();
+    int failed = strcmp(st, "error") == 0 || strcmp(b, "error") == 0;
     cJSON *bc = cJSON_AddObjectToObject(o, "broadcast");
-    cJSON_AddStringToObject(bc, "state", bc_state());
-    cJSON_AddStringToObject(bc, "error", bc_error());
+    cJSON_AddStringToObject(bc, "state", failed ? "error"
+                                         : strcmp(b, "live") == 0 && strcmp(st, "live") == 0 ? "live"
+                                         : strcmp(b, "off") == 0 && strcmp(st, "off") == 0   ? "off"
+                                                                                           : "starting");
+    cJSON_AddStringToObject(bc, "error", strcmp(st, "error") == 0 ? stream_error() : bc_error());
+    cJSON_AddNumberToObject(bc, "viewers", stream_viewers());
     s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     return s;
