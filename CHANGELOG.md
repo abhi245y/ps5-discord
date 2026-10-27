@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- License: ps5-discord's own code is now AGPL-3.0-or-later (was GPL-3.0-or-later), so
+  Remote Play code from chiaki-ng can ship in it. Files from the ps5-homebrew-ui kit keep
+  GPL-3.0-or-later. The status page links to the source.
+
 ## [0.2.0-alpha.1] - 2026-10-20
 
 First alpha of the native app. Text chat works; voice does not exist yet.
