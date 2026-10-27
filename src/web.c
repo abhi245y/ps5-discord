@@ -20,6 +20,8 @@
 #include "ratelimit.h"
 #include "status.h"
 #include "voice.h"
+#include "voice_audio.h"
+#include "controller_voice.h"
 #include "browser_auth.h"
 
 #ifdef __PROSPERO__
@@ -410,6 +412,55 @@ static void api_voice_set(int c, const char *body)
         refuse(c, "409 Conflict", "Not in a call.");
 }
 
+// Controller voice on or off: {"on": true|false} (controller_voice.h).
+static void api_voice_controller(int c, const char *body)
+{
+    cJSON *in = cJSON_Parse(body ? body : "");
+    cJSON *on = cJSON_GetObjectItem(in, "on");
+    int ok = cJSON_IsBool(on);
+    int want = cJSON_IsTrue(on);
+    cJSON_Delete(in);
+    if (!ok)
+        refuse(c, "400 Bad Request", "on must be true or false.");
+    else if (cv_set(want) == 0)
+        reply_ok(c);
+    else
+        refuse(c, "409 Conflict", cv_error());
+}
+
+// Where the call plays: {"tv": true} the app (the TV, while it is on screen), false the
+// controller. The mic stays the controller's while controller voice is on.
+static void api_voice_output(int c, const char *body)
+{
+    cJSON *in = cJSON_Parse(body ? body : "");
+    cJSON *tv = cJSON_GetObjectItem(in, "tv");
+    int ok = cJSON_IsBool(tv);
+    if (ok)
+        vau_set_output_tv(cJSON_IsTrue(tv));
+    cJSON_Delete(in);
+    if (ok)
+        reply_ok(c);
+    else
+        refuse(c, "400 Bad Request", "tv must be true or false.");
+}
+
+// GET /api/voice: the call, plus controller voice and the output.
+static char *voice_json(void)
+{
+    char *s = voice_state_json();
+    cJSON *o = cJSON_Parse(s ? s : "");
+    free(s);
+    if (!o)
+        return NULL;
+    cJSON *cv = cJSON_AddObjectToObject(o, "controller");
+    cJSON_AddStringToObject(cv, "state", cv_state());
+    cJSON_AddStringToObject(cv, "error", cv_error());
+    cJSON_AddStringToObject(o, "output", vau_output_tv() ? "tv" : "controller");
+    s = cJSON_PrintUnformatted(o);
+    cJSON_Delete(o);
+    return s;
+}
+
 // Where a system library's function sits in the app. A title's own dlsym finds
 // nothing on 13.00, so the app asks the core, which reads the app's library
 // table through the kernel; the app then calls the address itself.
@@ -543,7 +594,7 @@ static void handle(int c, int local)
     } else if (post && strcmp(path, "/api/dm") == 0) {
         api_dm(c, body);
     } else if (get && strcmp(path, "/api/voice") == 0) {
-        reply_json(c, voice_state_json());
+        reply_json(c, voice_json());
     } else if (post && strncmp(path, "/api/voice/", 11) == 0 && signed_in(c)) {
         if (strcmp(path, "/api/voice/join") == 0)
             api_voice_join(c, body);
@@ -555,6 +606,10 @@ static void handle(int c, int local)
             api_voice_leave(c);
         else if (strcmp(path, "/api/voice/set") == 0)
             api_voice_set(c, body);
+        else if (strcmp(path, "/api/voice/controller") == 0)
+            api_voice_controller(c, body);
+        else if (strcmp(path, "/api/voice/output") == 0)
+            api_voice_output(c, body);
         else
             reply(c, "404 Not Found", "text/plain", "not found", 9);
     } else if (post && strcmp(path, "/api/edit") == 0) {

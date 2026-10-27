@@ -1093,6 +1093,12 @@ void Client::poll_voice()
         voice.secure = v.value("secure", false);
         voice.since_ms = static_cast<std::int64_t>(v.value("since_ms", 0.0));
         voice.error = text(v, "error");
+        if (v.contains("controller") && v["controller"].is_object())
+        {
+            voice.controller = text(v["controller"], "state");
+            voice.controller_error = text(v["controller"], "error");
+        }
+        voice.output_tv = text(v, "output") == "tv";
         if (v.contains("speaking") && v["speaking"].is_array())
             for (const json &id : v["speaking"])
                 if (id.is_string())
@@ -1413,7 +1419,9 @@ void Client::handle(const Request &request)
     case Request::Kind::voice_answer:
     case Request::Kind::voice_decline:
     case Request::Kind::voice_leave:
-    case Request::Kind::voice_set: {
+    case Request::Kind::voice_set:
+    case Request::Kind::voice_controller:
+    case Request::Kind::voice_output: {
         const char *path = "/api/voice/leave";
         json body = json::object();
         switch (request.kind)
@@ -1433,6 +1441,14 @@ void Client::handle(const Request &request)
         case Request::Kind::voice_set:
             path = "/api/voice/set";
             body = {{"mute", request.mute}, {"deaf", request.deaf}};
+            break;
+        case Request::Kind::voice_controller:
+            path = "/api/voice/controller";
+            body = {{"on", request.on}};
+            break;
+        case Request::Kind::voice_output:
+            path = "/api/voice/output";
+            body = {{"tv", request.tv}};
             break;
         default:
             break;

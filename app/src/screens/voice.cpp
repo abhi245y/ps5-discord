@@ -7,6 +7,8 @@
 //     that has not been answered yet;
 //   - Mute, Deafen, Share screen (not yet available) and Leave.
 // Square mutes, Triangle deafens, Circle goes back and leaves the call running.
+// L1 turns controller voice on or off (the USB DualSense as the headset while a game
+// runs, docs/voice-api.md); R1 moves the call's sound between the controller and the TV.
 
 #include "screens/voice.hpp"
 
@@ -314,6 +316,22 @@ bool VoiceRoom::update(const discord::Snapshot &s, const hui::InputFrame &input,
         set(!v.muted, v.deafened);
     if (input.is_pressed(Action::north) && live)
         set(v.muted, !v.deafened);
+    if (input.is_pressed(Action::page_prev) && live)
+    {
+        discord::Request r;
+        r.kind = discord::Request::Kind::voice_controller;
+        r.on = v.controller != "on" && v.controller != "starting";
+        requests.push_back(r);
+        feedback.play(hui::audio::Cue::toggle);
+    }
+    if (input.is_pressed(Action::page_next) && live)
+    {
+        discord::Request r;
+        r.kind = discord::Request::Kind::voice_output;
+        r.tv = !v.output_tv;
+        requests.push_back(r);
+        feedback.play(hui::audio::Cue::toggle);
+    }
     if (input.is_pressed(Action::confirm))
     {
         if (focus_ == kMute && live)
@@ -366,6 +384,19 @@ void VoiceRoom::draw(const discord::Snapshot &s, DrawList &list) const
     if (here && v.state == discord::VoiceState::error)
         ui::text(list, ink_.fonts.regular, fit(ink_.fonts.regular, v.error, 26.0f, 1300.0f), kMargin, 196.0f, 26.0f,
                  kDnd);
+    else if (here)
+    {
+        // Controller voice and where the call plays.
+        std::string line = v.controller == "on"         ? "Controller voice on"
+                           : v.controller == "starting" ? "Controller voice starting…"
+                                                        : "Controller voice off";
+        line += v.output_tv ? " · sound on the TV" : " · sound on the controller";
+        const bool failed = v.controller == "error" && !v.controller_error.empty();
+        if (failed)
+            line = v.controller_error;
+        ui::text(list, ink_.fonts.regular, fit(ink_.fonts.regular, line, 26.0f, 1300.0f), kMargin, 196.0f, 26.0f,
+                 failed ? kDnd : kDim);
+    }
 
     // The connection, always in the top right.
     const std::string link = here ? connection_text(v) : std::string("Not connected");
@@ -443,13 +474,15 @@ void VoiceRoom::draw(const discord::Snapshot &s, DrawList &list) const
     const ui::Hint hints[] = {{ui::Button::cross, "Select"},
                               {ui::Button::circle, "Back"},
                               {ui::Button::square, "Mute"},
-                              {ui::Button::triangle, "Deafen"}};
+                              {ui::Button::triangle, "Deafen"},
+                              {ui::Button::l1, "Controller voice"},
+                              {ui::Button::r1, v.output_tv ? "Sound on controller" : "Sound on TV"}};
     ui::HintLayout layout;
     layout.size = 34.0f;
     layout.text_size = 23.0f;
     layout.cy = kHintsBaseline;
     layout.item_gap = 38.0f;
-    ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints, 4, right, true, layout);
+    ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints, 6, right, true, layout);
 }
 
 void draw_incoming(DrawList &list, const Ink &ink, const discord::Snapshot &s, const discord::Call &call)
