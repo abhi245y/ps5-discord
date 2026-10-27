@@ -85,3 +85,7 @@ those files keep their GPL-3.0-or-later headers ([app/LICENSE.GPL-3.0](app/LICEN
 [app/THIRD_PARTY_NOTICES.md](app/THIRD_PARTY_NOTICES.md)) and are combined with the AGPL code
 under GPLv3 section 13. Because the core serves a status page over the network, that page
 links to this source.
+
+The core includes the Remote Play client from chiaki-ng (`third_party/`, see
+[third_party/README.md](third_party/README.md)), which is AGPL-3.0-only, so the core as built
+is distributed under AGPL-3.0-only as a whole.
