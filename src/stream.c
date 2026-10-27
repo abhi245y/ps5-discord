@@ -275,7 +275,9 @@ static void on_video(const uint8_t *au, size_t n, int keyframe)
     uint8_t *out = NULL;
     size_t out_len = m;
     if (frame && c->dave_version > 0) {
-        size_t cap = daveEncryptorGetMaxCiphertextByteSize(c->enc, DAVE_MEDIA_TYPE_VIDEO, m);
+        // libdave's estimate leaves 64 bytes for the trailer, but the trailer lists every
+        // NAL's clear range (~4 bytes each) and Remote Play's IDRs carry ~25 slices.
+        size_t cap = daveEncryptorGetMaxCiphertextByteSize(c->enc, DAVE_MEDIA_TYPE_VIDEO, m) + 8 * (nals + 2);
         out = malloc(cap);
         if (!out || daveEncryptorEncrypt(c->enc, DAVE_MEDIA_TYPE_VIDEO, c->video_ssrc, frame, m, out, cap,
                                          &out_len) != DAVE_ENCRYPTOR_RESULT_CODE_SUCCESS) {
