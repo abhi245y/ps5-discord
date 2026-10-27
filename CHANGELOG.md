@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Voice: join server voice channels and DM calls (DAVE end-to-end encryption), mute and
+  deafen, two-way audio with the app on screen; the call stays up while a game runs.
+- Go Live: the voice room's Go Live button streams the game into the call (720p30 H.264 and
+  game sound over a loopback Remote Play session, vendored chiaki-ng). The DualSense on USB
+  plays the game through the session and is the call's headset meanwhile.
+- tools/ds5-usb-bridge: a payload runtime that owns a USB DualSense (buttons, mic, speaker,
+  headphones, mute button).
+
+### Fixed
+- Voice: our voice reached others with seconds of delay after pauses (the RTP clock stood
+  still while we were silent).
+
 ### Changed
 - License: ps5-discord's own code is now AGPL-3.0-or-later (was GPL-3.0-or-later), so
   Remote Play code from chiaki-ng can ship in it. Files from the ps5-homebrew-ui kit keep

@@ -3,7 +3,8 @@
 Native Discord client for PS5. A native app (title PPSA99072) draws the UI; a
 background core payload, which the app starts itself, holds the Discord session.
 
-Status: alpha (0.2.0-alpha.1). Text chat works; voice does not exist yet.
+Status: alpha. 0.2.0-alpha.1 (text chat) is the latest release; `main` adds voice calls and
+Go Live, not released yet.
 
 ## What works
 
@@ -13,6 +14,12 @@ Status: alpha (0.2.0-alpha.1). Text chat works; voice does not exist yet.
 - The PS5 system keyboard on Triangle (the app's own keyboard as a fallback)
 - Avatars, server icons, banners, image previews, colour emoji, many scripts
 - Status web UI at `http://<ps5-ip>:9041`: state, login QR, account, live log, stop
+- Voice: server voice channels and DM calls, with Discord's end-to-end encryption (DAVE),
+  mute and deafen. The call stays up while a game covers the app.
+- Go Live: stream the game you are playing into the call (1280x720 H.264 at 30 fps and the
+  game's sound, end-to-end encrypted). The picture comes from a Remote Play session with the
+  console itself; the DualSense, plugged in by USB, plays the game through it and is your
+  headset (its mic and its speaker or headphones) while you are live.
 
 ## Build
 
@@ -66,6 +73,11 @@ status page.
 - The status UI has no authentication; anyone on the LAN can view it or stop the payload.
   It never shows the token.
 - Third-party clients break Discord's ToS and can get an account banned.
+- Go Live needs the DualSense on USB (a Bluetooth controller is dropped by Remote Play) and a
+  Remote Play pairing in `/data/ps5-discord/remoteplay.bin`, which the app cannot make yet.
+  The quality is fixed at 720p30. Press PS after going off live to give the controller back.
+- During a game the mic is only available through Go Live (the console refuses payloads the
+  mic); outside it, voice needs the app on screen.
 
 ## Target
 
