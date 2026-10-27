@@ -17,6 +17,7 @@
 #include "screens/server.hpp"
 #include "screens/signin.hpp"
 #include "screens/style.hpp"
+#include "screens/settings.hpp"
 #include "screens/voice.hpp"
 
 namespace screens
@@ -48,6 +49,24 @@ const app::ConceptInfo kInfo{
 // Screen names in captures follow the framework's frame numbers.
 constexpr app::TourStep kTour[] = {
     {0.9f, 0, Direction::none, "home"},
+    // Settings (frame 11): Options from Home, Voice & audio, the pairing PIN, Appearance.
+    {0.4f, action_bit(Action::menu)},
+    {0.8f, 0, Direction::none, "settings"},
+    {0.4f, 0, Direction::down},
+    {0.6f, 0, Direction::none, "settings-voice"},
+    {0.4f, 0, Direction::right},
+    {0.4f, action_bit(Action::confirm)},
+    {0.4f, 0, Direction::up},
+    {0.6f, 0, Direction::none, "settings-pin"},
+    {0.4f, action_bit(Action::back)},
+    {0.4f, action_bit(Action::back)},
+    {0.4f, 0, Direction::down},
+    {0.4f, 0, Direction::down},
+    {0.4f, 0, Direction::right},
+    {0.6f, 0, Direction::none, "settings-appearance"},
+    {0.4f, action_bit(Action::back)},
+    {0.4f, action_bit(Action::back)},
+    {0.6f, 0, Direction::none, "home-after-settings"},
     {0.5f, 0, Direction::right},
     {0.6f, 0, Direction::right, "home-rooms-scroll"},
     {0.5f, 0, Direction::down},
@@ -123,7 +142,8 @@ class DiscordApp final : public app::Concept
 {
   public:
     explicit DiscordApp(app::Context &context)
-        : context_(context), ink_{context.fonts, context.art}, home_(ink_), server_(ink_), chat_(ink_), voice_(ink_)
+        : context_(context), ink_{context.fonts, context.art}, home_(ink_), server_(ink_), chat_(ink_), voice_(ink_),
+          settings_(ink_)
     {
     }
 
@@ -191,6 +211,18 @@ class DiscordApp final : public app::Concept
                 feedback.play(hui::audio::Cue::back);
             }
         }
+        else if (route_ == Route::settings)
+        {
+            bool changed = false;
+            if (!settings_.update(context_.snapshot, input, dt, feedback, requests, context_.settings, changed))
+            {
+                route_ = settings_from_;
+                fade_.snap(0.0f);
+            }
+            context_.settings_changed |= changed;
+        }
+        else if (route_ == Route::home && input.is_pressed(Action::menu)) // Options: settings
+            open_settings(feedback);
         else if (route_ == Route::home)
         {
             home_.update(context_.snapshot, input, dt, feedback);
@@ -257,6 +289,8 @@ class DiscordApp final : public app::Concept
                 route_ = voice_from_;
                 fade_.snap(0.0f);
             }
+            else if (voice_.take_settings()) // Go Live needs the pairing first
+                open_settings(feedback);
         }
         else
         {
@@ -333,6 +367,8 @@ class DiscordApp final : public app::Concept
             server_.draw(context_.snapshot, frame.scene);
         else if (route_ == Route::voice)
             voice_.draw(context_.snapshot, frame.scene);
+        else if (route_ == Route::settings)
+            settings_.draw(context_.snapshot, context_.settings, frame.scene);
         else
             chat_.draw(context_.snapshot, frame.scene);
         frame.scene.pop_opacity();
@@ -355,6 +391,7 @@ class DiscordApp final : public app::Concept
         server,
         chat,
         voice,
+        settings,
     };
     app::Context &context_;
     Ink ink_;
@@ -362,7 +399,9 @@ class DiscordApp final : public app::Concept
     Server server_;
     Chat chat_;
     VoiceRoom voice_;
+    SettingsScreen settings_;
     Route route_ = Route::home;
+    Route settings_from_ = Route::home; // the screen Circle returns to from settings
     Route voice_from_ = Route::home; // the screen Circle returns to from the voice room
     std::string dismissed_ring_;     // a ring answered or declined: hidden until it ends
     std::string cued_ring_;          // the ring whose chime has played
@@ -391,6 +430,16 @@ class DiscordApp final : public app::Concept
         hui::ui::text(list, ink_.fonts.regular, fit(ink_.fonts.regular, toast_.text, 23.0f, r.w - 140.0f),
                       r.x + 120.0f, r.y + 82.0f, 23.0f, style::kDim);
         list.pop_opacity();
+    }
+    // Settings, reached from the current screen (Circle returns there).
+    void open_settings(app::Feedback &feedback)
+    {
+        settings_.open();
+        if (route_ != Route::settings)
+            settings_from_ = route_;
+        route_ = Route::settings;
+        fade_.snap(0.0f);
+        feedback.play(hui::audio::Cue::open);
     }
     // The voice room for channel, reached from the current screen (Circle returns there).
     void open_voice(const std::string &channel)

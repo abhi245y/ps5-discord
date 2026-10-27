@@ -212,6 +212,9 @@ struct Voice
     bool output_tv = true;        // the pick while the app is on screen: TV, or the controller
     std::string broadcast;        // Go Live: "off", "starting", "live", "error"
     std::string broadcast_error;  // why it stopped, when it did
+    bool paired = false;          // Go Live's Remote Play pairing with the console exists
+    std::string pair_state;       // "idle", "pairing", "paired", "error"
+    std::string pair_error;
 
     bool active() const
     {

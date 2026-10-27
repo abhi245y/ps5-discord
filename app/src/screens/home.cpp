@@ -502,12 +502,13 @@ void Home::draw(const discord::Snapshot &s, DrawList &list) const
         radius = f.h * 0.5f;
     focus_outline(list, f, radius, 1.0f);
 
-    ui::Hint hints[4] = {
+    ui::Hint hints[5] = {
         {ui::Button::cross, "Select"},
         {ui::Button::circle, "Back"},
         {ui::Button::l1, "Tabs", ui::Button::r1},
+        {ui::Button::options, "Settings"},
     };
-    int count = 3;
+    int count = 4;
     if (s.voice.active())
         hints[count++] = {ui::Button::square, "Voice"};
     ui::HintLayout layout;

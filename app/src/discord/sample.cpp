@@ -309,6 +309,12 @@ void apply_sample(Snapshot &s, const Request &r)
         apply_voice(s, r);
         return;
     }
+    if (r.kind == Request::Kind::remoteplay_pair)
+    {
+        s.voice.paired = true;
+        s.voice.pair_state = "paired";
+        return;
+    }
     if (r.kind != Request::Kind::send)
         return; // history is all loaded already
     std::vector<Message> &list = edit_messages(s, r.channel_id);

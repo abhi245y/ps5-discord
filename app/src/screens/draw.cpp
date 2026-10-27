@@ -4,6 +4,7 @@
 #include "screens/draw.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <cstdint>
 #include <vector>
@@ -404,6 +405,15 @@ hui::ui::GlyphStyle hint_glyphs()
 std::string count_text(int count)
 {
     return count > 99 ? std::string("99+") : std::to_string(count);
+}
+
+void mic_meter(DrawList &list, float x, float cy, float w, float level, bool muted)
+{
+    constexpr float kH = 10.0f;
+    list.rounded_rect({x, cy - kH * 0.5f, w, kH}, kH * 0.5f, kRaisedHigh);
+    if (!muted && level > 0.0f)
+        list.rounded_rect({x, cy - kH * 0.5f, std::max(kH, w * std::sqrt(std::min(1.0f, level))), kH}, kH * 0.5f,
+                          kOnline);
 }
 
 } // namespace screens

@@ -157,17 +157,6 @@ Color connection_dot(const discord::Voice &v)
     }
 }
 
-// Our own mic as a bar: the level of the last grain (square root, so quiet speech shows).
-// Empty while muted.
-void mic_meter(DrawList &list, float x, float cy, float w, float level, bool muted)
-{
-    constexpr float kH = 10.0f;
-    list.rounded_rect({x, cy - kH * 0.5f, w, kH}, kH * 0.5f, kRaisedHigh);
-    if (!muted && level > 0.0f)
-        list.rounded_rect({x, cy - kH * 0.5f, std::max(kH, w * std::sqrt(std::min(1.0f, level))), kH}, kH * 0.5f,
-                          kOnline);
-}
-
 // A small round badge on a face: the icon drawn by icon on a ground-coloured disc.
 template <typename Icon>
 void badge(DrawList &list, float cx, float cy, float r, Icon icon)
@@ -286,6 +275,20 @@ bool VoiceRoom::update(const discord::Snapshot &s, const hui::InputFrame &input,
 {
     const discord::Voice &v = s.voice;
     const bool live = v.active();
+    if (need_pair_) // the note over the room: Cross opens Settings, Circle closes it
+    {
+        if (input.is_pressed(Action::confirm))
+        {
+            need_pair_ = false;
+            open_settings_ = true;
+        }
+        else if (input.is_pressed(Action::back))
+        {
+            need_pair_ = false;
+            feedback.play(hui::audio::Cue::modal_close);
+        }
+        return true;
+    }
     auto set = [&](bool mute, bool deaf) {
         discord::Request r;
         r.kind = discord::Request::Kind::voice_set;
@@ -328,6 +331,11 @@ bool VoiceRoom::update(const discord::Snapshot &s, const hui::InputFrame &input,
             set(!v.muted, v.deafened);
         else if (focus_ == kDeafen && live)
             set(v.muted, !v.deafened);
+        else if (focus_ == kShare && live && !v.paired && v.broadcast != "live" && v.broadcast != "starting")
+        {
+            need_pair_ = true;
+            feedback.play(hui::audio::Cue::modal_open);
+        }
         else if (focus_ == kShare && live)
         {
             discord::Request r;
@@ -487,6 +495,24 @@ void VoiceRoom::draw(const discord::Snapshot &s, DrawList &list) const
     layout.cy = kHintsBaseline;
     layout.item_gap = 38.0f;
     ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints, 4, right, true, layout);
+
+    if (need_pair_) // Go Live is not paired yet: say what to do, Cross goes there
+    {
+        list.rounded_rect({0, 0, 1920, 1080}, 0.0f, Color::rgb(0x0d0e12, 0.78f));
+        const Rect card{510.0f, 300.0f, 900.0f, 440.0f};
+        list.shadow(card, 28.0f, 50.0f, Color::rgb(0, 0.5f));
+        list.rounded_rect(card, 28.0f, kRaised);
+        ui::text(list, ink_.fonts.display, "Pair Go Live first", card.x + 56.0f, card.y + 92.0f, 48.0f, kText);
+        ui::paragraph(list, ink_.fonts.regular,
+                      "Go Live sees your game through Remote Play, paired once with this console. Open "
+                      "Settings, Voice & audio, Go Live pairing, and enter the PIN from the PS5's Link Device "
+                      "screen. Remote Play must be on for a console user signed in to PSN.",
+                      card.x + 58.0f, card.y + 150.0f, 26.0f, card.w - 116.0f, 38.0f, kDim, 6, gfx::Align::left);
+        const ui::Hint pair_hints[] = {{ui::Button::cross, "Open Settings"}, {ui::Button::circle, "Close"}};
+        ui::HintLayout l = layout;
+        l.cy = card.y + card.h - 44.0f;
+        ui::draw_hints(list, ink_.fonts, hint_glyphs(), pair_hints, 2, card.x + card.w - 48.0f, true, l);
+    }
 }
 
 void draw_incoming(DrawList &list, const Ink &ink, const discord::Snapshot &s, const discord::Call &call)

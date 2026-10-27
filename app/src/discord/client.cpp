@@ -1099,6 +1099,9 @@ void Client::poll_voice()
         {
             voice.broadcast = text(v["broadcast"], "state");
             voice.broadcast_error = text(v["broadcast"], "error");
+            voice.paired = v["broadcast"].value("paired", false);
+            voice.pair_state = text(v["broadcast"], "pair_state");
+            voice.pair_error = text(v["broadcast"], "pair_error");
         }
         if (v.contains("speaking") && v["speaking"].is_array())
             for (const json &id : v["speaking"])
@@ -1458,6 +1461,13 @@ void Client::handle(const Request &request)
         if (reply.status != 202)
             hui::sys::log("[CLIENT] %s answered %d", path, reply.status);
         last_voice_ms_ = 0; // the new state comes on the next poll
+        break;
+    }
+    case Request::Kind::remoteplay_pair: {
+        const Reply reply = http(port_, "POST", "/api/remoteplay/pair", json{{"pin", request.content}}.dump());
+        if (reply.status != 202)
+            hui::sys::log("[CLIENT] pairing answered %d", reply.status);
+        last_voice_ms_ = 0; // the pairing state comes on the next poll
         break;
     }
     case Request::Kind::open_dm: {

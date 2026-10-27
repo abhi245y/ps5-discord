@@ -69,6 +69,10 @@ std::string status_line(const discord::User &user);
 void row_label(DrawList &list, const Ink &ink, float baseline, const std::string &text, const std::string &count,
                bool count_hot = false);
 
+// Our own mic as a bar: the level of the last grain (square root, so quiet speech shows).
+// Empty while muted.
+void mic_meter(DrawList &list, float x, float cy, float w, float level, bool muted);
+
 // A crossed-out microphone centred on (cx, cy), s across.
 void mic_off(DrawList &list, float cx, float cy, float s, Color c);
 
