@@ -264,7 +264,7 @@ static size_t out_len;
 // The external device (vau_ext_*). Its thread must never wait on the engine, which
 // holds mu through Opus and DAVE, so the two meet only in these rings under ext_mu.
 static pthread_mutex_t ext_mu = PTHREAD_MUTEX_INITIALIZER;
-static volatile int ext_on, out_tv;
+static volatile int ext_on;
 static int16_t ext_mic[MIC_CAP];
 static int ext_mic_head, ext_mic_count;
 static ds5_pcm_stream ext_out; // playback with a 60 ms prefill (tools/ds5-usb-bridge)
@@ -440,6 +440,11 @@ static void send_opus(const uint8_t *opus, size_t n)
 {
     if (udp < 0 || (dave_version > 0 && (!encryptor || !dave_ready)))
         return;
+    // The RTP clock runs while we are silent too. Without this a pause looks like late
+    // packets to the listener, whose jitter buffer grows by the pause: seconds of delay.
+    int64_t now = now_ms();
+    if (last_tx_ms && now - last_tx_ms > 100)
+        ts += (uint32_t)((now - last_tx_ms) / 20 - 1) * VAU_FRAME;
     uint8_t pkt[VAU_MAX_PKT];
     size_t len = vau_build_packet(dave_version > 0 ? encryptor : NULL, key, my_ssrc, seq, ts, counter, opus, n,
                                   pkt, sizeof pkt);
@@ -629,7 +634,7 @@ static void play(void)
             vau_mix_add(acc, f);
             any = 1;
         }
-    if (any && ext_on && !out_tv) {
+    if (any && ext_on) {
         vau_mix_out(acc, out);
         pthread_mutex_lock(&ext_mu);
         ds5_pcm_receive(&ext_out, (const uint8_t *)out, sizeof out); // little endian
@@ -940,12 +945,7 @@ size_t vau_ext_playback(int16_t *stereo, size_t frames)
     return n;
 }
 
-void vau_set_output_tv(int tv)
+int vau_app_connected(void)
 {
-    out_tv = tv;
-}
-
-int vau_output_tv(void)
-{
-    return out_tv;
+    return client_fd >= 0;
 }

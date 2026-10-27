@@ -7,8 +7,8 @@
 //     that has not been answered yet;
 //   - Mute, Deafen, Share screen (not yet available) and Leave.
 // Square mutes, Triangle deafens, Circle goes back and leaves the call running.
-// L1 turns controller voice on or off (the USB DualSense as the headset while a game
-// runs, docs/voice-api.md); R1 moves the call's sound between the controller and the TV.
+// L1 moves the call's audio between the TV and the DualSense plugged in by USB (its mic
+// and its speaker or headphones). While a game covers the app it is always the controller.
 
 #include "screens/voice.hpp"
 
@@ -319,14 +319,6 @@ bool VoiceRoom::update(const discord::Snapshot &s, const hui::InputFrame &input,
     if (input.is_pressed(Action::page_prev) && live)
     {
         discord::Request r;
-        r.kind = discord::Request::Kind::voice_controller;
-        r.on = v.controller != "on" && v.controller != "starting";
-        requests.push_back(r);
-        feedback.play(hui::audio::Cue::toggle);
-    }
-    if (input.is_pressed(Action::page_next) && live)
-    {
-        discord::Request r;
         r.kind = discord::Request::Kind::voice_output;
         r.tv = !v.output_tv;
         requests.push_back(r);
@@ -386,14 +378,12 @@ void VoiceRoom::draw(const discord::Snapshot &s, DrawList &list) const
                  kDnd);
     else if (here)
     {
-        // Controller voice and where the call plays.
-        std::string line = v.controller == "on"         ? "Controller voice on"
-                           : v.controller == "starting" ? "Controller voice starting…"
-                                                        : "Controller voice off";
-        line += v.output_tv ? " · sound on the TV" : " · sound on the controller";
-        const bool failed = v.controller == "error" && !v.controller_error.empty();
-        if (failed)
-            line = v.controller_error;
+        // Where the call's audio is.
+        const bool missing = v.controller == "missing";
+        const std::string line = v.controller == "on" ? "Audio on the controller"
+                                 : missing ? "Plug the controller in by USB to use its mic and speaker"
+                                           : "Audio on the TV · in a game it moves to a USB controller";
+        const bool failed = missing;
         ui::text(list, ink_.fonts.regular, fit(ink_.fonts.regular, line, 26.0f, 1300.0f), kMargin, 196.0f, 26.0f,
                  failed ? kDnd : kDim);
     }
@@ -475,14 +465,13 @@ void VoiceRoom::draw(const discord::Snapshot &s, DrawList &list) const
                               {ui::Button::circle, "Back"},
                               {ui::Button::square, "Mute"},
                               {ui::Button::triangle, "Deafen"},
-                              {ui::Button::l1, "Controller voice"},
-                              {ui::Button::r1, v.output_tv ? "Sound on controller" : "Sound on TV"}};
+                              {ui::Button::l1, v.output_tv ? "Audio to controller" : "Audio to TV"}};
     ui::HintLayout layout;
     layout.size = 34.0f;
     layout.text_size = 23.0f;
     layout.cy = kHintsBaseline;
     layout.item_gap = 38.0f;
-    ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints, 6, right, true, layout);
+    ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints, 5, right, true, layout);
 }
 
 void draw_incoming(DrawList &list, const Ink &ink, const discord::Snapshot &s, const discord::Call &call)

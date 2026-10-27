@@ -318,7 +318,7 @@ static int run_usb(void)
             goto cleanup;
         detached = 1;
     }
-    if (ioctl(fd, USB_IFACE_DRIVER_DETACH, &hid))
+    if (!g.config.audio_only && ioctl(fd, USB_IFACE_DRIVER_DETACH, &hid))
         goto cleanup;
     for (unsigned n = 0; n < 2; n++) {
         struct usb_alt_interface alt = {.uai_interface_index = formats[n].interface_index,
@@ -331,7 +331,8 @@ static int run_usb(void)
     if (ioctl(fd, USB_FS_INIT, &init))
         goto cleanup;
     initialized = 1;
-    for (unsigned slot = 0; slot < SLOTS; slot++) {
+    const unsigned slots = g.config.audio_only ? HID_IN : SLOTS;
+    for (unsigned slot = 0; slot < slots; slot++) {
         struct usb_fs_open op = {.ep_index = (uint8_t)slot,
             .ep_no = slot < 2 ? formats[0].endpoint : slot < 4 ? formats[1].endpoint : hid_ep[slot - 4],
             .max_frames = slot < HID_IN ? FRAMES : 1,
@@ -348,10 +349,13 @@ static int run_usb(void)
         log_line("slot %u endpoint %02x opened: packet %u frames %u", slot, op.ep_no,
                  op.max_packet_length, (unsigned)op.max_frames);
     }
-    if (submit(fd, HID_IN))
+    if (g.config.audio_only) {
+        g.initial = 0;
+        g.applied = 1; // stereo: the console picks speaker or headphones
+    } else if (submit(fd, HID_IN))
         goto cleanup;
     uint64_t deadline = now_ms() + 1000;
-    while (g.initial && !g_stop && now_ms() < deadline) {
+    while (!g.config.audio_only && g.initial && !g_stop && now_ms() < deadline) {
         unsigned slot;
         int rc = complete_one(fd, &slot);
         if (rc < 0 || (rc && slot != HID_IN))
@@ -361,7 +365,7 @@ static int run_usb(void)
         else
             usleep(1000);
     }
-    if (g.initial || g_stop || submit_route(fd))
+    if (g.initial || g_stop || (!g.config.audio_only && submit_route(fd)))
         goto cleanup;
     deadline = now_ms() + 1000;
     while (g.busy[HID_OUT] && !g_stop && now_ms() < deadline) {
@@ -388,7 +392,7 @@ static int run_usb(void)
     uint64_t start = now_ms(), last_log = start;
     for (unsigned slot = 0; slot < SLOTS; slot++)
         g.last[slot] = start;
-    if (submit(fd, HID_IN) || submit(fd, 0) || submit(fd, 1) ||
+    if ((!g.config.audio_only && submit(fd, HID_IN)) || submit(fd, 0) || submit(fd, 1) ||
         submit_output(fd, 2) || submit_output(fd, 3))
         goto cleanup;
     while (!g_stop && (!g.config.duration_ms || now_ms() - start < g.config.duration_ms)) {
@@ -438,7 +442,7 @@ static int run_usb(void)
         }
         if (submit_route(fd))
             goto cleanup;
-        for (unsigned n = 0; n < SLOTS; n++)
+        for (unsigned n = 0; n < slots; n++)
             if (g.busy[n] && now_ms() - g.last[n] > 1000) {
                 log_line("stalled slot %u", n);
                 goto cleanup;
@@ -480,7 +484,11 @@ cleanup:
     while (changed)
         if (ioctl(fd, USB_SET_ALTINTERFACE, &old[--changed]))
             result = 1;
-    if (detached) {
+    if (detached && g.config.audio_only) {
+        // ponytail: the console's audio driver stays off this controller until it is
+        // replugged; re-enumerating would disconnect the buttons too (press PS).
+        log_line("audio released; the console's controller audio returns on replug");
+    } else if (detached) {
         int zero = 0;
         int rc = ioctl(fd, USB_DEVICEENUMERATE, &zero);
         log_line("re-enumerate rc %d errno %d", rc, rc ? errno : 0);
@@ -489,8 +497,9 @@ cleanup:
     }
     if (fd >= 0)
         close(fd);
-    notify(result ? "DS5 USB audio stopped with an error. Press PS to reconnect."
-                  : "DS5 USB audio released. Press PS to reconnect controller.");
+    if (!g.config.audio_only)
+        notify(result ? "DS5 USB audio stopped with an error. Press PS to reconnect."
+                      : "DS5 USB audio released. Press PS to reconnect controller.");
     log_line("done: result %d", result);
     return result ? DS5_USB_ERROR : DS5_USB_OK;
 }

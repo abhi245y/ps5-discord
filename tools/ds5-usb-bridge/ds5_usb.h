@@ -30,6 +30,10 @@ typedef struct {
     uint32_t headphone_gain_q15, speaker_gain_q15; // 32768 is unity; max 65536.
     uint8_t mic_volume, headphone_volume, speaker_volume, speaker_pre_gain;
     uint8_t notifications, stop_on_ps;
+    // Take only the audio: the console keeps the HID interface (buttons, the jack and the
+    // mute button, which it still handles). No controller or route callbacks; output is
+    // stereo for both routes, and the device is not re-enumerated at the end.
+    uint8_t audio_only;
 } ds5_usb_config;
 
 typedef struct {

@@ -29,8 +29,7 @@ struct Request
         voice_decline,// stop ringing us in channel_id
         voice_leave,  // leave whatever we are in
         voice_set,    // self mute and deafen: mute, deaf
-        voice_controller, // the USB DualSense as the call's headset, game via Remote Play: on
-        voice_output, // where the call plays: tv (the app) or the controller
+        voice_output, // the call's audio while the app is on screen: tv, or the USB controller
     };
     Kind kind = Kind::open_channel;
     std::string guild_id; // empty for a DM
@@ -43,7 +42,6 @@ struct Request
     std::string nonce;    // set by the client for send: matches the gateway's echo
     bool mute = false;    // voice_set
     bool deaf = false;    // voice_set
-    bool on = false;      // voice_controller
     bool tv = false;      // voice_output
 };
 

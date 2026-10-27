@@ -95,10 +95,10 @@ int vau_speaking_pending(void);
 int vau_speaking(char ids[][VAU_ID], int max);
 
 // An external audio device (the DualSense on USB, controller_voice.c) instead of the
-// app: its mic feeds the call and the app's mic bytes are ignored. Where the call
-// plays: the device, or the app (the TV, only while the app is on screen).
+// app: while on, its mic feeds the call (the app's mic bytes are ignored) and the call
+// plays on it instead of in the app.
 void vau_ext_set(int on);
 void vau_ext_mic(const int16_t *mono, size_t frames);       // device thread; copies
 size_t vau_ext_playback(int16_t *stereo, size_t frames);    // device thread; frames supplied
-void vau_set_output_tv(int tv);
-int vau_output_tv(void);
+// 1 while the app's audio socket is connected: the app is on screen in a call.
+int vau_app_connected(void);
