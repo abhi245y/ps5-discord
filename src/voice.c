@@ -99,6 +99,14 @@ static int64_t num(cJSON *o, const char *key)
 }
 
 // Lock held. Replaces the current connection: its thread exits without reporting.
+int voice_wanted(void)
+{
+    pthread_mutex_lock(&lock);
+    int w = want_channel[0] != 0;
+    pthread_mutex_unlock(&lock);
+    return w;
+}
+
 static void stop_locked(void)
 {
     if (cur) {

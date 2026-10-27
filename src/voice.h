@@ -15,6 +15,8 @@ void voice_init(const char *data_dir); // where our last gateway session id is k
 void voice_on_ready(cJSON *ready);      // READY: rejoin the wanted call or leave our own ghost
 void voice_join(const char *guild_id, const char *channel_id); // guild_id NULL for DM calls
 void voice_leave(void);
+// 1 while a call is wanted (joining, in it, or rejoining after a drop).
+int voice_wanted(void);
 // mute/deaf: 0 or 1, -1 keeps the current value. 0, or -1 when not in a call.
 int voice_set_flags(int mute, int deaf);
 // Gateway thread, between reads: 1 with *out when op 4 must be sent now.

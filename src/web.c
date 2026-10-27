@@ -602,6 +602,7 @@ static void *serve_one(void *arg)
 #if CORE_FOLLOWS_APP
 // Test builds: the app starts the core, so the core leaves with it. The app
 // polls every few seconds; once it has been seen, a long silence means it closed.
+// A game suspends the app the same way, so a wanted call keeps the core.
 #define APP_GONE_SECONDS 30
 static volatile time_t app_seen;
 
@@ -610,7 +611,8 @@ static void *follow_app(void *arg)
     (void)arg;
     for (;;) {
         sleep(5);
-        if (app_seen && time(NULL) - app_seen > APP_GONE_SECONDS && !browser_auth_keepalive()) {
+        if (app_seen && time(NULL) - app_seen > APP_GONE_SECONDS && !browser_auth_keepalive() &&
+            !voice_wanted()) {
             LOG("the app closed: the core leaves with it");
             _exit(0);
         }
