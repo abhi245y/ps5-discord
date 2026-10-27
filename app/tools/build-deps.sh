@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ps5-discord app - Builds the static libraries the app links, with the app's
 # PS5 compiler wrapper. Adapted from spot5 (GPL-3.0-or-later).
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # Output: build/deps/libwebpdec.a, build/deps/libharfbuzz.a,
 #         .deps/src/nlohmann/json.hpp (header only)

@@ -1,5 +1,5 @@
 // ps5-discord - The app, hosted by the kit's shell as its only design.
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Owns the screen stack and routes input to the visible screen. Its tour()
 // walks every screen so `make host-snapshots` photographs the whole app for

@@ -1,5 +1,5 @@
 // ps5-discord - Home's Friends, Servers and Mentions tabs.
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Framework frames 02-04. Each tab is a page of cards laid out in page
 // coordinates; focus moves to the nearest card in the pressed direction and

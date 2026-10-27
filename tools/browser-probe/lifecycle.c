@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Controlled lifecycle test; no credentials, Discord, or PSN operations.
 #include <errno.h>
 #include <signal.h>

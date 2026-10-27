@@ -1,5 +1,5 @@
 // ps5-discord - A server's own page, between the Servers tab and its chat.
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //
 //   - a header with its icon, name and size, and the voice pill;
 //   - its banner (or invite splash, else art);

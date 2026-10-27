@@ -1,5 +1,5 @@
 // ps5-discord - Keys from a keyboard plugged into the console.
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 #include "platform/ps5/usb_keyboard.hpp"
 

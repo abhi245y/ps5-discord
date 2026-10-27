@@ -1,6 +1,6 @@
 // ps5-discord - Voice audio on the console: the DualSense/headset mic and the
 // socket to the core that carries mic PCM out and playback PCM back.
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Two threads, neither ever waits on the other or on the game thread:
 //   mic thread:  opens sceAudioIn while wanted, reads 256-frame grains, keeps

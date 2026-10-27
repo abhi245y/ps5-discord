@@ -1,6 +1,6 @@
 // ps5-discord - The app's side of the core: a background thread that talks to
 // the core payload over loopback HTTP and builds the snapshot screens draw.
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // The core (core payload, ROADMAP.md) owns the Discord session; the app never
 // sees the token or TLS. This client polls /api/state (sign-in, connection),

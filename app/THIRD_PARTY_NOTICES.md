@@ -4,13 +4,13 @@
 
 ps5-discord's app is built on [ps5-homebrew-ui](https://github.com/BlackBearReloaded) (the kit:
 `src/gfx`, `src/ui`, `src/core`, `src/audio`, `src/platform`, `src/runtime`, `src/app`, `host`,
-`tools`, `tooling`; GPL-3.0-or-later, BlackBearReloaded) and takes these engine pieces from
-spot5 (GPL-3.0-or-later): `src/gfx/shaper.*` and its font and batch changes (HarfBuzz text
-shaping), `src/runtime/app_heap.c` and `runtime_shims.c`, `src/platform/libcxx_abort.cpp`,
-`src/audio/output.*` and `resampler.hpp`, `src/platform/ps5/pad.*`, `tools/build.sh`,
-`tools/prepare-opengl.sh`, `tools/build-deps.sh` (adapted),
-`tooling/native/sce_module_writer.cpp`, `tools/icon`, and stb_image / stb_truetype under
-`src/third_party/stb`. The app as a whole is GPL-3.0-or-later.
+`tools`, `tooling`; GPL-3.0-or-later, BlackBearReloaded), with stb_image / stb_truetype under
+`src/third_party/stb`.
+
+ps5-discord's own code is AGPL-3.0-or-later (`LICENSE`). Files from the kit and the other
+projects named below keep their GPL-3.0-or-later headers (`LICENSE.GPL-3.0`); GPLv3
+section 13 lets them be combined with AGPL code, so the app as a whole is distributed
+under AGPL-3.0-or-later.
 
 Linked libraries fetched by `tools/build-deps.sh` (pinned by SHA-256): HarfBuzz 11.2.1
 (MIT, "Old MIT"), libwebp 1.4.0 decoder (BSD-3-Clause), nlohmann/json 3.11.3 (MIT).

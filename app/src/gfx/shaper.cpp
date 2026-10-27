@@ -1,6 +1,6 @@
 // spot5 - Text in scripts the baked fonts lack, shaped with HarfBuzz and drawn
 // from glyphs rasterised at runtime.
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 #include "gfx/shaper.hpp"
 

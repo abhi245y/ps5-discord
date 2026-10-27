@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # spot5 - Splits the Spot5 mark into the app's logo layers.
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # usage: split_logo.py <mark.png (transparent)> <out dir>
 # Writes arc-0.png (top) .. arc-2.png (bottom), each the full 512x512 frame

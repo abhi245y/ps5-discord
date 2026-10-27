@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // sceAudioIn (microphone) probe for ps5-discord. Payload only, one shot.
 // Opens each candidate (user, type, freq, param), captures ~3 s from every
 // successful open, logs return codes and per-100 ms RMS/peak levels.

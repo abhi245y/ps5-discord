@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ps5-discord - PNG to the 3840x2160 BC7 DDS the console wants for pic0/pic1,
 # without texconv (Windows only). Needs Pillow and numpy.
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: AGPL-3.0-or-later
 #
 #   tools/png2dds.py in.png out.dds
 #

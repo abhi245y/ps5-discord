@@ -1,5 +1,5 @@
 // ps5-discord - Home: who is around, what is live, what was said.
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // The framework's "TV Media Rows" Home (design/framework, approved comp
 // .impeccable/mocks/decision/r3/crowded.png):

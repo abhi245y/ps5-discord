@@ -1,5 +1,5 @@
 // ps5-discord - The design framework's tokens (design/framework, "TV Media Rows").
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // One quiet world: charcoal ground, raised cards, large round avatars, and a
 // single coral accent that only ever means focus, live or unread. Sizes are in

@@ -1,6 +1,6 @@
 // ps5-discord - What screens ask the client to do. The app passes these on to
 // the core client (console) or applies them to the sample account (host).
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 #pragma once
 

@@ -1,5 +1,5 @@
 // ps5-discord - A server's own page: its banner, voice rooms and text channels.
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 #pragma once
 

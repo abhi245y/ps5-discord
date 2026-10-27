@@ -1,6 +1,6 @@
 // spot5 - Text in scripts the baked fonts lack (Malayalam, Devanagari, ...):
 // shaped with HarfBuzz, its glyphs rasterised at runtime into one atlas.
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 #pragma once
 
