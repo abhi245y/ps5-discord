@@ -76,3 +76,12 @@ status page.
 - `main` stays releasable; work on `feat/*` and `fix/*` branches, merged by PR.
 - Versioning, release channels and milestones: [ROADMAP.md](ROADMAP.md). Changes: [CHANGELOG.md](CHANGELOG.md).
 
+
+## License
+
+ps5-discord is free software under the GNU Affero General Public License, version 3 or
+later ([LICENSE](LICENSE)). The app builds on the ps5-homebrew-ui kit by BlackBearReloaded;
+those files keep their GPL-3.0-or-later headers ([app/LICENSE.GPL-3.0](app/LICENSE.GPL-3.0),
+[app/THIRD_PARTY_NOTICES.md](app/THIRD_PARTY_NOTICES.md)) and are combined with the AGPL code
+under GPLv3 section 13. Because the core serves a status page over the network, that page
+links to this source.

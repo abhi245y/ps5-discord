@@ -1,5 +1,5 @@
 // ps5-discord - The voice room and the incoming call (framework frames 10a, 10).
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //
 //   - the title (room or friend), who is in it and for how long, and the
 //     connection pill (state, then the ping);

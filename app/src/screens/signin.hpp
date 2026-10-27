@@ -1,5 +1,5 @@
 // ps5-discord - Before the account is ready: sign in, waiting, reconnecting.
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 #pragma once
 

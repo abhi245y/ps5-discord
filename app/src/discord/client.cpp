@@ -1,5 +1,5 @@
 // ps5-discord - The app's side of the core (see client.hpp).
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 #include "discord/client.hpp"
 #include "third_party/stb/stb_image.h"

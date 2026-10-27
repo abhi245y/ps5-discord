@@ -1,5 +1,5 @@
 // ps5-discord - The voice room (a server room or a DM call) and the incoming call.
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 #pragma once
 

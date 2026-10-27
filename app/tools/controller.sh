@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ps5-discord - Launches or closes this title on the console (development).
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # Usage: PS5_HOST=<ip> tools/controller.sh <launch|close>
 # Builds the controller payload (tools/controllers, from

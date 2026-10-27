@@ -1,6 +1,6 @@
 // ps5-discord - The app's own on-screen keyboard, for typing a message with
 // the controller (the system keyboard is not reachable from a native title).
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 #pragma once
 

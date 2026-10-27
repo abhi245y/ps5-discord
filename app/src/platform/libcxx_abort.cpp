@@ -1,5 +1,5 @@
 // spot5 - libc++ abort hook for the PS5.
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // libc++ calls this where a no-exceptions path cannot throw; the SDK does not
 // provide it. Log and park instead of exit(), which crashes a native title.

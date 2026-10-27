@@ -1,5 +1,5 @@
 // ps5-discord - The system keyboard (IME dialog).
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // The SDK ships the libSceImeDialog stub but no header; the parameter block
 // follows the console's (PS4-era) layout, as homebrew SDKs document it.

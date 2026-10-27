@@ -1,5 +1,5 @@
 // ps5-discord - Synthetic account for host snapshots and the tour.
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Mirrors the design framework's busy account (approved Home comp): every
 // person, server and message here is invented.

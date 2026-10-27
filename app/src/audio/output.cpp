@@ -1,5 +1,5 @@
 // spot5 - Audio sink selection; experimental ABI recovered from PPSA05688.
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 #include "audio/output.hpp"
 #include "platform/ps5/system.hpp"
 

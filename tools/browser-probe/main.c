@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Launch-only experiment. Does not read, export, or save Discord credentials.
 #include <errno.h>
 #include <signal.h>

@@ -1,6 +1,6 @@
 // ps5-discord - Drawing pieces every screen shares: avatars, scenes, chips,
 // badges, the focus outline and relative times.
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 #pragma once
 

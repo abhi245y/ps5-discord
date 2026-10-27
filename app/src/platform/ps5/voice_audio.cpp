@@ -1,5 +1,5 @@
 // ps5-discord - Voice audio on the console (see voice_audio.hpp).
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 #include "platform/ps5/voice_audio.hpp"
 

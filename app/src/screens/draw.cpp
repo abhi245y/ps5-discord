@@ -1,5 +1,5 @@
 // ps5-discord - Drawing pieces every screen shares.
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 #include "screens/draw.hpp"
 

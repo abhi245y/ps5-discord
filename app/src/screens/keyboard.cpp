@@ -1,5 +1,5 @@
 // ps5-discord - The on-screen keyboard.
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Rows of ten keys (an emoji row, digits, three letter rows) and a bottom row
 // of wide keys. Cross types the focused key; Square erases, Triangle is a

@@ -1,7 +1,7 @@
 // ps5-discord - Keys from a keyboard plugged into the console. The core reads
 // the keyboard (a title cannot reach libSceKeyboard) and sends each key as a
 // "KEY" event; these turn one into what the screens read.
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 #pragma once
 

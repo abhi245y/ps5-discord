@@ -1,5 +1,5 @@
 // ps5-discord - A channel or DM: read history, act on a message, reply.
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Framework frames 06 (channel chat), 06b (message actions), 07 (writing a
 // reply) and 08 (direct message):

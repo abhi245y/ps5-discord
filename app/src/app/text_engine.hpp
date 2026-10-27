@@ -1,5 +1,5 @@
 // ps5-discord - Text beyond the baked fonts: HarfBuzz-shaped fallback faces.
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 #pragma once
 

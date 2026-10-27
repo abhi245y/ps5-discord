@@ -1,6 +1,6 @@
 // ps5-discord - Before the account is ready: sign in with the phone (framework
 // frame 01) and the waiting / reconnecting card (frame 12).
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 #include "screens/signin.hpp"
 

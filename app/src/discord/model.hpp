@@ -1,5 +1,5 @@
 // ps5-discord - What the screens show: one immutable snapshot of the account.
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Filled from the core's control API on the console (/api/chat, /api/events,
 // /api/messages) and from discord/sample.cpp in host snapshots. Screens only

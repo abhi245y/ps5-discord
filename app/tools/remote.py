@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ps5-discord - Drives the running app from a PC over FTP (development only).
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: AGPL-3.0-or-later
 #
 #   tools/remote.py shot <name> [out.png]   live frame, saved next to out (needs Pillow for .png)
 #   tools/remote.py press down,down,cross   keys, one every 0.35 s

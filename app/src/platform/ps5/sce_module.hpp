@@ -1,5 +1,5 @@
 // ps5-discord - Loading system modules and finding their functions in a native title.
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 #pragma once
 
