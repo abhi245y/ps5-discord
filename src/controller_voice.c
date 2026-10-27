@@ -119,6 +119,11 @@ static void *supervise(void *arg)
 
 void cv_init(void)
 {
+    // ponytail: parked (2026-10-28). Audio-only takeover stops the console's buttons
+    // until a replug and the speaker stays silent without our route report; revisit
+    // with the full takeover that worked through Remote Play.
+    if (1)
+        return;
     pthread_t t;
     pthread_attr_t attr;
     pthread_attr_init(&attr);

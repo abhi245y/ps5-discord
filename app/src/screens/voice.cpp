@@ -316,7 +316,7 @@ bool VoiceRoom::update(const discord::Snapshot &s, const hui::InputFrame &input,
         set(!v.muted, v.deafened);
     if (input.is_pressed(Action::north) && live)
         set(v.muted, !v.deafened);
-    if (input.is_pressed(Action::page_prev) && live)
+    if (false && input.is_pressed(Action::page_prev) && live) // parked with controller audio
     {
         discord::Request r;
         r.kind = discord::Request::Kind::voice_output;
@@ -376,7 +376,7 @@ void VoiceRoom::draw(const discord::Snapshot &s, DrawList &list) const
     if (here && v.state == discord::VoiceState::error)
         ui::text(list, ink_.fonts.regular, fit(ink_.fonts.regular, v.error, 26.0f, 1300.0f), kMargin, 196.0f, 26.0f,
                  kDnd);
-    else if (here)
+    else if (false && here) // parked with controller audio
     {
         // Where the call's audio is.
         const bool missing = v.controller == "missing";
@@ -464,14 +464,13 @@ void VoiceRoom::draw(const discord::Snapshot &s, DrawList &list) const
     const ui::Hint hints[] = {{ui::Button::cross, "Select"},
                               {ui::Button::circle, "Back"},
                               {ui::Button::square, "Mute"},
-                              {ui::Button::triangle, "Deafen"},
-                              {ui::Button::l1, v.output_tv ? "Audio to controller" : "Audio to TV"}};
+                              {ui::Button::triangle, "Deafen"}};
     ui::HintLayout layout;
     layout.size = 34.0f;
     layout.text_size = 23.0f;
     layout.cy = kHintsBaseline;
     layout.item_gap = 38.0f;
-    ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints, 5, right, true, layout);
+    ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints, 4, right, true, layout);
 }
 
 void draw_incoming(DrawList &list, const Ink &ink, const discord::Snapshot &s, const discord::Call &call)
