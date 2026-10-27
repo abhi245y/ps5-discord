@@ -1,0 +1,39 @@
+start: 20-second full-duplex loopback; built-in mic, automatic headphone output; haptics zero
+selected /dev/ugen2.2 VID:PID 054c:0ce6
+mic: interface 2 alt-index 1 endpoint 82 packet 196
+output: interface 1 alt-index 1 endpoint 01 packet 392
+HID index 3 IN 84 OUT 03
+slot 0 endpoint 82 opened: packet 196 frames 16
+slot 1 endpoint 82 opened: packet 196 frames 16
+slot 2 endpoint 01 opened: packet 392 frames 16
+slot 3 endpoint 01 opened: packet 392 frames 16
+slot 4 endpoint 84 opened: packet 64 frames 1
+slot 5 endpoint 03 opened: packet 64 frames 1
+initial HID status byte54=1b headphones 1 mic-muted 0
+route requested: headphones mic live (built-in mic forced)
+initial route applied: headphones mic live
+notification rc 0: Mic loopback started for 20 seconds. Speak, unplug/replug headphones. PS stops test.
+t=1s mic 62 OUT 62 HID 501 route headphones mute 0 ring 1536 underruns 0 overruns 0 peak IN/OUT 9634/2408
+t=2s mic 125 OUT 125 HID 1002 route headphones mute 0 ring 1536 underruns 0 overruns 0 peak IN/OUT 9634/2408
+t=3s mic 187 OUT 187 HID 1502 route headphones mute 0 ring 1536 underruns 0 overruns 0 peak IN/OUT 32742/6000
+t=4s mic 250 OUT 250 HID 2002 route headphones mute 0 ring 1536 underruns 0 overruns 0 peak IN/OUT 32747/6000
+t=5s mic 313 OUT 313 HID 2503 route headphones mute 0 ring 1536 underruns 0 overruns 0 peak IN/OUT 32768/6000
+t=6s mic 376 OUT 376 HID 3004 route headphones mute 0 ring 1536 underruns 0 overruns 0 peak IN/OUT 32768/6000
+t=7s mic 438 OUT 438 HID 3504 route headphones mute 0 ring 1536 underruns 0 overruns 0 peak IN/OUT 32768/6000
+t=8s mic 501 OUT 501 HID 4005 route headphones mute 0 ring 1536 underruns 0 overruns 0 peak IN/OUT 32768/6000
+t=9s mic 564 OUT 564 HID 4505 route headphones mute 0 ring 1536 underruns 0 overruns 0 peak IN/OUT 32768/6000
+t=10s mic 626 OUT 626 HID 5006 route headphones mute 0 ring 1536 underruns 0 overruns 0 peak IN/OUT 32768/6000
+t=11s mic 689 OUT 689 HID 5507 route headphones mute 0 ring 1536 underruns 0 overruns 0 peak IN/OUT 32768/6000
+t=12s mic 752 OUT 752 HID 6007 route headphones mute 0 ring 1536 underruns 0 overruns 0 peak IN/OUT 32768/6000
+t=13s mic 815 OUT 815 HID 6507 route headphones mute 0 ring 1536 underruns 0 overruns 0 peak IN/OUT 32768/6000
+t=14s mic 877 OUT 877 HID 7008 route headphones mute 0 ring 1536 underruns 0 overruns 0 peak IN/OUT 32768/6000
+t=15s mic 940 OUT 940 HID 7509 route headphones mute 0 ring 1536 underruns 0 overruns 0 peak IN/OUT 32768/6000
+t=16s mic 1003 OUT 1003 HID 8009 route headphones mute 0 ring 1536 underruns 0 overruns 0 peak IN/OUT 32768/6000
+t=17s mic 1065 OUT 1065 HID 8509 route headphones mute 0 ring 1536 underruns 0 overruns 0 peak IN/OUT 32768/6000
+t=18s mic 1128 OUT 1128 HID 9010 route headphones mute 0 ring 1536 underruns 0 overruns 0 peak IN/OUT 32768/6000
+t=19s mic 1191 OUT 1191 HID 9510 route headphones mute 0 ring 1536 underruns 0 overruns 0 peak IN/OUT 32768/6000
+summary: IN 960000 frames OUT 960000 frames, mic transfers 1250 OUT transfers 1250 HID 9977 handoffs 0 wall 20001 ms
+levels: input RMS 10508.2 peak 32768 nonzero 867444 output peak 6000; routed headphone/speaker 961536/0 frames
+re-enumerate rc 0 errno 0
+notification rc 0: Mic loopback finished. Press PS to reconnect controller.
+done: result 0
