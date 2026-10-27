@@ -229,10 +229,12 @@ static void on_video(const uint8_t *au, size_t n, int keyframe)
     (void)keyframe;
     // Which NAL types the access unit holds; AUDs (9) are left out of what is sent.
     int has_slice = 0, has_idr = 0, has_ps = 0;
-    size_t pos = 0, len;
+    size_t pos = 0, len, nals = 0, payload = 0;
     const uint8_t *nal;
     while ((nal = next_nal(au, n, &pos, &len)) && len) {
         int t = nal[0] & 0x1f;
+        nals++;
+        payload += len;
         has_slice |= t == 1 || t == 5;
         has_idr |= t == 5;
         has_ps |= t == 7 || t == 8;
@@ -254,7 +256,8 @@ static void on_video(const uint8_t *au, size_t n, int keyframe)
     c->need_idr = 0;
     // Viewers who join late need SPS and PPS in front of every IDR.
     size_t extra = has_idr && !has_ps ? sps_pps_len : 0;
-    uint8_t *frame = malloc(extra + n);
+    // Rebuilt with 4-byte start codes; Remote Play puts 3-byte ones between slices.
+    uint8_t *frame = malloc(extra + payload + 4 * nals);
     size_t m = 0;
     if (frame) {
         memcpy(frame, sps_pps, extra);
