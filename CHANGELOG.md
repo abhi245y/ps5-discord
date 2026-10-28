@@ -30,8 +30,8 @@ All notable changes to this project are documented here. The format follows
 - Emoji picker (L3 in a chat, R1 or the Emoji key in the keyboard): recently used, the
   servers' own emoji and Unicode's groups; emoji are added to the text and the picker stays
   open for more. Without Nitro, other servers' emoji sit at the bottom, marked as needing it.
-- Reactions: React opens the picker (server emoji too); a message's menu lists each of its
-  reactions to add or remove.
+- Reactions: React, or More at the end of the quick reactions, opens the picker (server emoji
+  too); a message's menu lists each of its reactions to add or remove.
 - Stickers: shown in messages (Discord's animated Lottie ones through ThorVG, GIF and PNG
   ones too) and sent from the picker's Stickers tab (Square), Discord's packs and the
   servers' own.
