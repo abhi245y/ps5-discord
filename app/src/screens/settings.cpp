@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Left: the sections as cards. Right: the chosen section's rows, each a title, a line
-// of description and a control (a value, a toggle, a slider, a button or the mic meter).
-// Only rows that work are focusable; the rest are drawn faint as what is coming.
-// D-pad up/down moves, right (or Cross) enters the rows, left or Circle leaves them;
-// on a slider left/right change it. Circle on the sections leaves the screen.
+// of description and a control (a value, a choice, a toggle, a slider or a button).
+// Only controls are cards and focusable; facts (who is signed in, the version) are
+// plain text. D-pad up/down moves, right (or Cross) enters the rows, left or Circle
+// leaves them; on a slider or a choice left/right change it. Circle on the sections
+// leaves the screen.
 
 #include "screens/settings.hpp"
 
@@ -31,6 +32,11 @@ enum class Act
 {
     none,
     pair,
+    sign_out,
+    quality,
+    mic_gain,
+    notify_dm,
+    notify_all,
     ui_volume,
     sfx_volume,
     motion,
@@ -41,10 +47,10 @@ enum class Kind
 {
     info,   // text only
     value,  // a value at the right, with a chevron when it opens something
+    choice, // one of a few values, left/right picks
     toggle,
     slider, // 0..10, shown as a percentage
     button,
-    meter,  // our mic level
 };
 
 struct Row
@@ -55,7 +61,13 @@ struct Row
     bool on = false;
     bool soon = false; // not in this build: drawn faint, not focusable
     Act act = Act::none;
+    int percent = 10;   // a slider's step in percent
+    bool meter = false; // the mic level in place of the description, while in a call
 };
+
+// Prefs::golive_quality. Remote Play streams 1080p at most; Discord wants H.264.
+constexpr const char *kQualities[] = {"720p · 30 fps", "720p · 60 fps", "1080p · 30 fps", "1080p · 60 fps"};
+constexpr int kQualityCount = sizeof kQualities / sizeof *kQualities;
 
 struct Section
 {
@@ -83,7 +95,8 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
     case 0:
         return {
             {Kind::value, "Signed in as", "Your Discord account on this console.", s.me.name},
-            {Kind::button, "Sign out", "Forget this account on the console.", "Sign out", 0, false, true},
+            {Kind::button, "Sign out", "Ends this session with Discord and forgets it here.", "Sign out", 0, false,
+             false, Act::sign_out},
         };
     case 1: {
         Row pair;
@@ -104,23 +117,26 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
         else
         {
             pair.value = "Not paired";
-            pair.desc = "Pair a console user once so Go Live can see your game.";
+            pair.desc = "Pair a console user once so Go Live can show your game.";
         }
+        Row mic{Kind::slider, "Input volume", "How loud you are in calls. Join one to see your level here.", "",
+                s.prefs.mic_gain, false, false, Act::mic_gain};
+        mic.percent = 20;
+        mic.meter = v.active();
         return {
-            {Kind::meter, "Microphone", v.active() ? "Your mic in the call, live." : "Shows your mic while you are in a call.", ""},
-            {Kind::info, "Before pairing",
-             "On the PS5, turn Remote Play on (Settings › System › Remote Play) for a user signed in to PSN.", ""},
+            mic,
             pair,
-            {Kind::value, "Go Live quality", "The picture your viewers get.", "720p · 30 fps"},
-            {Kind::info, "Controller while live",
-             "As the user on screen: DualSense on USB, with voice. As another user: it stays yours, no voice.", ""},
-            {Kind::slider, "Input volume", "How loud your microphone is.", "", 7, false, true},
+            {Kind::choice, "Go Live quality", "From the next Go Live on. Above 720p 30 may need Nitro.",
+             kQualities[std::clamp(s.prefs.golive_quality, 0, kQualityCount - 1)], s.prefs.golive_quality, false,
+             false, Act::quality},
         };
     }
     case 2:
         return {
-            {Kind::value, "Direct messages and mentions", "A banner at the top while you are on another screen.", "Banner"},
-            {Kind::toggle, "Every server message", "A banner for every message in your servers.", "", 0, false, true},
+            {Kind::toggle, "Direct messages and mentions", "A banner when someone writes to you or mentions you.", "", 0,
+             s.prefs.notify_dm, false, Act::notify_dm},
+            {Kind::toggle, "Every server message", "A quieter banner for each message in your servers.", "", 0,
+             s.prefs.notify_all, false, Act::notify_all},
         };
     case 3:
         return {
@@ -138,7 +154,6 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
             {Kind::info, "Your sign-in", "Kept on the console in /data/ps5-discord, not encrypted yet.", ""},
             {Kind::info, "Status page",
              "Anyone on your network can open http://<console>:9041: the app's state and log, never your sign-in.", ""},
-            {Kind::info, "Discord's rules", "Clients other than Discord's own break its terms; use an account you can lose.", ""},
         };
     default:
         return {
@@ -217,14 +232,14 @@ void toggle(DrawList &list, float right, float cy, bool on)
     list.circle(on ? r.x + r.w - 20.0f : r.x + 20.0f, cy, 15.0f, Color::rgb(0xffffff));
 }
 
-void slider(DrawList &list, const Ink &ink, float right, float cy, int level)
+void slider(DrawList &list, const Ink &ink, float right, float cy, int level, int percent)
 {
     const float w = 320.0f, x = right - 110.0f - w, t = static_cast<float>(level) / 10.0f;
     list.rounded_rect({x, cy - 4.0f, w, 8.0f}, 4.0f, kRaisedHigh);
     list.rounded_rect({x, cy - 4.0f, std::max(8.0f, w * t), 8.0f}, 4.0f, kCoral);
     list.circle(x + w * t, cy, 13.0f, Color::rgb(0xffffff));
     list.circle(x + w * t, cy, 7.0f, kCoral);
-    ui::text(list, ink.fonts.regular, std::to_string(level * 10) + "%", right, cy + 9.0f, 25.0f, kText,
+    ui::text(list, ink.fonts.regular, std::to_string(level * percent) + "%", right, cy + 9.0f, 25.0f, kText,
              gfx::Align::right);
 }
 
@@ -237,6 +252,7 @@ void SettingsScreen::open()
     section_ = 0;
     row_ = 0;
     in_rows_ = false;
+    signing_out_ = false;
     pair_ = Pair::none;
 }
 
@@ -275,7 +291,8 @@ std::vector<Option> options_for(const discord::Voice &v, const std::string &id)
             std::vector<Option> o;
             if (v.rp_use != u.id)
                 o.push_back({"Use for Go Live", Do::use});
-            o.push_back({"Pair again", Do::pair});
+            if (u.on_screen) // the console pairs only the user signed in on screen
+                o.push_back({"Pair again", Do::pair});
             o.push_back({"Remove pairing", Do::remove});
             return o;
         }
@@ -318,8 +335,8 @@ void SettingsScreen::update_pair(const discord::Snapshot &s, const hui::InputFra
         {
             const discord::RemotePlayUser &u = v.rp_users[user_at_];
             target_ = u.id;
-            if (!u.account)
-                feedback.play(hui::audio::Cue::error); // Remote Play needs a PSN account id
+            if (!u.account || (!u.paired && !u.on_screen))
+                feedback.play(hui::audio::Cue::error); // needs a PSN account, and to be the user on screen
             else if (!u.paired)
             {
                 pair_ = Pair::wait; // the core gets the PIN itself; the boxes only if it cannot
@@ -443,6 +460,31 @@ bool SettingsScreen::update(const discord::Snapshot &s, const hui::InputFrame &i
         update_pair(s, input, feedback, requests);
         return true;
     }
+    auto set_pref = [&](const char *key, int value) {
+        discord::Request r;
+        r.kind = discord::Request::Kind::set_pref;
+        r.content = key;
+        r.value = value;
+        requests.push_back(r);
+    };
+    if (signing_out_)
+    {
+        if (input.is_pressed(Action::confirm))
+        {
+            discord::Request r;
+            r.kind = discord::Request::Kind::sign_out;
+            requests.push_back(r);
+            feedback.play(hui::audio::Cue::select);
+            signing_out_ = false;
+            open();
+        }
+        else if (input.is_pressed(Action::back))
+        {
+            signing_out_ = false;
+            feedback.play(hui::audio::Cue::modal_close);
+        }
+        return true;
+    }
     const std::vector<Row> rows = rows_for(section_, s, app, version_);
     auto first_row = [&]() {
         for (int i = 0; i < static_cast<int>(rows.size()); ++i)
@@ -486,7 +528,7 @@ bool SettingsScreen::update(const discord::Snapshot &s, const hui::InputFrame &i
     if (row_ >= static_cast<int>(rows.size()) || !focusable(rows[row_]))
         row_ = std::max(0, first_row());
     const Row &row = rows[row_];
-    const bool is_slider = row.kind == Kind::slider;
+    const bool is_slider = row.kind == Kind::slider || row.kind == Kind::choice;
     if (input.is_pressed(Action::back) || (input.nav == Direction::left && !is_slider))
     {
         in_rows_ = false;
@@ -509,12 +551,19 @@ bool SettingsScreen::update(const discord::Snapshot &s, const hui::InputFrame &i
     }
     if (is_slider && (input.nav == Direction::left || input.nav == Direction::right))
     {
-        int &level = row.act == Act::ui_volume ? app.ui_volume : app.sfx_volume;
-        const int next = std::clamp(level + (input.nav == Direction::right ? 1 : -1), 0, 10);
-        if (next != level)
+        const int top = row.kind == Kind::choice ? kQualityCount - 1 : 10;
+        const int next = std::clamp(row.level + (input.nav == Direction::right ? 1 : -1), 0, top);
+        if (next == row.level)
+            feedback.play(hui::audio::Cue::error, 1.0f, 0.0f, 0.5f);
+        else
         {
-            level = next;
-            changed = true;
+            if (row.act == Act::ui_volume || row.act == Act::sfx_volume)
+            {
+                (row.act == Act::ui_volume ? app.ui_volume : app.sfx_volume) = next;
+                changed = true;
+            }
+            else
+                set_pref(row.act == Act::quality ? "golive_quality" : "mic_gain", next);
             feedback.play(hui::audio::Cue::slider);
         }
     }
@@ -531,6 +580,19 @@ bool SettingsScreen::update(const discord::Snapshot &s, const hui::InputFrame &i
             app.swap_confirm = !app.swap_confirm;
             changed = true;
             feedback.play(hui::audio::Cue::toggle);
+            break;
+        case Act::notify_dm:
+        case Act::notify_all:
+            set_pref(row.act == Act::notify_dm ? "notify_dm" : "notify_all", row.on ? 0 : 1);
+            feedback.play(hui::audio::Cue::toggle);
+            break;
+        case Act::quality: // Cross steps through them too
+            set_pref("golive_quality", (row.level + 1) % kQualityCount);
+            feedback.play(hui::audio::Cue::slider);
+            break;
+        case Act::sign_out:
+            signing_out_ = true;
+            feedback.play(hui::audio::Cue::modal_open);
             break;
         case Act::pair:
             feedback.play(hui::audio::Cue::modal_open);
@@ -578,16 +640,24 @@ void SettingsScreen::draw(const discord::Snapshot &s, const hui::Settings &app, 
         const Rect r{kRowX, kRowY + i * (kRowH + kRowGap), kRowW, kRowH};
         const float right = r.x + r.w - 32.0f, cy = r.cy();
         list.push_opacity(row.soon ? 0.4f : 1.0f);
-        list.rounded_rect(r, kCardRadius, kRaised);
+        // Controls are cards; facts are text on the panel, with a rule under them.
+        if (focusable(row) || row.soon)
+            list.rounded_rect(r, kCardRadius, kRaised);
+        else
+            list.rounded_rect({r.x + 28.0f, r.y + r.h + kRowGap * 0.5f - 1.0f, r.w - 56.0f, 1.0f}, 0.0f, kLine);
         ui::text(list, ink_.fonts.semibold, row.title, r.x + 28.0f, r.y + 42.0f, 28.0f, kText);
         const std::string desc = row.soon ? "Coming in a later build." : row.desc;
         // The description gets the row's width, less the control at the right.
         const float control = row.kind == Kind::info     ? 0.0f
                               : row.kind == Kind::button ? 260.0f
-                              : row.kind == Kind::value  ? r.w * 0.36f
-                                                         : 480.0f;
-        ui::text(list, ink_.fonts.regular, fit(ink_.fonts.regular, desc, 22.0f, r.w - 56.0f - control), r.x + 28.0f,
-                 r.y + 74.0f, 22.0f, kDim);
+                              : row.kind == Kind::value || row.kind == Kind::choice ? r.w * 0.36f
+                                                                                     : 480.0f;
+        if (row.meter)
+            mic_meter(list, r.x + 28.0f, r.y + 67.0f, 280.0f, // as the call hears it: after the volume
+                      std::min(1.0f, s.voice.mic_level * static_cast<float>(row.level) / 5.0f), s.voice.muted);
+        else
+            ui::text(list, ink_.fonts.regular, fit(ink_.fonts.regular, desc, 22.0f, r.w - 56.0f - control),
+                     r.x + 28.0f, r.y + 74.0f, 22.0f, kDim);
         switch (row.kind)
         {
         case Kind::value: {
@@ -598,11 +668,20 @@ void SettingsScreen::draw(const discord::Snapshot &s, const hui::Settings &app, 
                 chevron(list, right - 6.0f, cy, kDim);
             break;
         }
+        case Kind::choice: { // ‹ value ›, each arrow faint at its end
+            const float w = 300.0f;
+            ui::text(list, ink_.fonts.regular, row.value, right - w * 0.5f, cy + 9.0f, 26.0f, kText,
+                     gfx::Align::center);
+            chevron(list, right - 6.0f, cy, row.level < kQualityCount - 1 ? kDim : kLine);
+            list.line(right - w + 6.0f, cy - 10.0f, right - w - 4.0f, cy, 3.0f, row.level > 0 ? kDim : kLine);
+            list.line(right - w - 4.0f, cy, right - w + 6.0f, cy + 10.0f, 3.0f, row.level > 0 ? kDim : kLine);
+            break;
+        }
         case Kind::toggle:
             toggle(list, right, cy, row.on);
             break;
         case Kind::slider:
-            slider(list, ink_, right, cy, row.level);
+            slider(list, ink_, right, cy, row.level, row.percent);
             break;
         case Kind::button: {
             const float w = ink_.fonts.semibold.measure(row.value, 26.0f) + 72.0f;
@@ -611,9 +690,6 @@ void SettingsScreen::draw(const discord::Snapshot &s, const hui::Settings &app, 
             ui::text(list, ink_.fonts.semibold, row.value, b.cx(), cy + 9.0f, 26.0f, kOnCoral, gfx::Align::center);
             break;
         }
-        case Kind::meter:
-            mic_meter(list, right - 320.0f, cy, 320.0f, s.voice.mic_level, s.voice.muted || !s.voice.active());
-            break;
         case Kind::info:
             break;
         }
@@ -622,7 +698,8 @@ void SettingsScreen::draw(const discord::Snapshot &s, const hui::Settings &app, 
             focus_outline(list, r, kCardRadius, 1.0f);
     }
 
-    const bool on_slider = in_rows_ && row_ < static_cast<int>(rows.size()) && rows[row_].kind == Kind::slider;
+    const bool on_slider = in_rows_ && row_ < static_cast<int>(rows.size()) &&
+                           (rows[row_].kind == Kind::slider || rows[row_].kind == Kind::choice);
     const ui::Hint hints[] = {{ui::Button::dpad, on_slider ? "Adjust" : "Move"},
                               {ui::Button::cross, "Select"},
                               {ui::Button::circle, "Back"}};
@@ -635,6 +712,27 @@ void SettingsScreen::draw(const discord::Snapshot &s, const hui::Settings &app, 
 
     if (pair_ != Pair::none)
         draw_pair(s, list);
+    if (signing_out_)
+        draw_sign_out(list);
+}
+
+void SettingsScreen::draw_sign_out(DrawList &list) const
+{
+    list.rounded_rect({0, 0, 1920, 1080}, 0.0f, Color::rgb(0x0d0e12, 0.78f));
+    const Rect card{560.0f, 340.0f, 800.0f, 400.0f};
+    list.shadow(card, 28.0f, 50.0f, Color::rgb(0, 0.5f));
+    list.rounded_rect(card, 28.0f, kRaised);
+    ui::text(list, ink_.fonts.display, "Sign out?", card.x + 56.0f, card.y + 92.0f, 50.0f, kText);
+    ui::paragraph(list, ink_.fonts.regular,
+                  "Discord ends this console's session and the app forgets it. A call or Go Live stops. To come "
+                  "back, scan the QR code again.",
+                  card.x + 58.0f, card.y + 150.0f, 26.0f, card.w - 116.0f, 36.0f, kDim, 4, gfx::Align::left);
+    const ui::Hint hints[] = {{ui::Button::cross, "Sign out"}, {ui::Button::circle, "Cancel"}};
+    ui::HintLayout layout;
+    layout.size = 34.0f;
+    layout.text_size = 23.0f;
+    layout.cy = card.y + card.h - 44.0f;
+    ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints, 2, card.x + card.w - 48.0f, true, layout);
 }
 
 void SettingsScreen::draw_pair(const discord::Snapshot &s, DrawList &list) const
@@ -666,12 +764,13 @@ void SettingsScreen::draw_pair(const discord::Snapshot &s, DrawList &list) const
         {
             const discord::RemotePlayUser &u = v.rp_users[i];
             const Rect r{card.x + 56.0f, card.y + 180.0f + i * 104.0f, card.w - 112.0f, 90.0f};
-            list.push_opacity(u.account ? 1.0f : 0.45f);
+            list.push_opacity(u.account && (u.paired || u.on_screen) ? 1.0f : 0.45f);
             list.rounded_rect(r, kCardRadius, kRaisedHigh);
             ui::text(list, ink_.fonts.semibold, u.name + (u.on_screen ? "  · on screen" : ""), r.x + 28.0f,
                      r.y + 40.0f, 28.0f, kText);
             const std::string line = !u.account  ? "No PSN account: Remote Play cannot pair this user."
-                                     : !u.paired ? "Not paired."
+                                     : !u.paired && u.on_screen ? "Not paired. Select to pair."
+                                     : !u.paired ? "Not paired. To pair, switch to this user on the PS5."
                                      : u.on_screen ? "Paired · controller on USB, with voice"
                                                    : "Paired · your controller stays yours, no voice in games";
             ui::text(list, ink_.fonts.regular, fit(ink_.fonts.regular, line, 22.0f, r.w - 300.0f), r.x + 28.0f,
@@ -688,9 +787,10 @@ void SettingsScreen::draw_pair(const discord::Snapshot &s, DrawList &list) const
                 focus_outline(list, r, kCardRadius, 1.0f);
         }
         ui::paragraph(list, ink_.fonts.regular,
-                      "Remote Play must be on for the user (PS5 Settings › System › Remote Play). Pairing again or "
-                      "removing here does not change the PS5's own list of linked devices.",
-                      left, card.y + 620.0f, 22.0f, width, 30.0f, kFaint, 2, gfx::Align::left);
+                      "Only the user on screen can pair: for another, switch to them on the PS5 and open the app "
+                      "there. Turn Remote Play on first (PS5 Settings › System › Remote Play). Removing a pairing "
+                      "here leaves the PS5's own list of linked devices as it is.",
+                      left, card.y + 600.0f, 22.0f, width, 30.0f, kFaint, 3, gfx::Align::left);
         hints = {{ui::Button::cross, "Select"}, {ui::Button::circle, "Close"}};
     }
     else if (pair_ == Pair::menu)

@@ -270,14 +270,39 @@ enum class Connection : std::uint8_t
 };
 
 // A message worth interrupting for: a DM, or a mention, that arrived live.
+// A live message worth a banner: a DM or a mention (Prefs::notify_dm), or any server
+// message (Prefs::notify_all).
 struct Notice
 {
     std::uint64_t seq = 0; // grows with each notice; 0 = none yet
     std::string guild_id;  // empty for a DM
     std::string channel_id;
-    std::string title;     // "Abhi2nd" or "Abhi2nd in #general"
+    std::string title;     // who wrote: "Abhi2nd"
+    std::string place;     // "Raid Night · #general"; empty for a DM
     std::string text;
     User author;
+    bool for_me = false;   // a DM or a mention of you
+};
+
+// The settings kept by the core (its /api/voice "prefs"), so they outlast the app.
+struct Prefs
+{
+    int golive_quality = 0; // 0 720p30, 1 720p60, 2 1080p30, 3 1080p60
+    int mic_gain = 5;       // 0..10, 5 = as captured
+    bool notify_dm = true;
+    bool notify_all = false;
+
+    void set(const std::string &key, int value) // a set_pref request, applied here
+    {
+        if (key == "golive_quality")
+            golive_quality = value;
+        else if (key == "mic_gain")
+            mic_gain = value;
+        else if (key == "notify_dm")
+            notify_dm = value != 0;
+        else if (key == "notify_all")
+            notify_all = value != 0;
+    }
 };
 
 struct Snapshot
@@ -305,7 +330,8 @@ struct Snapshot
     std::set<std::string> load_failed; // history that did not load (network, core); retried on open
     std::set<std::string> history_start; // channels loaded back to their first message
     std::map<std::string, std::string> dm_by_user; // one-to-one DM channel by the other person's id
-    Notice notice; // the latest live DM or mention
+    std::vector<Notice> notices; // the latest few, oldest first
+    Prefs prefs;
     Voice voice;
     std::map<std::string, std::vector<VoiceSeat>> seats; // by channel id: rooms and DM calls
     std::vector<Call> calls;

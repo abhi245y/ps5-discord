@@ -850,13 +850,16 @@ void Client::publish()
 void Client::test_notice(const std::string &text)
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    Notice &n = snapshot_.notice;
-    ++n.seq;
-    n.guild_id.clear();
+    Notice n;
+    n.seq = ++notice_seq_;
     n.channel_id = "test";
     n.author = snapshot_.me;
     n.title = snapshot_.me.name + " (test)";
     n.text = text;
+    n.for_me = true;
+    snapshot_.notices.push_back(std::move(n));
+    if (snapshot_.notices.size() > 8)
+        snapshot_.notices.erase(snapshot_.notices.begin());
     publish();
 }
 
@@ -1114,6 +1117,15 @@ void Client::poll_voice()
                                                   text(u, "console"),
                                                   static_cast<std::int64_t>(u.value("since", 0.0))});
         }
+        if (v.contains("prefs") && v["prefs"].is_object())
+        {
+            const json &p = v["prefs"];
+            Prefs &prefs = snapshot_.prefs;
+            prefs.golive_quality = std::clamp(static_cast<int>(p.value("golive_quality", 0.0)), 0, 3);
+            prefs.mic_gain = std::clamp(static_cast<int>(p.value("mic_gain", 5.0)), 0, 10);
+            prefs.notify_dm = p.value("notify_dm", 1.0) != 0.0;
+            prefs.notify_all = p.value("notify_all", 0.0) != 0.0;
+        }
         if (v.contains("speaking") && v["speaking"].is_array())
             for (const json &id : v["speaking"])
                 if (id.is_string())
@@ -1171,23 +1183,34 @@ bool Client::poll_events()
         }
         if (type == "MESSAGE_CREATE")
         {
-            // A DM or a mention from someone else becomes a notice, open channel or not.
+            // Someone else's message becomes a notice, open channel or not: a DM or a mention
+            // when those are on, any server message when every one is.
             const Message m = message_from(ev, snapshot_.me.id);
             const std::string guild = text(ev, "guild_id");
-            if (m.author_id != snapshot_.me.id && !m.author_id.empty() && (guild.empty() || m.mentions_me))
+            const bool for_me = guild.empty() || m.mentions_me;
+            const Prefs &prefs = snapshot_.prefs;
+            if (m.author_id != snapshot_.me.id && !m.author_id.empty() &&
+                (for_me ? prefs.notify_dm : prefs.notify_all))
             {
-                Notice &n = snapshot_.notice;
-                ++n.seq;
+                Notice n;
+                n.seq = ++notice_seq_;
                 n.guild_id = guild;
                 n.channel_id = channel;
+                n.for_me = for_me;
                 n.author = ev.contains("author") && ev["author"].is_object() ? user_from(ev["author"]) : User{};
                 n.title = n.author.name;
-                if (!guild.empty())
-                    for (const Guild &g : snapshot_.guilds)
+                for (const Guild &g : snapshot_.guilds)
+                    if (g.id == guild)
+                    {
+                        n.place = g.name;
                         for (const Channel &c : g.channels)
                             if (c.id == channel)
-                                n.title += " in #" + c.name;
+                                n.place += " · #" + c.name;
+                    }
                 n.text = m.content.empty() && !m.attachments.empty() ? "sent an attachment" : plain_text(m);
+                snapshot_.notices.push_back(std::move(n));
+                if (snapshot_.notices.size() > 8)
+                    snapshot_.notices.erase(snapshot_.notices.begin());
             }
         }
         if (snapshot_.messages.find(channel) == snapshot_.messages.end())
@@ -1487,6 +1510,30 @@ void Client::handle(const Request &request)
         if (reply.status != 202)
             hui::sys::log("[CLIENT] %s answered %d", path, reply.status);
         last_voice_ms_ = 0; // the pairing state comes on the next poll
+        break;
+    }
+    case Request::Kind::set_pref: {
+        {
+            std::lock_guard<std::mutex> lock(mutex_); // shown at once, not at the next poll
+            snapshot_.prefs.set(request.content, request.value);
+            publish();
+        }
+        const Reply reply = http(port_, "POST", "/api/prefs", json{{request.content, request.value}}.dump());
+        if (reply.status != 202)
+            hui::sys::log("[CLIENT] /api/prefs answered %d", reply.status);
+        last_voice_ms_ = 0;
+        break;
+    }
+    case Request::Kind::sign_out: {
+        // The core ends the session with Discord, forgets it and quits; poll_state starts
+        // it again, at the QR code.
+        const Reply reply = http(port_, "POST", "/api/signout");
+        hui::sys::log("[CLIENT] /api/signout answered %d", reply.status);
+        std::lock_guard<std::mutex> lock(mutex_);
+        snapshot_ = Snapshot{};
+        snapshot_.status_message = "Signing out...";
+        ready_ = false;
+        publish();
         break;
     }
     case Request::Kind::open_dm: {

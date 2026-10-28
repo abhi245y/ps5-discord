@@ -33,6 +33,7 @@ class SettingsScreen
     int section_ = 0;
     int row_ = 0;
     bool in_rows_ = false; // focus is on the rows, not the sections
+    bool signing_out_ = false; // the sign-out question is up
     // The pairing dialog: the console's users, one user's actions (use, pair again, remove),
     // the wait while the core pairs, and the PIN boxes if the console wants its PIN typed.
     enum class Pair
@@ -53,6 +54,7 @@ class SettingsScreen
     int pin_at_ = 0;
 
     void draw_pair(const discord::Snapshot &snapshot, DrawList &list) const;
+    void draw_sign_out(DrawList &list) const;
     void update_pair(const discord::Snapshot &snapshot, const hui::InputFrame &input, hui::ui::Feedback &feedback,
                      std::vector<discord::Request> &requests);
     void start_pin();

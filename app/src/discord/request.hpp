@@ -34,6 +34,8 @@ struct Request
         voice_set,    // self mute and deafen: mute, deaf
         voice_output, // the call's audio while the app is on screen: tv, or the USB controller
         voice_broadcast, // Go Live on or off: on
+        set_pref,     // a console-side setting (Prefs): content = its key, value
+        sign_out,     // end the session with Discord and forget it on the console
     };
     Kind kind = Kind::open_channel;
     std::string guild_id; // empty for a DM
@@ -48,6 +50,7 @@ struct Request
     bool deaf = false;    // voice_set
     bool tv = false;      // voice_output
     bool on = false;      // voice_broadcast
+    int value = 0;        // set_pref
 };
 
 } // namespace discord

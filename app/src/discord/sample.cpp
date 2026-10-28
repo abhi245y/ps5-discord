@@ -306,6 +306,13 @@ void apply_voice(Snapshot &s, const Request &r)
 
 void apply_sample(Snapshot &s, const Request &r)
 {
+    if (r.kind == Request::Kind::set_pref)
+    {
+        s.prefs.set(r.content, r.value);
+        return;
+    }
+    if (r.kind == Request::Kind::sign_out)
+        return; // the sample account stays
     if (r.kind >= Request::Kind::voice_join)
     {
         apply_voice(s, r);

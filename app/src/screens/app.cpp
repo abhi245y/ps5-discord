@@ -49,29 +49,43 @@ const app::ConceptInfo kInfo{
 // Screen names in captures follow the framework's frame numbers.
 constexpr app::TourStep kTour[] = {
     {0.9f, 0, Direction::none, "home"},
-    // Settings (frame 11): Options from Home, Voice & audio, the pairing PIN, Appearance.
+    // Settings (frame 11): Options from Home, sign out, Voice & audio, pairing, quality,
+    // notifications, Appearance.
     {0.4f, action_bit(Action::menu)},
     {0.8f, 0, Direction::none, "settings"},
-    {0.4f, 0, Direction::down},
-    {0.6f, 0, Direction::none, "settings-voice"},
     {0.4f, 0, Direction::right},
+    {0.4f, action_bit(Action::confirm)},
+    {0.6f, 0, Direction::none, "settings-signout"},
+    {0.4f, action_bit(Action::back)},
+    {0.4f, action_bit(Action::back)},
+    {0.4f, 0, Direction::down},
+    {0.4f, 0, Direction::right},
+    {0.4f, 0, Direction::right},
+    {0.6f, 0, Direction::none, "settings-voice"},
+    {0.4f, 0, Direction::down},
     {0.4f, action_bit(Action::confirm)},
     {0.6f, 0, Direction::none, "settings-pair-users"},
     {0.4f, action_bit(Action::confirm)},
     {1.8f, 0, Direction::none, "settings-pair"},
     {0.4f, action_bit(Action::confirm)},
     {0.4f, 0, Direction::down},
-    {0.4f, action_bit(Action::confirm)},
-    {1.8f, 0, Direction::none, "settings-pair-second"},
-    {0.4f, action_bit(Action::confirm)},
+    {0.6f, 0, Direction::none, "settings-pair-other"},
+    {0.4f, 0, Direction::up},
     {0.4f, action_bit(Action::confirm)},
     {0.6f, 0, Direction::none, "settings-pair-menu"},
     {0.4f, action_bit(Action::back)},
     {0.6f, 0, Direction::none, "settings-pair-users-paired"},
     {0.4f, action_bit(Action::back)},
+    {0.4f, 0, Direction::down},
+    {0.4f, 0, Direction::right},
     {0.6f, 0, Direction::none, "settings-paired"},
     {0.4f, action_bit(Action::back)},
     {0.4f, 0, Direction::down},
+    {0.4f, 0, Direction::right},
+    {0.4f, 0, Direction::down},
+    {0.4f, action_bit(Action::confirm)},
+    {0.6f, 0, Direction::none, "settings-notifications"},
+    {0.4f, action_bit(Action::back)},
     {0.4f, 0, Direction::down},
     {0.4f, 0, Direction::right},
     {0.6f, 0, Direction::none, "settings-appearance"},
@@ -342,20 +356,7 @@ class DiscordApp final : public app::Concept
             open_voice(context_.snapshot.voice.channel_id);
             feedback.play(hui::audio::Cue::open);
         }
-        // A new live DM or mention: a toast and a chime, unless it is in the open chat.
-        const discord::Notice &n = context_.snapshot.notice;
-        if (n.seq != notice_seen_)
-        {
-            const bool here = route_ == Route::chat && chat_.channel() == n.channel_id;
-            if (!here && context_.snapshot.connection == discord::Connection::ready)
-            {
-                toast_ = n;
-                toast_time_ = 0.0f;
-                feedback.play(hui::audio::Cue::notify);
-            }
-            notice_seen_ = n.seq;
-        }
-        toast_time_ += dt;
+        update_banners(dt, feedback);
         fade_.target = 1.0f;
         fade_.update(dt, 16.0f);
         for (const discord::Request &request : requests)
@@ -386,8 +387,8 @@ class DiscordApp final : public app::Concept
         if (const discord::Call *ring = discord::ringing_call(context_.snapshot);
             ring && ring->channel_id != dismissed_ring_)
             draw_incoming(frame.scene, ink_, context_.snapshot, *ring);
-        if (toast_.seq != 0 && toast_time_ < kToastSeconds)
-            draw_toast(frame.scene);
+        for (int i = static_cast<int>(banners_.size()) - 1; i >= 0; --i)
+            draw_banner(frame.scene, banners_[i]);
     }
 
     std::span<const app::TourStep> tour() const override
@@ -419,27 +420,82 @@ class DiscordApp final : public app::Concept
     bool from_server_ = false; // the open chat came from a server's page
     float browser_cooldown_ = 0.0f;
     std::string waiting_dm_; // a friend whose new DM is being made, opened when it lands
-    static constexpr float kToastSeconds = 5.0f;
-    std::uint64_t notice_seen_ = 0; // notices only come from live messages, so any new one is news
-    discord::Notice toast_;
-    float toast_time_ = 0.0f;
-
-    // Top right, sliding in and out: who wrote, and the start of what.
-    void draw_toast(DrawList &list) const
+    // Banners at the top right, newest on top: DMs and mentions, and every server message
+    // when that is on (Settings › Notifications). A message from a channel already shown
+    // joins its banner (the count on the avatar) instead of stacking another.
+    static constexpr float kBannerSeconds = 5.0f;
+    static constexpr std::size_t kBannerMax = 4;
+    struct Banner
     {
-        const float in = std::min(1.0f, toast_time_ * 5.0f);
-        const float out = std::min(1.0f, (kToastSeconds - toast_time_) * 4.0f);
+        discord::Notice notice;
+        float time = 0.0f;
+        float slot = -1.0f; // where it is drawn, easing to its place in the stack
+        int count = 1;
+    };
+    std::vector<Banner> banners_;   // newest first
+    std::uint64_t notice_seen_ = 0; // notices only come from live messages, so any new one is news
+
+    void update_banners(float dt, app::Feedback &feedback)
+    {
+        for (const discord::Notice &n : context_.snapshot.notices)
+        {
+            if (n.seq <= notice_seen_)
+                continue;
+            notice_seen_ = n.seq;
+            const bool here = route_ == Route::chat && chat_.channel() == n.channel_id;
+            if (here || context_.snapshot.connection != discord::Connection::ready)
+                continue;
+            Banner b;
+            b.notice = n;
+            for (auto it = banners_.begin(); it != banners_.end(); ++it)
+                if (it->notice.channel_id == n.channel_id)
+                {
+                    b.slot = it->slot;
+                    b.count = it->count + 1;
+                    b.notice.for_me = n.for_me || it->notice.for_me;
+                    banners_.erase(it);
+                    break;
+                }
+            banners_.insert(banners_.begin(), b);
+            if (banners_.size() > kBannerMax)
+                banners_.pop_back();
+            // Server chatter chimes softly; a DM or a mention is the full chime.
+            feedback.play(hui::audio::Cue::notify, 1.0f, 0.0f, n.for_me ? 1.0f : 0.35f);
+        }
+        const float ease = context_.settings.reduced_motion ? 1.0f : std::min(1.0f, dt * 14.0f);
+        for (std::size_t i = 0; i < banners_.size(); ++i)
+        {
+            banners_[i].time += dt;
+            banners_[i].slot += (static_cast<float>(i) - banners_[i].slot) * ease;
+        }
+        std::erase_if(banners_, [](const Banner &b) { return b.time >= kBannerSeconds; });
+    }
+
+    // Who wrote and where on the first line, the start of what on the second.
+    void draw_banner(DrawList &list, const Banner &b) const
+    {
+        constexpr float kW = 660.0f, kH = 108.0f, kGap = 12.0f;
+        const discord::Notice &n = b.notice;
+        const float in = std::min(1.0f, b.time * 5.0f);
+        const float out = std::min(1.0f, (kBannerSeconds - b.time) * 4.0f);
         const float t = std::clamp(std::min(in, out), 0.0f, 1.0f);
-        const Rect r{1920.0f - style::kMargin - 620.0f, 24.0f - (1.0f - t) * 140.0f, 620.0f, 108.0f};
+        const Rect r{1920.0f - style::kMargin - kW, 24.0f + b.slot * (kH + kGap), kW, kH};
         list.push_opacity(t);
         list.shadow(r, 22.0f, 40.0f, Color::rgb(0, 0.5f));
         list.rounded_rect(r, 22.0f, style::kRaisedHigh);
-        list.rounded_rect({r.x, r.y + 18.0f, 4.0f, r.h - 36.0f}, 2.0f, style::kCoral);
-        avatar(list, ink_, toast_.author, r.x + 64.0f, r.cy(), 36.0f, false);
-        hui::ui::text(list, ink_.fonts.semibold, fit(ink_.fonts.semibold, toast_.title, 25.0f, r.w - 140.0f),
-                      r.x + 120.0f, r.y + 46.0f, 25.0f, style::kText);
-        hui::ui::text(list, ink_.fonts.regular, fit(ink_.fonts.regular, toast_.text, 23.0f, r.w - 140.0f),
-                      r.x + 120.0f, r.y + 82.0f, 23.0f, style::kDim);
+        list.rounded_rect({r.x, r.y + 18.0f, 4.0f, r.h - 36.0f}, 2.0f, n.for_me ? style::kCoral : style::kLine);
+        avatar(list, ink_, n.author, r.x + 64.0f, r.cy(), 36.0f, false);
+        if (b.count > 1)
+            count_badge(list, ink_, b.count, r.x + 104.0f, r.cy() + 26.0f, 30.0f);
+        const float text_x = r.x + 120.0f, text_w = r.w - 148.0f;
+        const std::string title = fit(ink_.fonts.semibold, n.title, 25.0f, text_w * 0.5f);
+        hui::ui::text(list, ink_.fonts.semibold, title, text_x, r.y + 46.0f, 25.0f, style::kText);
+        const float title_w = ink_.fonts.semibold.measure(title, 25.0f) + 20.0f;
+        const std::string place = n.place.empty() ? "Direct message" : n.place;
+        hui::ui::text(list, ink_.fonts.regular, fit(ink_.fonts.regular, place, 21.0f, text_w - title_w),
+                      r.x + r.w - 28.0f, r.y + 45.0f, 21.0f, style::kFaint, hui::gfx::Align::right);
+        hui::ui::text(list, ink_.fonts.regular, fit(ink_.fonts.regular, n.text, 23.0f, text_w), text_x, r.y + 82.0f,
+                      23.0f, style::kDim);
         list.pop_opacity();
     }
     // Settings, reached from the current screen (Circle returns there).

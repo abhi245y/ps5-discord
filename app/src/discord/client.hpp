@@ -99,6 +99,7 @@ class Client
     std::atomic<std::int64_t> last_chat_ms_{0}; // the events thread zeroes it to ask for a refresh
     std::int64_t last_mentions_ms_ = 0;
     std::int64_t last_voice_ms_ = 0; // a voice command zeroes it: the state comes back at once
+    std::uint64_t notice_seq_ = 0; // Notice::seq, under mutex_
     std::string browser_error_; // client thread only; retained across state polls
     bool prefetched_ = false; // recent conversations' history asked for once after sign-in
     std::atomic<bool> ready_{false}; // read by the image thread too
