@@ -68,6 +68,13 @@ class Chat
     Rect row_rect(const Row &row) const; // on screen, scroll applied
     std::pair<float, float> focus_range(const Row &row) const; // scroll values that keep the row in view
     int reaction_lines(const discord::Message &m, float width) const;
+    // A message's text wrapped to width, room left on each line for the mention pill when
+    // it opens with one; drawing and measuring use the same lines.
+    std::vector<std::string> text_lines(const discord::Snapshot &s, const discord::Message &m, float width) const;
+    float pill_extra(const discord::Snapshot &s) const; // the pill's width beyond the plain @name
+    bool edit_tag_wraps(const discord::Snapshot &s, const discord::Message &m, float width) const;
+    // A DM bubble's inside width: its widest line, reply quote, reactions row or card.
+    float bubble_fit(const discord::Snapshot &s, const discord::Message &m, float width) const;
     float reaction_width(const discord::Reaction &r) const;
     // One wrapped line of a message, server emoji as pictures; emoji counts them across lines.
     float draw_line(DrawList &list, const discord::Message &m, const std::string &line, float x, float baseline,

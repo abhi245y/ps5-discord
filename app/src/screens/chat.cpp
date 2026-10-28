@@ -277,8 +277,8 @@ float Chat::row_height(const discord::Snapshot &s, int index, bool grouped) cons
         h += kReplyLine;
     if (!m.content.empty())
     {
-        const std::size_t lines = std::max<std::size_t>(1, ink_.fonts.regular.font->wrap(m.content, kTextSize, width).size());
-        h += kLineH * static_cast<float>(lines);
+        const std::size_t lines = std::max<std::size_t>(1, text_lines(s, m, width).size());
+        h += kLineH * static_cast<float>(lines + (edit_tag_wraps(s, m, width) ? 1 : 0));
     }
     h += static_cast<float>(m.attachments.size()) * (kAttachH + 10.0f);
     if (!m.reactions.empty())
@@ -382,6 +382,57 @@ float Chat::reaction_width(const discord::Reaction &r) const
 {
     const float ew = r.emoji_id.empty() ? std::max(kReactEmoji, ink_.fonts.regular.measure(r.emoji, 24.0f)) : kReactEmoji;
     return ew + ink_.fonts.semibold.measure(std::to_string(r.count), 22.0f) + 46.0f;
+}
+
+float Chat::pill_extra(const discord::Snapshot &s) const
+{
+    const std::string token = "@" + s.me.name;
+    return std::max(0.0f, ink_.fonts.semibold.measure(token, 25.0f) + 34.0f - ink_.fonts.regular.measure(token + " ", kTextSize));
+}
+
+std::vector<std::string> Chat::text_lines(const discord::Snapshot &s, const discord::Message &m, float width) const
+{
+    const bool pill = m.content.rfind("@" + s.me.name, 0) == 0;
+    return ink_.fonts.regular.font->wrap(m.content, kTextSize, width - (pill ? pill_extra(s) : 0.0f));
+}
+
+// "(edited)" goes after the last line, or under it when the line is full.
+bool Chat::edit_tag_wraps(const discord::Snapshot &s, const discord::Message &m, float width) const
+{
+    if (!m.edited || m.content.empty())
+        return false;
+    const std::vector<std::string> lines = text_lines(s, m, width);
+    float last = lines.empty() ? 0.0f : ink_.fonts.regular.measure(lines.back(), kTextSize);
+    if (lines.size() == 1 && m.content.rfind("@" + s.me.name, 0) == 0)
+        last += pill_extra(s);
+    return last + 12.0f + ink_.fonts.regular.measure("(edited)", 20.0f) > width;
+}
+
+float Chat::bubble_fit(const discord::Snapshot &s, const discord::Message &m, float width) const
+{
+    float w = 0.0f;
+    const std::vector<std::string> lines = text_lines(s, m, width);
+    for (std::size_t i = 0; i < lines.size(); ++i)
+        w = std::max(w, ink_.fonts.regular.measure(lines[i], kTextSize) +
+                            (i == 0 && m.content.rfind("@" + s.me.name, 0) == 0 ? pill_extra(s) : 0.0f));
+    if (m.edited && !lines.empty() && !edit_tag_wraps(s, m, width))
+        w = std::max(w, ink_.fonts.regular.measure(lines.back(), kTextSize) + 12.0f +
+                            ink_.fonts.regular.measure("(edited)", 20.0f));
+    if (!m.reply_author.empty())
+        w = std::max(w, 16.0f + ink_.fonts.regular.measure(m.reply_author + ": " + m.reply_text, 22.0f));
+    if (!m.attachments.empty())
+        w = std::max(w, 560.0f);
+    float x = 0.0f; // the reactions wrap as drawn
+    for (const discord::Reaction &r : m.reactions)
+    {
+        const float rw = reaction_width(r);
+        if (x > 0.0f && x + rw > width)
+            x = 0.0f;
+        x += rw;
+        w = std::max(w, x);
+        x += 10.0f;
+    }
+    return std::min(w, width);
 }
 
 Rect Chat::row_rect(const Row &row) const
@@ -952,13 +1003,8 @@ void Chat::draw_message(const discord::Snapshot &s, DrawList &list, const Row &r
                              r.h - (row.grouped ? kPadGrouped : kPadTop) - kPadBottom - (row.grouped ? 0.0f : kNameLine)}
                       : Rect{kMargin + kAvatarCol - 20.0f, y + (row.grouped ? 0.0f : kNameLine), bw,
                              r.h - (row.grouped ? kPadGrouped : kPadTop) - kPadBottom - (row.grouped ? 0.0f : kNameLine)};
-        // Size the bubble to its longest line.
-        float longest = 0.0f;
-        for (const std::string &line : ink_.fonts.regular.font->wrap(m.content, kTextSize, width))
-            longest = std::max(longest, ink_.fonts.regular.measure(line, kTextSize));
-        if (!m.attachments.empty())
-            longest = std::max(longest, 560.0f);
-        const float fitted = std::min(bw, longest + 48.0f);
+        // Size the bubble to all it holds: lines, reply quote, reactions, a card.
+        const float fitted = std::min(bw, bubble_fit(s, m, width) + 48.0f);
         if (mine)
             bubble.x += bw - fitted;
         bubble.w = fitted;
@@ -1022,7 +1068,8 @@ void Chat::draw_message(const discord::Snapshot &s, DrawList &list, const Row &r
         float line_y = y + 27.0f;
         float last_end = text_x, last_y = line_y;
         std::size_t emoji = 0; // the next of m.emojis
-        for (const std::string &line : ink_.fonts.regular.font->wrap(m.content, kTextSize, width))
+        const std::vector<std::string> lines = text_lines(s, m, width);
+        for (const std::string &line : lines)
         {
             float lx = text_x;
             std::string rest = line;
@@ -1041,9 +1088,11 @@ void Chat::draw_message(const discord::Snapshot &s, DrawList &list, const Row &r
             last_y = line_y;
             line_y += kLineH;
         }
+        const bool tag_below = edit_tag_wraps(s, m, width);
         if (m.edited)
-            ui::text(list, ink_.fonts.regular, "(edited)", last_end + 12.0f, last_y, 20.0f, kFaint);
-        y += kLineH * static_cast<float>(std::max<std::size_t>(1, ink_.fonts.regular.font->wrap(m.content, kTextSize, width).size()));
+            ui::text(list, ink_.fonts.regular, "(edited)", tag_below ? text_x : last_end + 12.0f,
+                     tag_below ? last_y + kLineH : last_y, 20.0f, kFaint);
+        y += kLineH * static_cast<float>(std::max<std::size_t>(1, lines.size()) + (tag_below ? 1 : 0));
     }
 
     for (const discord::Attachment &a : m.attachments)
