@@ -423,8 +423,22 @@ Message message_from(const json &m, const std::string &me_id)
             if (att.url.empty())
                 att.url = text(a, "url");
             att.image = text(a, "content_type").rfind("image/", 0) == 0;
-            if (att.image) // a small preview from the media proxy, not the full file
-                att.url += std::string(att.url.find('?') == std::string::npos ? "?" : "&") + "width=440&height=248";
+            if (att.image)
+            {
+                // A small preview from the media proxy, and a screen-sized copy at the
+                // picture's own aspect (at most 1760x860) for the full-screen view.
+                const std::string join = att.url.find('?') == std::string::npos ? "?" : "&";
+                const double w = a.value("width", 0.0), h = a.value("height", 0.0);
+                if (w > 0 && h > 0)
+                {
+                    const double scale = std::min({1.0, 1760.0 / w, 860.0 / h});
+                    att.full_url = att.url + join + "width=" + std::to_string(static_cast<int>(w * scale)) +
+                                   "&height=" + std::to_string(static_cast<int>(h * scale));
+                }
+                else
+                    att.full_url = att.url + join + "width=1760";
+                att.url += join + "width=440&height=248";
+            }
             const double size = a.value("size", 0.0);
             char sz[32];
             std::snprintf(sz, sizeof sz, size >= 1048576 ? "%.1f MB" : "%.0f KB",

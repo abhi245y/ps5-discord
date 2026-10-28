@@ -23,6 +23,7 @@ All notable changes to this project are documented here. The format follows
   hidden during Go Live unless allowed.
 - A Discord sign-in per console user: the core runs the account of the user on screen and
   switches when another user comes on screen.
+- Chat: View image in a message's menu shows its pictures full screen.
 
 ### Changed
 - The core keeps running when the app is closed with the PS button (for notifications and
@@ -32,6 +33,8 @@ All notable changes to this project are documented here. The format follows
   GPL-3.0-or-later. The status page links to the source.
 
 ### Fixed
+- Chat: a DM bubble's reply quote, reactions and "(edited)" ran past the bubble and off the
+  screen.
 - Voice: our voice reached others with seconds of delay after pauses (the RTP clock stood
   still while we were silent).
 

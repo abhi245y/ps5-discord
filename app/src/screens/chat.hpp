@@ -60,6 +60,7 @@ class Chat
         keys,    // the app's own keyboard is up
         channels, // the server's channel list is open (Options)
         profile,  // the DM person's card is open (Options in a DM)
+        image,    // the focused message's pictures, full screen
     };
 
     const std::vector<discord::Message> &messages(const discord::Snapshot &snapshot) const;
@@ -68,6 +69,13 @@ class Chat
     Rect row_rect(const Row &row) const; // on screen, scroll applied
     std::pair<float, float> focus_range(const Row &row) const; // scroll values that keep the row in view
     int reaction_lines(const discord::Message &m, float width) const;
+    // A message's text wrapped to width, room left on each line for the mention pill when
+    // it opens with one; drawing and measuring use the same lines.
+    std::vector<std::string> text_lines(const discord::Snapshot &s, const discord::Message &m, float width) const;
+    float pill_extra(const discord::Snapshot &s) const; // the pill's width beyond the plain @name
+    bool edit_tag_wraps(const discord::Snapshot &s, const discord::Message &m, float width) const;
+    // A DM bubble's inside width: its widest line, reply quote, reactions row or card.
+    float bubble_fit(const discord::Snapshot &s, const discord::Message &m, float width) const;
     float reaction_width(const discord::Reaction &r) const;
     // One wrapped line of a message, server emoji as pictures; emoji counts them across lines.
     float draw_line(DrawList &list, const discord::Message &m, const std::string &line, float x, float baseline,
@@ -82,6 +90,7 @@ class Chat
                       bool focused) const;
     void draw_composer(const discord::Snapshot &snapshot, DrawList &list) const;
     void draw_actions(const discord::Snapshot &snapshot, DrawList &list, const Rect &anchor) const;
+    void draw_image(const discord::Snapshot &snapshot, DrawList &list) const;
 
     const Ink &ink_;
     Keyboard keys_; // the app's own keyboard, when the system one is not there
@@ -99,6 +108,7 @@ class Chat
     float size_note_ = 0.0f;      // seconds the text-size note stays up
     std::string older_asked_for_; // the oldest id an older page was requested above
     int action_ = 0;  // focused entry in the action menu (actions, then reactions)
+    int image_at_ = 0; // the picture shown full screen, among the message's
     int quick_ = 0;   // focused quick reply in compose mode
     std::string reply_to_; // message id the composer answers
     hui::tween::Spring scroll_; // pixels the list is pushed down (history above revealed)

@@ -204,7 +204,20 @@ Snapshot sample_snapshot()
         msg("d2", "dm-theo", "theo", "We can try the new route on the left side. Looks super chill.", kNow - 50 * kMinute),
         msg("d3", "dm-theo", "me", "Looks amazing! Count me in.", kNow - 49 * kMinute),
         msg("d4", "dm-theo", "theo", "bring snacks", kNow - 42 * kMinute),
+        // The cases that once spilled out of a bubble: a short reply to a long message, a
+        // short message with many reactions, a word longer than the bubble, an edit.
+        msg("d5", "dm-theo", "me", "ok!", kNow - 41 * kMinute),
+        msg("d6", "dm-theo", "theo", "https://clips.example.com/watch/ThisIsAVeryLongClipIdentifierWithoutAnySpaces_8f3a91c2d7e4",
+            kNow - 40 * kMinute),
+        msg("d7", "dm-theo", "me", "same, see you at nine", kNow - 39 * kMinute),
     });
+    {
+        std::vector<Message> &dm = *s.messages["dm-theo"];
+        dm[5].reply_author = "Theo";
+        dm[5].reply_text = "We can try the new route on the left side. Looks super chill.";
+        dm[5].reactions = {{"🔥", "", 3, true}, {"😂", "", 2}, {"👍", "", 5}, {"🎮", "", 1}, {"🍕", "", 2}};
+        dm[7].edited = true;
+    }
     return s;
 }
 

@@ -116,7 +116,8 @@ struct Mention
 struct Attachment
 {
     std::string name; // "screenshot.png"
-    std::string url;  // through the core's image proxy; empty in samples
+    std::string url;  // a small preview through the media proxy; empty in samples
+    std::string full_url; // a screen-sized copy, for viewing it full screen
     std::string size_text; // "1.8 MB"
     bool image = false;
     ArtIndex art = 0; // stand-in thumbnail while the image loads (and in samples)
