@@ -579,10 +579,11 @@ static void api_dlsym(int c, const char *query)
 // (or the PS button closes it), and then it is silent. Only the app sends the native
 // header. The core stays either way, for alerts and calls; the app's Quit stops it.
 static volatile time_t app_seen;
+static volatile int app_front = 1; // its last X-App-Front: 0 on the home screen or under the PS menu
 
 int web_app_on_screen(void)
 {
-    return app_seen && time(NULL) - app_seen <= 8;
+    return app_front && app_seen && time(NULL) - app_seen <= 8;
 }
 
 // The line is among the headers: body text cannot impersonate one.
@@ -654,8 +655,10 @@ static void handle(int c, int local)
         reply(c, "403 Forbidden", "text/plain", "native app only", 15);
         return;
     }
-    if (local && header_line(req, body, "\r\nX-Discord-Native: 1\r\n"))
+    if (local && header_line(req, body, "\r\nX-Discord-Native: 1\r\n")) {
         app_seen = time(NULL);
+        app_front = !header_line(req, body, "\r\nX-App-Front: 0\r\n");
+    }
     if (!local && strncmp(path, "/api/", 5) == 0 && strcmp(path, "/api/state") != 0 &&
         strcmp(path, "/api/quit") != 0) {
         reply(c, "403 Forbidden", "text/plain", "local only", 10);

@@ -65,6 +65,10 @@ class Client
     std::vector<KeyPress> take_keys();
     // Development: raises a notice as if a DM had arrived (the toast's path, from the PC).
     void test_notice(const std::string &text);
+    // The app is the one on screen (not minimised to the home screen, not under the PS
+    // menu). The core shows the PS5's own alert while it is not.
+    void set_front(bool front);
+    bool front() const;
     bool quit_wanted() const { return quit_; }
 
   private:

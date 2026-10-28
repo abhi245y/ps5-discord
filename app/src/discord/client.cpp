@@ -145,6 +145,8 @@ void start_core()
                   elf.size());
 }
 
+std::atomic<bool> g_front{true}; // Client::set_front; every request tells the core
+
 Reply http(int port, const char *method, const std::string &path, const std::string &body = {})
 {
     Reply reply;
@@ -166,8 +168,8 @@ Reply http(int port, const char *method, const std::string &path, const std::str
     char head[512];
     const int n = std::snprintf(head, sizeof head,
                                 "%s %s HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
-                                "X-Discord-Native: 1\r\nContent-Length: %zu\r\n\r\n",
-                                method, path.c_str(), body.size());
+                                "X-Discord-Native: 1\r\nX-App-Front: %d\r\nContent-Length: %zu\r\n\r\n",
+                                method, path.c_str(), g_front ? 1 : 0, body.size());
     std::string request(head, static_cast<std::size_t>(n));
     request += body;
     for (std::size_t sent = 0; sent < request.size();)
@@ -847,6 +849,16 @@ void Client::publish()
     ++version_;
 }
 
+void Client::set_front(bool front)
+{
+    g_front = front;
+}
+
+bool Client::front() const
+{
+    return g_front;
+}
+
 void Client::test_notice(const std::string &text)
 {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -1188,12 +1200,12 @@ bool Client::poll_events()
         if (type == "MESSAGE_CREATE")
         {
             // The core says what a message is worth (Discord's mutes and levels, then the
-            // settings): a notice, open channel or not. One older than a few seconds came in
-            // a backlog (the app was behind a game, where the PS5 alert already showed it).
+            // settings): a notice, open channel or not. Not while the app is out of sight
+            // (the PS5's alert shows it), nor one older than a few seconds (a backlog).
             const Message m = message_from(ev, snapshot_.me.id);
             const std::string guild = text(ev, "guild_id");
             const int kind = static_cast<int>(ev.value("notify", 0.0));
-            if (kind > 0 && (m.time_ms == 0 || now_ms() - m.time_ms < 15000))
+            if (kind > 0 && g_front && (m.time_ms == 0 || now_ms() - m.time_ms < 15000)) // else the PS5 alert
             {
                 Notice n;
                 n.seq = ++notice_seq_;
