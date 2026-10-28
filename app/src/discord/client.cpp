@@ -863,7 +863,7 @@ void Client::submit(const Request &incoming)
         m.nonce = request.nonce;
         m.channel_id = request.channel_id;
         m.author_id = snapshot_.me.id;
-        m.content = request.content;
+        m.content = readable(request.content, json::object(), &m.emojis); // drawn as the echo will be
         if (!request.sticker_id.empty())
             m.stickers.push_back({request.sticker_id, request.sticker_name, request.sticker_format});
         m.time_ms = now_ms();

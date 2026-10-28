@@ -309,7 +309,7 @@ void Keyboard::draw(DrawList &list) const
     list.rounded_rect(field, 18.0f, kRaised);
     // Emoji as their pictures (a server's <:name:id> too).
     std::vector<discord::Emoji> emojis;
-    const std::string shown = mark_emoji(text_, emojis);
+    const std::string shown = discord::mark_emoji(text_, emojis);
     std::vector<std::string> lines = ink_.fonts.regular.font->wrap(shown.empty() ? std::string(" ") : shown, 27.0f,
                                                                    field.w - 60.0f);
     std::size_t next = 0;

@@ -92,9 +92,6 @@ hui::ui::GlyphStyle hint_glyphs();
 // atlas or else Twemoji over the network; a quiet square while it loads.
 void emoji_picture(DrawList &list, const Ink &ink, const std::string &text, const std::string &id, const Rect &r);
 
-// Text as written (a draft) as it is drawn: each emoji, Unicode or a server's <:name:id>,
-// becomes discord::kEmojiMark, listed in order in emojis.
-std::string mark_emoji(const std::string &raw, std::vector<discord::Emoji> &emojis);
 // A line holding kEmojiMark slots, each drawn as the next of emojis (from next on);
 // returns the width.
 float draw_marked(DrawList &list, const Ink &ink, const hui::ui::FontRef &font, const std::string &line, float x,

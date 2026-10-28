@@ -59,6 +59,28 @@ int g_text_level = 1;
 constexpr const char *kTextSizePath = "/download0/hui/text_size";
 const char *const kTextLevelNames[] = {"Small", "Medium", "Large"};
 
+// Emoji alone (up to 30, as Discord does) are drawn large: its text size and line height.
+bool jumbo(const discord::Message &m)
+{
+    int marks = 0;
+    for (std::size_t i = 0; i < m.content.size();)
+        if (m.content.compare(i, 3, discord::kEmojiMark) == 0)
+            ++marks, i += 3;
+        else if (m.content[i] == ' ' || m.content[i] == '\n')
+            ++i;
+        else
+            return false;
+    return marks > 0 && marks <= 30;
+}
+float text_size(const discord::Message &m)
+{
+    return jumbo(m) ? kTextSize * 1.8f : kTextSize;
+}
+float line_height(const discord::Message &m)
+{
+    return jumbo(m) ? kLineH * 1.75f : kLineH;
+}
+
 void apply_text_level(int level)
 {
     static const float sizes[][4] = {{24.0f, 33.0f, 33.0f, 28.0f}, {27.0f, 37.0f, 36.0f, 30.0f}, {31.0f, 43.0f, 42.0f, 34.0f}};
@@ -332,7 +354,7 @@ float Chat::row_height(const discord::Snapshot &s, int index, bool grouped) cons
     if (!m.content.empty())
     {
         const std::size_t lines = std::max<std::size_t>(1, text_lines(s, m, width).size());
-        h += kLineH * static_cast<float>(lines + (edit_tag_wraps(s, m, width) ? 1 : 0));
+        h += line_height(m) * static_cast<float>(lines) + (edit_tag_wraps(s, m, width) ? kLineH : 0.0f);
     }
     h += static_cast<float>(m.attachments.size()) * (kAttachH + 10.0f);
     h += static_cast<float>(m.stickers.size()) * (kStickerSize + 10.0f);
@@ -368,8 +390,8 @@ std::vector<Chat::Row> Chat::layout(const discord::Snapshot &s) const
 float Chat::draw_line(DrawList &list, const discord::Message &m, const std::string &line, float x, float baseline,
                       std::size_t &emoji) const
 {
-    return draw_marked(list, ink_, ink_.fonts.regular, line, x, baseline, kTextSize, Color::rgb(0xdfe2e8), m.emojis,
-                       emoji);
+    return draw_marked(list, ink_, ink_.fonts.regular, line, x, baseline, text_size(m), Color::rgb(0xdfe2e8),
+                       m.emojis, emoji);
 }
 
 std::pair<float, float> Chat::focus_range(const Row &row) const
@@ -414,7 +436,7 @@ float Chat::pill_extra(const discord::Snapshot &s) const
 std::vector<std::string> Chat::text_lines(const discord::Snapshot &s, const discord::Message &m, float width) const
 {
     const bool pill = m.content.rfind("@" + s.me.name, 0) == 0;
-    return ink_.fonts.regular.font->wrap(m.content, kTextSize, width - (pill ? pill_extra(s) : 0.0f));
+    return ink_.fonts.regular.font->wrap(m.content, text_size(m), width - (pill ? pill_extra(s) : 0.0f));
 }
 
 // "(edited)" goes after the last line, or under it when the line is full.
@@ -423,7 +445,7 @@ bool Chat::edit_tag_wraps(const discord::Snapshot &s, const discord::Message &m,
     if (!m.edited || m.content.empty())
         return false;
     const std::vector<std::string> lines = text_lines(s, m, width);
-    float last = lines.empty() ? 0.0f : ink_.fonts.regular.measure(lines.back(), kTextSize);
+    float last = lines.empty() ? 0.0f : ink_.fonts.regular.measure(lines.back(), text_size(m));
     if (lines.size() == 1 && m.content.rfind("@" + s.me.name, 0) == 0)
         last += pill_extra(s);
     return last + 12.0f + ink_.fonts.regular.measure("(edited)", 20.0f) > width;
@@ -434,10 +456,10 @@ float Chat::bubble_fit(const discord::Snapshot &s, const discord::Message &m, fl
     float w = 0.0f;
     const std::vector<std::string> lines = text_lines(s, m, width);
     for (std::size_t i = 0; i < lines.size(); ++i)
-        w = std::max(w, ink_.fonts.regular.measure(lines[i], kTextSize) +
+        w = std::max(w, ink_.fonts.regular.measure(lines[i], text_size(m)) +
                             (i == 0 && m.content.rfind("@" + s.me.name, 0) == 0 ? pill_extra(s) : 0.0f));
     if (m.edited && !lines.empty() && !edit_tag_wraps(s, m, width))
-        w = std::max(w, ink_.fonts.regular.measure(lines.back(), kTextSize) + 12.0f +
+        w = std::max(w, ink_.fonts.regular.measure(lines.back(), text_size(m)) + 12.0f +
                             ink_.fonts.regular.measure("(edited)", 20.0f));
     if (!m.reply_author.empty())
         w = std::max(w, 16.0f + ink_.fonts.regular.measure(m.reply_author + ": " + m.reply_text, 22.0f));
@@ -1186,7 +1208,8 @@ void Chat::draw_message(const discord::Snapshot &s, DrawList &list, const Row &r
 
     if (!m.content.empty())
     {
-        float line_y = y + 27.0f;
+        const float line_h = line_height(m);
+        float line_y = y + line_h * 0.73f; // the baseline: 27 of a 37 px line
         float last_end = text_x, last_y = line_y;
         std::size_t emoji = 0; // the next of m.emojis
         const std::vector<std::string> lines = text_lines(s, m, width);
@@ -1207,13 +1230,13 @@ void Chat::draw_message(const discord::Snapshot &s, DrawList &list, const Row &r
             const float w = draw_line(list, m, rest, lx, line_y, emoji);
             last_end = lx + w;
             last_y = line_y;
-            line_y += kLineH;
+            line_y += line_h;
         }
         const bool tag_below = edit_tag_wraps(s, m, width);
         if (m.edited)
             ui::text(list, ink_.fonts.regular, "(edited)", tag_below ? text_x : last_end + 12.0f,
                      tag_below ? last_y + kLineH : last_y, 20.0f, kFaint);
-        y += kLineH * static_cast<float>(std::max<std::size_t>(1, lines.size()) + (tag_below ? 1 : 0));
+        y += line_h * static_cast<float>(std::max<std::size_t>(1, lines.size())) + (tag_below ? kLineH : 0.0f);
     }
 
     for (const discord::Attachment &a : m.attachments)
@@ -1322,7 +1345,7 @@ void Chat::draw_composer(const discord::Snapshot &s, DrawList &list) const
         std::string raw = keys_.text();
         std::replace(raw.begin(), raw.end(), '\n', ' ');
         std::vector<discord::Emoji> emojis;
-        const std::string shown = fit(ink_.fonts.regular, mark_emoji(raw, emojis), 28.0f, bar.w - 112.0f - 330.0f);
+        const std::string shown = fit(ink_.fonts.regular, discord::mark_emoji(raw, emojis), 28.0f, bar.w - 112.0f - 330.0f);
         std::size_t next = 0;
         draw_marked(list, ink_, ink_.fonts.regular, shown, bar.x + 112.0f, bar.cy() + 10.0f, 28.0f, kText, emojis,
                     next);

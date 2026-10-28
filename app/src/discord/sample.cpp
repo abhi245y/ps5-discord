@@ -384,7 +384,7 @@ void apply_sample(Snapshot &s, const Request &r)
     m.id = "sent-" + std::to_string(list.size());
     m.channel_id = r.channel_id;
     m.author_id = s.me.id;
-    m.content = r.content;
+    m.content = mark_emoji(r.content, m.emojis);
     if (!r.sticker_id.empty())
         m.stickers.push_back({r.sticker_id, r.sticker_name, r.sticker_format});
     m.time_ms = s.now_ms;
