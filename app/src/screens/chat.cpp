@@ -528,6 +528,10 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
         {
             mode_ = Mode::browse;
             feedback.play(hui::audio::Cue::back);
+            if (focus_ >= 0 && ink_.art.forget) // the screen-sized copies go; previews stay
+                for (const discord::Attachment &a : ms[static_cast<std::size_t>(focus_)].attachments)
+                    if (!a.full_url.empty())
+                        ink_.art.forget(a.full_url);
         }
         else if (input.nav == Direction::left || input.nav == Direction::right)
         {

@@ -74,6 +74,9 @@ struct ArtSet
         int w = 0, h = 0;
     };
     std::function<Remote(const std::string &)> remote;
+    // Frees a big picture once it is out of sight (the full-screen viewer's); asking
+    // for it again downloads it again. Unset on the host.
+    std::function<void(const std::string &)> forget;
     // The system keyboard (console only; unset on the host). open() shows it
     // with a title; poll() answers 0 while it is up (or none), 1 with the
     // typed text in out, 2 when it was cancelled.
