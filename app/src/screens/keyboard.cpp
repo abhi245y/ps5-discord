@@ -44,7 +44,7 @@ struct Wide
     float units;
 };
 const Wide kBottom[] = {{"Shift", 1.5f}, {"@", 1.0f}, {"!", 1.0f}, {"Emoji", 1.5f},
-                        {"Space", 2.0f}, {"Erase", 1.5f}, {"Send", 1.5f}};
+                        {"Space", 2.0f}, {"Erase", 1.5f}, {"Done", 1.5f}};
 constexpr int kBottomCount = 7;
 constexpr int kEmojiKey = 3, kEraseKey = 5;
 constexpr int kRowCount = kKeyRows + 1;
@@ -171,14 +171,14 @@ void Keyboard::press(int row, int col, hui::ui::Feedback &feedback)
         feedback.play(hui::audio::Cue::erase);
         break;
     default:
-        break; // Send is handled by the caller (it ends the keyboard)
+        break; // Done is handled by the caller (it ends the keyboard)
     }
 }
 
 Keyboard::Result Keyboard::update(const hui::InputFrame &input, float dt, hui::ui::Feedback &feedback)
 {
     blink_ += dt;
-    // A hardware keyboard: its text goes straight in; Enter sends, Shift+Enter
+    // A hardware keyboard: its text goes straight in; Enter is Done, Shift+Enter
     // breaks the line, Escape closes. The on-screen keys sit still meanwhile.
     if (!input.typed.empty())
     {
@@ -307,15 +307,24 @@ void Keyboard::draw(DrawList &list) const
     ui::text(list, ink_.fonts.semibold, title_, kLeft, kPanelY + 52.0f, 26.0f, kDim);
     const Rect field{kLeft, kPanelY + 72.0f, kRowW, 84.0f};
     list.rounded_rect(field, 18.0f, kRaised);
-    std::vector<std::string> lines = ink_.fonts.regular.font->wrap(text_.empty() ? std::string(" ") : text_, 27.0f,
+    // Emoji as their pictures (a server's <:name:id> too).
+    std::vector<discord::Emoji> emojis;
+    const std::string shown = mark_emoji(text_, emojis);
+    std::vector<std::string> lines = ink_.fonts.regular.font->wrap(shown.empty() ? std::string(" ") : shown, 27.0f,
                                                                    field.w - 60.0f);
+    std::size_t next = 0;
+    for (std::size_t i = 0; i + 2 < lines.size(); ++i) // the lines scrolled off still use up their emoji
+        for (std::size_t at = lines[i].find(discord::kEmojiMark); at != std::string::npos;
+             at = lines[i].find(discord::kEmojiMark, at + 3))
+            ++next;
     if (lines.size() > 2)
         lines.erase(lines.begin(), lines.end() - 2);
     float ly = field.y + (lines.size() > 1 ? 34.0f : 52.0f);
     float caret_x = field.x + 24.0f;
     for (const std::string &line : lines)
     {
-        caret_x = field.x + 24.0f + ui::text(list, ink_.fonts.regular, line, field.x + 24.0f, ly, 27.0f, kText);
+        caret_x = field.x + 24.0f +
+                  draw_marked(list, ink_, ink_.fonts.regular, line, field.x + 24.0f, ly, 27.0f, kText, emojis, next);
         ly += 34.0f;
     }
     if (text_.empty())
@@ -344,7 +353,7 @@ void Keyboard::draw(DrawList &list) const
                               {ui::Button::triangle, "Space"},
                               {ui::Button::l1, "Shift"},
                               {ui::Button::r1, "Emoji"},
-                              {ui::Button::r2, "Send"},
+                              {ui::Button::r2, "Done"},
                               {ui::Button::circle, "Close"}};
     ui::HintLayout layout;
     layout.size = 30.0f;

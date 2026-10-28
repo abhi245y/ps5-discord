@@ -443,6 +443,63 @@ void emoji_picture(DrawList &list, const Ink &ink, const std::string &text, cons
                Color::rgb(0xffffff), 4.0f);
 }
 
+std::string mark_emoji(const std::string &raw, std::vector<discord::Emoji> &emojis)
+{
+    std::string out;
+    for (std::size_t i = 0; i < raw.size();)
+    {
+        if (const std::size_t n = discord::emoji_length(raw, i))
+        {
+            emojis.push_back({std::string(), raw.substr(i, n)});
+            out += discord::kEmojiMark;
+            i += n;
+            continue;
+        }
+        // <:name:id> or <a:name:id>
+        const std::size_t close = raw[i] == '<' ? raw.find('>', i) : std::string::npos;
+        const std::string tag = close != std::string::npos && close - i < 96 ? raw.substr(i + 1, close - i - 1) : "";
+        const std::size_t a = tag.rfind(":", 0) == 0 ? 0 : tag.rfind("a:", 0) == 0 ? 1 : std::string::npos;
+        const std::size_t b = a != std::string::npos ? tag.find(':', a + 1) : std::string::npos;
+        if (b == std::string::npos || b + 1 >= tag.size())
+        {
+            out += raw[i++];
+            continue;
+        }
+        emojis.push_back({tag.substr(b + 1), tag.substr(a + 1, b - a - 1)});
+        out += discord::kEmojiMark;
+        i = close + 1;
+    }
+    return out;
+}
+
+float draw_marked(DrawList &list, const Ink &ink, const hui::ui::FontRef &font, const std::string &line, float x,
+                  float baseline, float size, Color color, const std::vector<discord::Emoji> &emojis,
+                  std::size_t &next)
+{
+    // Text runs between the marks; each emoji is its picture in the slot the mark takes.
+    namespace ui = hui::ui;
+    const float slot = font.measure(discord::kEmojiMark, size);
+    const float pic = slot * 0.96f; // in its slot, so emoji side by side do not touch
+    float cx = x;
+    std::size_t from = 0;
+    while (true)
+    {
+        const std::size_t at = line.find(discord::kEmojiMark, from);
+        const std::string run = line.substr(from, at == std::string::npos ? std::string::npos : at - from);
+        if (!run.empty())
+            cx += ui::text(list, font, run, cx, baseline, size, color);
+        if (at == std::string::npos)
+            break;
+        const Rect box{cx + (slot - pic) * 0.5f, baseline - size * 0.82f - (pic - size) * 0.5f, pic, pic};
+        if (next < emojis.size())
+            emoji_picture(list, ink, emojis[next].name, emojis[next].id, box);
+        ++next;
+        cx += slot;
+        from = at + 3;
+    }
+    return cx - x;
+}
+
 void sticker_picture(DrawList &list, const Ink &ink, const discord::Sticker &sticker, const Rect &r)
 {
     namespace ui = hui::ui;

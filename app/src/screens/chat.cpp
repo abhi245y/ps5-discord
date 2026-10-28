@@ -9,8 +9,8 @@
 //     mentions of you are tinted with your @name as a coral pill, images are
 //     cards, your own DM messages sit on the right;
 //   - focus starts on the composer and climbs the history; Cross on a message
-//     opens its actions, Triangle (or Cross on the composer) types, and the
-//     touchpad opens the emoji and stickers, sent as soon as one is picked.
+//     opens its actions, Triangle (or Cross on the composer) types, L3 adds
+//     emoji (or sends a sticker); what is written waits in the bar until R2 sends it.
 
 #include "screens/chat.hpp"
 
@@ -270,11 +270,11 @@ bool Chat::start_typing(const discord::Snapshot &s, hui::ui::Feedback &feedback)
     return true;
 }
 
-// The emoji and stickers: into the keyboard's text, or sent at once. An edit takes no sticker.
+// Emoji into the text (the keyboard's, or the bar's), a sticker sent at once. An edit
+// takes no sticker.
 void Chat::open_picker(const discord::Snapshot &s, PickFor pick_for, std::vector<discord::Request> &requests)
 {
-    const bool keys = pick_for == PickFor::keys;
-    picker_.open(s, guild_id_, keys ? "Add to message" : "Emoji & stickers", !keys || editing_id_.empty());
+    picker_.open(s, guild_id_, "Add to message", editing_id_.empty(), true);
     if (s.sticker_packs.empty())
     {
         discord::Request r;
@@ -368,29 +368,8 @@ std::vector<Chat::Row> Chat::layout(const discord::Snapshot &s) const
 float Chat::draw_line(DrawList &list, const discord::Message &m, const std::string &line, float x, float baseline,
                       std::size_t &emoji) const
 {
-    // Text runs between server emoji; each emoji is its picture in the slot the
-    // mark took when the line was wrapped.
-    const Color ink = Color::rgb(0xdfe2e8);
-    const float slot = ink_.fonts.regular.measure(discord::kEmojiMark, kTextSize);
-    const float size = slot * 0.96f; // in its slot, so emoji side by side do not touch
-    float cx = x;
-    std::size_t from = 0;
-    while (true)
-    {
-        const std::size_t at = line.find(discord::kEmojiMark, from);
-        const std::string run = line.substr(from, at == std::string::npos ? std::string::npos : at - from);
-        if (!run.empty())
-            cx += ui::text(list, ink_.fonts.regular, run, cx, baseline, kTextSize, ink);
-        if (at == std::string::npos)
-            break;
-        const Rect box{cx + (slot - size) * 0.5f, baseline - kTextSize * 0.82f - (size - kTextSize) * 0.5f, size, size};
-        if (emoji < m.emojis.size())
-            emoji_picture(list, ink_, m.emojis[emoji].name, m.emojis[emoji].id, box);
-        ++emoji;
-        cx += slot;
-        from = at + 3;
-    }
-    return cx - x;
+    return draw_marked(list, ink_, ink_.fonts.regular, line, x, baseline, kTextSize, Color::rgb(0xdfe2e8), m.emojis,
+                       emoji);
 }
 
 std::pair<float, float> Chat::focus_range(const Row &row) const
@@ -516,8 +495,8 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
     if (mode_ == Mode::emoji)
     {
         const EmojiPicker::Result result = picker_.update(s, input, dt, feedback);
-        if (result != EmojiPicker::Result::none)
-            picker_.close();
+        if (result != EmojiPicker::Result::none && !(result == EmojiPicker::Result::picked && pick_for_ != PickFor::react))
+            picker_.close(); // emoji for the text: it stays open for more
         switch (result)
         {
         case EmojiPicker::Result::sticker: { // sent at once, on its own, as in Discord; the draft waits
@@ -535,7 +514,9 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
             break;
         }
         case EmojiPicker::Result::picked:
-            if (pick_for_ == PickFor::react && focus_ >= 0 && focus_ < count)
+            if (pick_for_ != PickFor::react)
+                keys_.insert(picker_.markup()); // into the text; the picker stays for more
+            else if (focus_ >= 0 && focus_ < count)
             {
                 discord::Request r;
                 r.kind = discord::Request::Kind::react;
@@ -545,28 +526,13 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
                 requests.push_back(r);
                 mode_ = Mode::browse;
             }
-            else if (pick_for_ == PickFor::send) // sent at once
-            {
-                discord::Request r;
-                r.kind = discord::Request::Kind::send;
-                r.guild_id = guild_id_;
-                r.channel_id = channel_id_;
-                r.content = picker_.markup();
-                r.reply_to = reply_to_;
-                requests.push_back(r);
-                reply_to_.clear();
-                mode_ = Mode::browse;
-                focus_ = -1;
-                scroll_.target = 0.0f;
-            }
             else
-            {
-                keys_.insert(picker_.markup());
-                mode_ = Mode::keys;
-            }
+                mode_ = Mode::browse;
             break;
         case EmojiPicker::Result::cancel:
-            mode_ = pick_for_ == PickFor::react ? Mode::actions : pick_for_ == PickFor::send ? Mode::browse : Mode::keys;
+            mode_ = pick_for_ == PickFor::react ? Mode::actions : pick_for_ == PickFor::draft ? Mode::browse : Mode::keys;
+            if (pick_for_ == PickFor::draft && !keys_.text().empty())
+                focus_ = -1; // to the message bar, where R2 sends
             break;
         case EmojiPicker::Result::none:
             break;
@@ -699,7 +665,7 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
         }
         else if (chosen(Act::react)) // every emoji, as Discord's picker
         {
-            picker_.open(s, guild_id_, "React", false);
+            picker_.open(s, guild_id_, "React", false, false);
             pick_for_ = PickFor::react;
             mode_ = Mode::emoji;
             feedback.play(hui::audio::Cue::modal_open);
@@ -803,19 +769,11 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
                 feedback.play(hui::audio::Cue::select);
                 break;
             }
-            discord::Request r;
-            r.kind = discord::Request::Kind::send;
-            r.guild_id = guild_id_;
-            r.channel_id = channel_id_;
-            r.content = typed;
-            r.reply_to = reply_to_;
-            requests.push_back(r);
-            keys_.clear();
-            reply_to_.clear();
+            // Done: the text waits in the message bar; R2 there sends it.
             mode_ = Mode::browse;
             focus_ = -1;
             scroll_.target = 0.0f;
-            feedback.play(hui::audio::Cue::select);
+            feedback.play(hui::audio::Cue::modal_close);
             break;
         }
         case Keyboard::Result::cancel:
@@ -824,9 +782,9 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
                 editing_id_.clear();
                 keys_.set_text(draft_before_edit_);
             }
-            else
-                reply_to_.clear();
-            mode_ = Mode::browse; // the draft stays for next time
+            else if (keys_.text().empty())
+                reply_to_.clear(); // nothing written: no reply either
+            mode_ = Mode::browse; // the draft stays in the bar
             break;
         case Keyboard::Result::emoji:
             open_picker(s, PickFor::keys, requests);
@@ -847,22 +805,14 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
             typed.pop_back();
         if (state == 1 && !typed.empty())
         {
-            discord::Request r;
-            r.kind = discord::Request::Kind::send;
-            r.guild_id = guild_id_;
-            r.channel_id = channel_id_;
-            r.content = typed;
-            r.reply_to = reply_to_;
-            requests.push_back(r);
-            reply_to_.clear();
+            keys_.set_text(typed); // waits in the message bar, as the app keyboard's does
             mode_ = Mode::browse;
             focus_ = -1;
-            scroll_.target = 0.0f;
-            feedback.play(hui::audio::Cue::select);
         }
         else if (state != 0) // cancelled or empty
         {
-            reply_to_.clear();
+            if (keys_.text().empty())
+                reply_to_.clear();
             mode_ = Mode::browse;
         }
         scroll_.update(dt, 14.0f);
@@ -889,15 +839,39 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
     // Browsing.
     if (input.is_pressed(Action::west)) // Square: call the DM, or open the voice room you are in
         voice_ = true;
-    if (input.is_pressed(Action::touch) && !banner_) // the touchpad: emoji and stickers (else the banner's chat)
+    if (input.is_pressed(Action::l3)) // emoji into the message bar, or a sticker sent
     {
         if (can_send(s))
         {
-            open_picker(s, PickFor::send, requests);
+            open_picker(s, PickFor::draft, requests);
             feedback.play(hui::audio::Cue::modal_open);
         }
         else
             feedback.play(hui::audio::Cue::error);
+        return true;
+    }
+    if (input.is_pressed(Action::jump_next)) // R2: send what waits in the message bar
+    {
+        std::string typed = keys_.text();
+        while (!typed.empty() && (typed.back() == ' ' || typed.back() == '\n'))
+            typed.pop_back();
+        if (typed.empty() || !can_send(s))
+        {
+            feedback.play(hui::audio::Cue::error);
+            return true;
+        }
+        discord::Request r;
+        r.kind = discord::Request::Kind::send;
+        r.guild_id = guild_id_;
+        r.channel_id = channel_id_;
+        r.content = typed;
+        r.reply_to = reply_to_;
+        requests.push_back(r);
+        keys_.clear();
+        reply_to_.clear();
+        focus_ = -1;
+        scroll_.target = 0.0f;
+        feedback.play(hui::audio::Cue::select);
         return true;
     }
     if (dm() && input.is_pressed(Action::menu) && dm_person(s))
@@ -1318,9 +1292,8 @@ void Chat::draw_composer(const discord::Snapshot &s, DrawList &list) const
         return;
     }
     list.rounded_rect(bar, 22.0f, kRaised);
-    list.circle(bar.x + 52.0f, bar.cy(), 30.0f, kRaisedHigh);
-    list.rounded_rect({bar.x + 50.0f, bar.cy() - 14.0f, 4.0f, 28.0f}, 2.0f, kText);
-    list.rounded_rect({bar.x + 38.0f, bar.cy() - 2.0f, 28.0f, 4.0f}, 2.0f, kText);
+    list.circle(bar.x + 52.0f, bar.cy(), 30.0f, kRaisedHigh); // L3's emoji
+    emoji_picture(list, ink_, "\xF0\x9F\x99\x82", std::string(), {bar.x + 35.0f, bar.cy() - 17.0f, 34.0f, 34.0f});
 
     std::string placeholder = "Message ";
     if (dm())
@@ -1342,19 +1315,47 @@ void Chat::draw_composer(const discord::Snapshot &s, DrawList &list) const
             if (c->id == channel_id_)
                 placeholder = "Message #" + c->name;
     }
-    ui::text(list, ink_.fonts.regular, placeholder, bar.x + 112.0f, bar.cy() + 10.0f, 28.0f, kDim);
+    // What waits to be sent (written, or emoji added), one line, emoji as pictures.
+    const bool draft = !keys_.text().empty();
+    if (draft)
+    {
+        std::string raw = keys_.text();
+        std::replace(raw.begin(), raw.end(), '\n', ' ');
+        std::vector<discord::Emoji> emojis;
+        const std::string shown = fit(ink_.fonts.regular, mark_emoji(raw, emojis), 28.0f, bar.w - 112.0f - 330.0f);
+        std::size_t next = 0;
+        draw_marked(list, ink_, ink_.fonts.regular, shown, bar.x + 112.0f, bar.cy() + 10.0f, 28.0f, kText, emojis,
+                    next);
+    }
+    else
+        ui::text(list, ink_.fonts.regular, placeholder, bar.x + 112.0f, bar.cy() + 10.0f, 28.0f, kDim);
 
     ui::GlyphStyle glyphs = hint_glyphs();
-    const ui::Hint inline_hints[] = {{ui::Button::triangle, "Type"}};
+    const ui::Hint type_hint[] = {{ui::Button::triangle, "Type"}};
+    const ui::Hint draft_hints[] = {{ui::Button::triangle, "Edit"}, {ui::Button::r2, "Send"}};
     ui::HintLayout layout;
     layout.size = 36.0f;
     layout.text_size = 25.0f;
     layout.cy = bar.cy();
     layout.item_gap = 34.0f;
-    ui::draw_hints(list, ink_.fonts, glyphs, inline_hints, 1, bar.x + bar.w - 30.0f, true, layout);
+    ui::draw_hints(list, ink_.fonts, glyphs, draft ? draft_hints : type_hint, draft ? 2 : 1, bar.x + bar.w - 30.0f,
+                   true, layout);
 
     if (focus_ < 0)
         focus_outline(list, bar, 22.0f, 1.0f);
+
+    // The message being answered, above the bar.
+    if (!reply_to_.empty() && mode_ != Mode::keys)
+        for (const discord::Message &m : messages(s))
+            if (m.id == reply_to_)
+            {
+                const std::string text = "Replying to " + author_name(s, m) + ": " + discord::plain_text(m);
+                const float w = std::min(980.0f, ink_.fonts.regular.measure(text, 24.0f) + 52.0f);
+                const Rect chip{bar.x + 100.0f, bar.y - 62.0f, w, 50.0f};
+                list.rounded_rect(chip, 25.0f, kRaisedHigh);
+                ui::text(list, ink_.fonts.regular, fit(ink_.fonts.regular, text, 24.0f, w - 52.0f), chip.x + 26.0f,
+                         chip.cy() + 8.0f, 24.0f, kText);
+            }
 }
 
 void Chat::draw_actions(const discord::Snapshot &s, DrawList &list, const Rect &anchor) const
@@ -1522,7 +1523,7 @@ void Chat::draw(const discord::Snapshot &s, DrawList &list) const
                          {ui::Button::right_stick, "Text size"}, {}};
     int count = 4;
     if (can_send(s))
-        hints[count++] = {ui::Button::touchpad, "Emoji"};
+        hints[count++] = {ui::Button::left_stick, "Emoji"};
     if (!dm())
         hints[count++] = {ui::Button::options, "Channels"};
     if (dm())
@@ -1538,7 +1539,11 @@ void Chat::draw(const discord::Snapshot &s, DrawList &list) const
     if (mode_ == Mode::keys || (mode_ == Mode::emoji && pick_for_ == PickFor::keys))
         keys_.draw(list);
     if (mode_ == Mode::emoji)
+    {
         picker_.draw(list);
+        if (pick_for_ != PickFor::react) // the text the emoji go into, below the picker
+            draw_composer(s, list);
+    }
     if (mode_ == Mode::image)
         draw_image(s, list);
     if (mode_ == Mode::channels)

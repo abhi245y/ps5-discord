@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "app/concept.hpp"
 #include "discord/model.hpp"
@@ -90,6 +91,15 @@ hui::ui::GlyphStyle hint_glyphs();
 // An emoji in r: a server's (id) from Discord, a Unicode one (text) from the baked
 // atlas or else Twemoji over the network; a quiet square while it loads.
 void emoji_picture(DrawList &list, const Ink &ink, const std::string &text, const std::string &id, const Rect &r);
+
+// Text as written (a draft) as it is drawn: each emoji, Unicode or a server's <:name:id>,
+// becomes discord::kEmojiMark, listed in order in emojis.
+std::string mark_emoji(const std::string &raw, std::vector<discord::Emoji> &emojis);
+// A line holding kEmojiMark slots, each drawn as the next of emojis (from next on);
+// returns the width.
+float draw_marked(DrawList &list, const Ink &ink, const hui::ui::FontRef &font, const std::string &line, float x,
+                  float baseline, float size, Color color, const std::vector<discord::Emoji> &emojis,
+                  std::size_t &next);
 
 // A sticker in r, playing when it is animated; its name on a quiet card while it loads
 // (or where it cannot be shown).

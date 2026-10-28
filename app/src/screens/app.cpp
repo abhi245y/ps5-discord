@@ -149,11 +149,16 @@ constexpr app::TourStep kTour[] = {
     {0.4f, 0, Direction::down},
     {0.7f, 0, Direction::none, "chat-picker-next"},
     {0.4f, action_bit(Action::back)},
-    // The touchpad: emoji and stickers, sent at once.
+    // L3: emoji into the message bar, two of them; Circle is done, R2 sends.
     {0.4f, action_bit(Action::back)},
-    {0.4f, action_bit(Action::touch)},
-    {0.7f, 0, Direction::none, "chat-emoji"},
+    {0.4f, action_bit(Action::l3)},
     {0.4f, action_bit(Action::confirm)},
+    {0.3f, 0, Direction::right},
+    {0.4f, action_bit(Action::confirm)},
+    {0.7f, 0, Direction::none, "chat-emoji"},
+    {0.4f, action_bit(Action::back)},
+    {0.6f, 0, Direction::none, "chat-draft"},
+    {0.4f, action_bit(Action::jump_next)},
     {0.8f, 0, Direction::none, "chat-sent"},
     // The app's keyboard: R1 opens the picker, Square its stickers.
     {0.4f, action_bit(Action::north)},
@@ -375,7 +380,6 @@ class DiscordApp final : public app::Concept
         }
         else
         {
-            chat_.banner_showing(!banners_.empty());
             const bool stay = chat_.update(context_.snapshot, input, dt, feedback, requests);
             if (chat_.take_voice()) // Square: call the DM, or open the room in use
             {

@@ -3,7 +3,7 @@
 //
 // D-pad moves in the grid (down from a category's last row goes on into the next),
 // L1 and R1 jump a category, Square switches between emoji and stickers (when writing a
-// message), Cross picks, Circle closes. What cannot be sent from here (another server's
+// message), Cross picks (or adds to the text, staying open), Circle closes. What cannot be sent from here (another server's
 // emoji or stickers without Nitro, animated emoji, unavailable ones) shows faint and says
 // why. Sticker previews are single still frames, freed when the picker closes.
 
@@ -27,7 +27,7 @@ namespace ui = hui::ui;
 using hui::Action;
 using hui::Direction;
 
-constexpr Rect kPanel{410.0f, 70.0f, 1100.0f, 940.0f};
+constexpr Rect kPanel{410.0f, 30.0f, 1100.0f, 866.0f}; // above the message bar (chat.cpp kComposerY)
 constexpr float kRailW = 96.0f, kHeadH = 56.0f, kFootH = 120.0f;
 constexpr float kGridX = kPanel.x + kRailW + 30.0f, kGridY = kPanel.y + 96.0f;
 constexpr float kGridW = 924.0f, kGridH = kPanel.h - 96.0f - kFootH;
@@ -67,7 +67,7 @@ float EmojiPicker::cell() const
 }
 
 void EmojiPicker::open(const discord::Snapshot &s, const std::string &guild_id, const std::string &title,
-                       bool stickers)
+                       bool stickers, bool adds)
 {
     if (!g_loaded)
     {
@@ -86,6 +86,7 @@ void EmojiPicker::open(const discord::Snapshot &s, const std::string &guild_id, 
     guild_id_ = guild_id;
     nitro_ = s.nitro;
     stickers_allowed_ = stickers;
+    adds_ = adds;
     on_stickers_ = false;
     build(s);
 }
@@ -483,8 +484,8 @@ void EmojiPicker::draw(DrawList &list) const
     int count = 1;
     if (stickers_allowed_)
         hints[count++] = {ui::Button::square, on_stickers_ ? "Emoji" : "Stickers"};
-    hints[count++] = {ui::Button::cross, on_stickers_ ? "Send" : "Pick"};
-    hints[count++] = {ui::Button::circle, "Close"};
+    hints[count++] = {ui::Button::cross, on_stickers_ ? "Send" : adds_ ? "Add" : "Pick"};
+    hints[count++] = {ui::Button::circle, adds_ ? "Done" : "Close"};
     ui::HintLayout layout;
     layout.size = 32.0f;
     layout.text_size = 22.0f;

@@ -27,9 +27,10 @@ class EmojiPicker
 
     // guild_id: the server the chat is in ("" in a DM); without Nitro only its own
     // emoji and stickers can be sent there. title: "React" or "Add to message".
-    // stickers: Square switches to the stickers (when writing a message).
+    // stickers: Square switches to the stickers (when writing a message). adds: emoji go
+    // into text and the picker stays open for more (Circle is Done).
     void open(const discord::Snapshot &snapshot, const std::string &guild_id, const std::string &title,
-              bool stickers);
+              bool stickers, bool adds);
     // Frees the sticker previews it loaded (the picker has closed).
     void close();
 
@@ -75,6 +76,7 @@ class EmojiPicker
     std::string title_, guild_id_;
     bool nitro_ = false;
     bool stickers_allowed_ = false;
+    bool adds_ = false;
     bool on_stickers_ = false;
     std::size_t packs_seen_ = 0;
     std::vector<Section> sections_;

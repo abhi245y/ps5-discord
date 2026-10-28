@@ -43,11 +43,6 @@ class Chat
         voice_ = false;
         return out;
     }
-    // A notification banner is up: the touchpad opens its chat, not the emoji.
-    void banner_showing(bool on)
-    {
-        banner_ = on;
-    }
 
   private:
     struct Row // one laid-out message, page coordinates measured up from the composer
@@ -101,17 +96,17 @@ class Chat
     const Ink &ink_;
     Keyboard keys_; // the app's own keyboard, when the system one is not there
     EmojiPicker picker_;
-    // What a pick does: react to the focused message, go into the app keyboard's text,
-    // or be sent at once (the touchpad).
+    // What a pick does: react to the focused message, or go into the text (the app
+    // keyboard's, or the message bar's from L3).
     enum class PickFor
     {
         react,
         keys,
-        send,
+        draft,
     };
     PickFor pick_for_ = PickFor::react;
     void open_picker(const discord::Snapshot &s, PickFor pick_for, std::vector<discord::Request> &requests);
-    bool banner_ = false; // see banner_showing
+
     int list_index_ = 0;        // focused row of the channel list
     hui::tween::Spring list_scroll_;
     void draw_channel_list(const discord::Snapshot &s, DrawList &list) const;

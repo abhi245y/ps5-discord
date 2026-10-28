@@ -19,7 +19,7 @@ class Keyboard
     enum class Result
     {
         none,
-        send,   // text() is ready to post
+        send,   // Done (R2): text() is finished, for the message bar (or an edit)
         cancel, // closed; the text stays as a draft
         emoji,  // the Emoji key (or R1): the caller opens the picker, then insert()s
     };
