@@ -113,13 +113,19 @@ int core_sign_out(void)
 // Quit (the app's Quit, or a sign out with forget_token): Go Live gives the USB
 // controller back and the call ends first. After a sign out the app starts the core
 // again, at the QR code.
-// Go Live gives the USB controller back, then the call ends.
+// Go Live gives the USB controller back, then the call ends. Exiting while the controller
+// is still detached from the system's drivers could leave it dead until a reboot, so the
+// handback gets up to 30 s; Remote Play's teardown after it, the rest of 10 s.
 static void end_calls(void)
 {
     stream_stop();
     bc_stop();
-    for (int i = 0; i < 100 && strcmp(bc_state(), "off") != 0 && strcmp(bc_state(), "error") != 0; i++)
+    for (int i = 0; i < 300 && (bc_holds_controller() || (i < 100 && strcmp(bc_state(), "off") != 0 &&
+                                                             strcmp(bc_state(), "error") != 0));
+         i++)
         usleep(100000);
+    if (bc_holds_controller())
+        LOG("quit: the controller was not given back in 30 s");
     voice_leave();
 }
 
