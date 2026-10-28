@@ -26,6 +26,7 @@
 #include "voice.h"
 #include "controller_voice.h"
 #include "broadcast.h"
+#include "rp_pair.h"
 #include "stream.h"
 #include "tls.h"
 
@@ -123,7 +124,7 @@ int main(void)
     srand((unsigned)time(NULL) ^ (unsigned)getpid());
     voice_init(DATA_DIR);
     cv_init();
-    bc_init(DATA_DIR);
+    rp_init(DATA_DIR);
     stream_init();
     if (tls_global_init() != 0) {
         LOG("tls init failed");

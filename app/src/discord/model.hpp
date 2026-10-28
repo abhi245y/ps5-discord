@@ -192,6 +192,18 @@ enum class VoiceState : std::uint8_t
 
 // The account's own voice connection: state and self mute from /api/voice,
 // names and member count worked out from the chat tree.
+// A console user and their Remote Play pairing for Go Live.
+struct RemotePlayUser
+{
+    std::string id; // the console's user id, hex
+    std::string name;
+    bool account = false;   // has a PSN account id (Remote Play needs one)
+    bool paired = false;
+    bool on_screen = false; // the user signed in on screen
+    std::string console;    // the paired console's name
+    std::int64_t since = 0; // when it was paired, unix seconds
+};
+
 struct Voice
 {
     VoiceState state = VoiceState::idle;
@@ -218,6 +230,8 @@ struct Voice
     std::string pair_console;     // the paired console's name, the console user, and when (unix s)
     std::string pair_user;
     std::int64_t pair_since = 0;
+    std::vector<RemotePlayUser> rp_users;
+    std::string rp_use; // the user Go Live runs as, "" when nobody is paired
 
     bool active() const
     {

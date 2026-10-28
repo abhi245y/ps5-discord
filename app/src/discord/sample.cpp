@@ -100,6 +100,8 @@ Snapshot sample_snapshot()
     s.voice.muted = false;
     s.voice.ping_ms = 42;
     s.voice.secure = true;
+    // Two console users: the one on screen, and a second one for Go Live over Bluetooth.
+    s.voice.rp_users = {{"10000000", "Ana", true, false, true, "", 0}, {"10000001", "Guest", true, false, false, "", 0}};
     s.voice.since_ms = kNow - 42 * kMinute;
     s.voice.speaking = {"mira", "theo"};
     s.voice.mic_level = 0.55f;
@@ -309,19 +311,26 @@ void apply_sample(Snapshot &s, const Request &r)
         apply_voice(s, r);
         return;
     }
-    if (r.kind == Request::Kind::remoteplay_pair)
+    if (r.kind == Request::Kind::remoteplay_pair || r.kind == Request::Kind::remoteplay_unpair ||
+        r.kind == Request::Kind::remoteplay_use)
     {
-        s.voice.paired = true;
-        s.voice.pair_state = "paired";
-        s.voice.pair_console = "PS5-0429";
-        s.voice.pair_user = s.me.name;
-        s.voice.pair_since = s.now_ms / 1000;
-        return;
-    }
-    if (r.kind == Request::Kind::remoteplay_unpair)
-    {
-        s.voice.paired = false;
-        s.voice.pair_state = "idle";
+        for (RemotePlayUser &u : s.voice.rp_users)
+            if (u.id == r.user_id || (r.user_id.empty() && u.on_screen))
+            {
+                if (r.kind == Request::Kind::remoteplay_pair)
+                    u.paired = true, u.console = "PS5-0429", u.since = s.now_ms / 1000;
+                else if (r.kind == Request::Kind::remoteplay_unpair)
+                    u.paired = false;
+                if (u.paired && (r.kind == Request::Kind::remoteplay_use || s.voice.rp_use.empty()))
+                    s.voice.rp_use = u.id;
+                if (!u.paired && s.voice.rp_use == u.id)
+                    s.voice.rp_use.clear();
+            }
+        s.voice.paired = !s.voice.rp_use.empty();
+        s.voice.pair_state = r.kind == Request::Kind::remoteplay_pair ? "paired" : "idle";
+        for (const RemotePlayUser &u : s.voice.rp_users)
+            if (u.id == s.voice.rp_use)
+                s.voice.pair_console = u.console, s.voice.pair_user = u.name, s.voice.pair_since = u.since;
         return;
     }
     if (r.kind != Request::Kind::send)

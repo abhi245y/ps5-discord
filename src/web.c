@@ -23,6 +23,7 @@
 #include "voice_audio.h"
 #include "controller_voice.h"
 #include "broadcast.h"
+#include "rp_pair.h"
 #include "stream.h"
 #include "browser_auth.h"
 
@@ -453,18 +454,33 @@ static void api_voice_broadcast(int c, const char *body)
         reply_ok(c);
 }
 
-// Remote Play pairing for Go Live: {} lets the core make the PIN itself; {"pin": "12345678"}
-// is the one from the console's Link Device screen when that is refused.
-static void api_remoteplay_pair(int c, const char *body)
+// Remote Play pairing for Go Live, per console user (rp_pair.h). Users are hex ids.
+//   pair   {"user": "15c5b66e"?, "pin": "12345678"?}  no pin: the core gets one itself
+//   unpair {"user": ...}    use {"user": ...} (the user Go Live runs as)
+static int32_t body_user(cJSON *in)
+{
+    const char *u = cJSON_GetStringValue(cJSON_GetObjectItem(in, "user"));
+    return u && *u ? (int32_t)strtoul(u, NULL, 16) : -1;
+}
+
+static void api_remoteplay(int c, const char *path, const char *body)
 {
     cJSON *in = cJSON_Parse(body ? body : "");
-    const char *pin = cJSON_GetStringValue(cJSON_GetObjectItem(in, "pin"));
-    int r = bc_pair(pin);
+    int32_t user = body_user(in);
+    int r;
+    if (strcmp(path, "/api/remoteplay/pair") == 0)
+        r = rp_pair(user, cJSON_GetStringValue(cJSON_GetObjectItem(in, "pin")));
+    else if (user < 0)
+        r = -1;
+    else if (strcmp(path, "/api/remoteplay/unpair") == 0)
+        r = rp_unpair(user);
+    else
+        r = rp_use(user);
     cJSON_Delete(in);
     if (r == 0)
         reply_ok(c);
     else
-        refuse(c, "400 Bad Request", bc_pair_error());
+        refuse(c, "400 Bad Request", strcmp(path, "/api/remoteplay/pair") == 0 ? rp_pair_error() : "No such pairing.");
 }
 
 // GET /api/voice: the call, plus the controller audio, the pick and the broadcast.
@@ -487,15 +503,34 @@ static char *voice_json(void)
                                                                                            : "starting");
     cJSON_AddStringToObject(bc, "error", strcmp(st, "error") == 0 ? stream_error() : bc_error());
     cJSON_AddNumberToObject(bc, "viewers", stream_viewers());
-    cJSON_AddBoolToObject(bc, "paired", bc_paired());
-    cJSON_AddStringToObject(bc, "pair_state", bc_pair_state());
-    cJSON_AddStringToObject(bc, "pair_error", bc_pair_error());
-    char console[64], user[64];
-    long long since;
-    bc_pair_info(console, user, &since);
-    cJSON_AddStringToObject(bc, "pair_console", console);
-    cJSON_AddStringToObject(bc, "pair_user", user);
-    cJSON_AddNumberToObject(bc, "pair_since", (double)since);
+    // Pairings: every console user, the one Go Live runs as, and the last pairing's state.
+    rp_user users[RP_MAX_USERS];
+    int n = rp_users(users, RP_MAX_USERS);
+    int32_t used = rp_used(), fg = rp_foreground();
+    char id[12];
+    cJSON *list = cJSON_AddArrayToObject(bc, "users");
+    for (int i = 0; i < n; i++) {
+        cJSON *u = cJSON_CreateObject();
+        snprintf(id, sizeof id, "%08x", (unsigned)users[i].id);
+        cJSON_AddStringToObject(u, "id", id);
+        cJSON_AddStringToObject(u, "name", users[i].name);
+        cJSON_AddBoolToObject(u, "account", users[i].has_account);
+        cJSON_AddBoolToObject(u, "paired", users[i].paired);
+        cJSON_AddBoolToObject(u, "on_screen", users[i].id == fg);
+        cJSON_AddStringToObject(u, "console", users[i].console);
+        cJSON_AddNumberToObject(u, "since", (double)users[i].since);
+        cJSON_AddItemToArray(list, u);
+        if (users[i].id == used) {
+            cJSON_AddStringToObject(bc, "pair_console", users[i].console);
+            cJSON_AddStringToObject(bc, "pair_user", users[i].name);
+            cJSON_AddNumberToObject(bc, "pair_since", (double)users[i].since);
+        }
+    }
+    snprintf(id, sizeof id, "%08x", (unsigned)used);
+    cJSON_AddStringToObject(bc, "use", used >= 0 ? id : "");
+    cJSON_AddBoolToObject(bc, "paired", used >= 0);
+    cJSON_AddStringToObject(bc, "pair_state", rp_pair_state());
+    cJSON_AddStringToObject(bc, "pair_error", rp_pair_error());
     s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     return s;
@@ -652,13 +687,9 @@ static void handle(int c, int local)
             api_voice_broadcast(c, body);
         else
             reply(c, "404 Not Found", "text/plain", "not found", 9);
-    } else if (post && strcmp(path, "/api/remoteplay/pair") == 0) {
-        api_remoteplay_pair(c, body);
-    } else if (post && strcmp(path, "/api/remoteplay/unpair") == 0) {
-        if (bc_unpair() == 0)
-            reply_ok(c);
-        else
-            refuse(c, "500 Internal Server Error", "Could not remove the pairing.");
+    } else if (post && (strcmp(path, "/api/remoteplay/pair") == 0 || strcmp(path, "/api/remoteplay/unpair") == 0 ||
+                        strcmp(path, "/api/remoteplay/use") == 0)) {
+        api_remoteplay(c, path, body);
     } else if (post && strcmp(path, "/api/edit") == 0) {
         api_change(c, body, 0);
     } else if (post && strcmp(path, "/api/delete") == 0) {

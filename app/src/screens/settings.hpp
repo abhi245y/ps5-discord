@@ -33,16 +33,19 @@ class SettingsScreen
     int section_ = 0;
     int row_ = 0;
     bool in_rows_ = false; // focus is on the rows, not the sections
-    // The pairing dialog: a menu while paired (pair again, remove), the wait while the
-    // core pairs, and the PIN boxes when the console wants its Link Device PIN typed.
+    // The pairing dialog: the console's users, one user's actions (use, pair again, remove),
+    // the wait while the core pairs, and the PIN boxes if the console wants its PIN typed.
     enum class Pair
     {
         none,
+        users,
         menu,
         wait,
         pin,
     };
     Pair pair_ = Pair::none;
+    int user_at_ = 0;
+    std::string target_; // the user being paired or managed
     int menu_at_ = 0;
     float sent_time_ = 9.0f; // since the last pairing request
     bool pin_sent_ = false;

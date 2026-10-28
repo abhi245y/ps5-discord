@@ -89,21 +89,22 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
         Row pair;
         pair.title = "Go Live pairing";
         pair.act = Act::pair;
-        if (v.paired && v.pair_state != "pairing")
+        pair.kind = Kind::value;
+        const discord::RemotePlayUser *used = nullptr;
+        for (const discord::RemotePlayUser &u : v.rp_users)
+            if (u.id == v.rp_use)
+                used = &u;
+        if (used)
         {
-            pair.kind = Kind::value;
-            pair.value = v.pair_console.empty() ? "Paired" : v.pair_console;
-            pair.desc = "Paired" + (v.pair_user.empty() ? std::string() : " for " + v.pair_user) +
-                        (v.pair_since > 0 ? " · since " + day_text(v.pair_since, s.utc_offset_minutes) : std::string()) +
+            pair.value = "Go Live as " + used->name;
+            pair.desc = "Paired with " + (used->console.empty() ? std::string("this console") : used->console) +
+                        (used->since > 0 ? " since " + day_text(used->since, s.utc_offset_minutes) : std::string()) +
                         ". Select to manage.";
         }
         else
         {
-            pair.kind = Kind::button;
-            pair.value = v.pair_state == "pairing" ? "Pairing…" : "Pair";
-            pair.desc = v.pair_state == "error" && !v.pair_error.empty()
-                            ? v.pair_error
-                            : "Go Live sees your game through Remote Play, paired once with this console.";
+            pair.value = "Not paired";
+            pair.desc = "Pair a console user once so Go Live can see your game.";
         }
         return {
             {Kind::meter, "Microphone", v.active() ? "Your mic in the call, live." : "Shows your mic while you are in a call.", ""},
@@ -112,7 +113,7 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
             pair,
             {Kind::value, "Go Live quality", "The picture your viewers get.", "720p · 30 fps"},
             {Kind::info, "Controller while live",
-             "Plug the DualSense in by USB: it plays the game and is your headset while you are live.", ""},
+             "As the user on screen: DualSense on USB, with voice. As another user: it stays yours, no voice.", ""},
             {Kind::slider, "Input volume", "How loud your microphone is.", "", 7, false, true},
         };
     }
@@ -247,47 +248,128 @@ void SettingsScreen::start_pin()
     pin_at_ = 0;
 }
 
+namespace
+{
+
+enum class Do
+{
+    use,
+    pair,
+    remove,
+};
+
+struct Option
+{
+    const char *label;
+    Do act;
+};
+
+// What can be done for one console user.
+std::vector<Option> options_for(const discord::Voice &v, const std::string &id)
+{
+    for (const discord::RemotePlayUser &u : v.rp_users)
+        if (u.id == id)
+        {
+            if (!u.paired)
+                return {{"Pair", Do::pair}};
+            std::vector<Option> o;
+            if (v.rp_use != u.id)
+                o.push_back({"Use for Go Live", Do::use});
+            o.push_back({"Pair again", Do::pair});
+            o.push_back({"Remove pairing", Do::remove});
+            return o;
+        }
+    return {};
+}
+
+} // namespace
+
 // The pairing dialog. After a request the snapshot shows the old state until the next
 // poll, so the first second and a half counts as "pairing".
 void SettingsScreen::update_pair(const discord::Snapshot &s, const hui::InputFrame &input,
                                  hui::ui::Feedback &feedback, std::vector<discord::Request> &requests)
 {
-    auto send_pair = [&](const std::string &pin) {
+    const discord::Voice &v = s.voice;
+    auto send = [&](discord::Request::Kind kind, const std::string &pin = {}) {
         discord::Request r;
-        r.kind = discord::Request::Kind::remoteplay_pair;
+        r.kind = kind;
+        r.user_id = target_;
         r.content = pin;
         requests.push_back(r);
         sent_time_ = 0.0f;
-        feedback.play(hui::audio::Cue::select);
     };
     const bool fresh = sent_time_ < 1.5f;
-    const std::string &st = s.voice.pair_state;
-    const bool done = !fresh && s.voice.paired && st == "paired";
+    const std::string &st = v.pair_state;
+    const bool done = !fresh && st == "paired";
+    if (pair_ == Pair::users)
+    {
+        const int n = static_cast<int>(v.rp_users.size());
+        if (input.is_pressed(Action::back))
+        {
+            pair_ = Pair::none;
+            feedback.play(hui::audio::Cue::modal_close);
+        }
+        else if ((input.nav == Direction::up || input.nav == Direction::down) && n > 0)
+        {
+            user_at_ = (user_at_ + (input.nav == Direction::down ? 1 : n - 1)) % n;
+            feedback.play(hui::audio::Cue::focus);
+        }
+        else if (input.is_pressed(Action::confirm) && user_at_ < n)
+        {
+            const discord::RemotePlayUser &u = v.rp_users[user_at_];
+            target_ = u.id;
+            if (!u.account)
+                feedback.play(hui::audio::Cue::error); // Remote Play needs a PSN account id
+            else if (!u.paired)
+            {
+                pair_ = Pair::wait; // the core gets the PIN itself; the boxes only if it cannot
+                send(discord::Request::Kind::remoteplay_pair);
+                feedback.play(hui::audio::Cue::select);
+            }
+            else
+            {
+                pair_ = Pair::menu;
+                menu_at_ = 0;
+                feedback.play(hui::audio::Cue::select);
+            }
+        }
+        return;
+    }
     if (input.is_pressed(Action::back) || (done && input.is_pressed(Action::confirm)))
     {
-        pair_ = Pair::none;
-        feedback.play(hui::audio::Cue::modal_close);
+        pair_ = Pair::users;
+        feedback.play(hui::audio::Cue::back);
         return;
     }
     if (pair_ == Pair::menu)
     {
-        if (input.nav == Direction::up || input.nav == Direction::down)
+        const std::vector<Option> o = options_for(v, target_);
+        const int n = static_cast<int>(o.size());
+        if ((input.nav == Direction::up || input.nav == Direction::down) && n > 0)
         {
-            menu_at_ = 1 - menu_at_;
+            menu_at_ = (menu_at_ + (input.nav == Direction::down ? 1 : n - 1)) % n;
             feedback.play(hui::audio::Cue::focus);
         }
-        if (input.is_pressed(Action::confirm) && menu_at_ == 0)
+        if (input.is_pressed(Action::confirm) && menu_at_ < n)
         {
-            pair_ = Pair::wait;
-            send_pair("");
-        }
-        else if (input.is_pressed(Action::confirm))
-        {
-            discord::Request r;
-            r.kind = discord::Request::Kind::remoteplay_unpair;
-            requests.push_back(r);
-            pair_ = Pair::none;
-            feedback.play(hui::audio::Cue::favorite_off);
+            switch (o[menu_at_].act)
+            {
+            case Do::use:
+                send(discord::Request::Kind::remoteplay_use);
+                pair_ = Pair::users;
+                feedback.play(hui::audio::Cue::toggle);
+                break;
+            case Do::pair:
+                send(discord::Request::Kind::remoteplay_pair);
+                pair_ = Pair::wait;
+                feedback.play(hui::audio::Cue::select);
+                break;
+            case Do::remove:
+                send(discord::Request::Kind::remoteplay_unpair);
+                pair_ = Pair::users;
+                feedback.play(hui::audio::Cue::favorite_off);
+                break;
+            }
         }
         return;
     }
@@ -296,7 +378,7 @@ void SettingsScreen::update_pair(const discord::Snapshot &s, const hui::InputFra
         if (!fresh && st == "need_pin")
             start_pin(); // the console wants its own PIN typed
         else if (!fresh && st == "error" && input.is_pressed(Action::confirm))
-            send_pair("");
+            send(discord::Request::Kind::remoteplay_pair);
         else if (!fresh && st == "error" && input.is_pressed(Action::west))
             start_pin();
         return;
@@ -343,8 +425,9 @@ void SettingsScreen::update_pair(const discord::Snapshot &s, const hui::InputFra
                 pin += static_cast<char>('0' + d);
         if (pin.size() == 8)
         {
-            send_pair(pin);
+            send(discord::Request::Kind::remoteplay_pair, pin);
             pin_sent_ = true;
+            feedback.play(hui::audio::Cue::select);
         }
         else
             feedback.play(hui::audio::Cue::error);
@@ -451,19 +534,12 @@ bool SettingsScreen::update(const discord::Snapshot &s, const hui::InputFrame &i
             break;
         case Act::pair:
             feedback.play(hui::audio::Cue::modal_open);
-            if (s.voice.paired)
-            {
-                pair_ = Pair::menu;
-                menu_at_ = 0;
-            }
-            else
-            {
-                pair_ = Pair::wait; // the core makes the PIN itself; the boxes only if it cannot
-                discord::Request r;
-                r.kind = discord::Request::Kind::remoteplay_pair;
-                requests.push_back(r);
-                sent_time_ = 0.0f;
-            }
+            pair_ = Pair::users;
+            user_at_ = 0; // start on the Go Live user, else the one on screen
+            for (int i = 0; i < static_cast<int>(s.voice.rp_users.size()); ++i)
+                if (s.voice.rp_users[i].id == s.voice.rp_use ||
+                    (s.voice.rp_use.empty() && s.voice.rp_users[i].on_screen))
+                    user_at_ = i;
             break;
         default:
             break;
@@ -564,64 +640,99 @@ void SettingsScreen::draw(const discord::Snapshot &s, const hui::Settings &app, 
 void SettingsScreen::draw_pair(const discord::Snapshot &s, DrawList &list) const
 {
     list.rounded_rect({0, 0, 1920, 1080}, 0.0f, Color::rgb(0x0d0e12, 0.78f));
-    const Rect card{460.0f, 230.0f, 1000.0f, 600.0f};
+    const Rect card{410.0f, 150.0f, 1100.0f, 780.0f};
     list.shadow(card, 28.0f, 50.0f, Color::rgb(0, 0.5f));
     list.rounded_rect(card, 28.0f, kRaised);
     const discord::Voice &v = s.voice;
     const bool fresh = sent_time_ < 1.5f;
-    const bool done = !fresh && v.paired && v.pair_state == "paired";
-    ui::text(list, ink_.fonts.display, "Go Live pairing", card.x + 56.0f, card.y + 92.0f, 50.0f, kText);
+    const bool done = !fresh && v.pair_state == "paired";
+    std::string who;
+    for (const discord::RemotePlayUser &u : v.rp_users)
+        if (u.id == target_)
+            who = u.name;
+    ui::text(list, ink_.fonts.display, pair_ == Pair::users || who.empty() ? "Go Live pairing" : "Go Live as " + who,
+             card.x + 56.0f, card.y + 92.0f, 50.0f, kText);
+    const float left = card.x + 58.0f, width = card.w - 116.0f;
 
     std::vector<ui::Hint> hints;
-    if (pair_ == Pair::menu)
+    if (pair_ == Pair::users)
     {
-        std::string who = v.pair_console.empty() ? "this console" : v.pair_console;
-        if (!v.pair_user.empty())
-            who += ", for " + v.pair_user;
-        ui::text(list, ink_.fonts.regular, "Paired with " + who + ".", card.x + 58.0f, card.y + 150.0f, 26.0f, kDim);
-        const char *options[] = {"Pair again", "Remove pairing"};
-        for (int i = 0; i < 2; ++i)
+        ui::text(list, ink_.fonts.regular, "Each console user pairs once. Go Live runs as the one marked.", left,
+                 card.y + 146.0f, 25.0f, kDim);
+        const int n = static_cast<int>(v.rp_users.size());
+        if (n == 0)
+            ui::text(list, ink_.fonts.regular, "Reading the console's users…", left, card.y + 230.0f, 26.0f, kDim);
+        for (int i = 0; i < n && i < 4; ++i)
         {
-            const Rect b{card.x + 56.0f, card.y + 200.0f + i * 96.0f, card.w - 112.0f, 80.0f};
+            const discord::RemotePlayUser &u = v.rp_users[i];
+            const Rect r{card.x + 56.0f, card.y + 180.0f + i * 104.0f, card.w - 112.0f, 90.0f};
+            list.push_opacity(u.account ? 1.0f : 0.45f);
+            list.rounded_rect(r, kCardRadius, kRaisedHigh);
+            ui::text(list, ink_.fonts.semibold, u.name + (u.on_screen ? "  · on screen" : ""), r.x + 28.0f,
+                     r.y + 40.0f, 28.0f, kText);
+            const std::string line = !u.account  ? "No PSN account: Remote Play cannot pair this user."
+                                     : !u.paired ? "Not paired."
+                                     : u.on_screen ? "Paired · controller on USB, with voice"
+                                                   : "Paired · your controller stays yours, no voice in games";
+            ui::text(list, ink_.fonts.regular, fit(ink_.fonts.regular, line, 22.0f, r.w - 300.0f), r.x + 28.0f,
+                     r.y + 72.0f, 22.0f, kDim);
+            if (u.id == v.rp_use)
+            {
+                const Rect tag{r.x + r.w - 220.0f, r.cy() - 22.0f, 196.0f, 44.0f};
+                list.rounded_rect(tag, 22.0f, kCoral);
+                ui::text(list, ink_.fonts.semibold, "Go Live", tag.cx(), tag.cy() + 8.0f, 22.0f, kOnCoral,
+                         gfx::Align::center);
+            }
+            list.pop_opacity();
+            if (i == user_at_)
+                focus_outline(list, r, kCardRadius, 1.0f);
+        }
+        ui::paragraph(list, ink_.fonts.regular,
+                      "Remote Play must be on for the user (PS5 Settings › System › Remote Play). Pairing again or "
+                      "removing here does not change the PS5's own list of linked devices.",
+                      left, card.y + 620.0f, 22.0f, width, 30.0f, kFaint, 2, gfx::Align::left);
+        hints = {{ui::Button::cross, "Select"}, {ui::Button::circle, "Close"}};
+    }
+    else if (pair_ == Pair::menu)
+    {
+        const std::vector<Option> o = options_for(v, target_);
+        for (int i = 0; i < static_cast<int>(o.size()); ++i)
+        {
+            const Rect b{card.x + 56.0f, card.y + 170.0f + i * 96.0f, card.w - 112.0f, 80.0f};
             list.rounded_rect(b, kCardRadius, kRaisedHigh);
-            ui::text(list, ink_.fonts.semibold, options[i], b.x + 28.0f, b.cy() + 10.0f, 28.0f,
-                     i == 1 ? kDnd : kText);
+            ui::text(list, ink_.fonts.semibold, o[i].label, b.x + 28.0f, b.cy() + 10.0f, 28.0f,
+                     o[i].act == Do::remove ? kDnd : kText);
             if (i == menu_at_)
                 focus_outline(list, b, kCardRadius, 1.0f);
         }
-        ui::paragraph(list, ink_.fonts.regular,
-                      "Removing forgets the pairing here; the PS5 keeps listing it under Remote Play until you "
-                      "remove it there too.",
-                      card.x + 58.0f, card.y + 430.0f, 23.0f, card.w - 116.0f, 30.0f, kFaint, 2, gfx::Align::left);
-        hints = {{ui::Button::cross, "Select"}, {ui::Button::circle, "Close"}};
+        hints = {{ui::Button::cross, "Select"}, {ui::Button::circle, "Back"}};
     }
     else if (pair_ == Pair::wait)
     {
         std::string status = "Pairing with the console…";
         Color tone = kDim;
         if (done)
-            status = "Paired. Go Live is ready.", tone = kOnline;
+            status = "Paired.", tone = kOnline;
         else if (!fresh && v.pair_state == "error")
             status = v.pair_error.empty() ? "Pairing failed." : v.pair_error, tone = kDnd;
-        ui::paragraph(list, ink_.fonts.regular, status, card.x + 58.0f, card.y + 170.0f, 28.0f, card.w - 116.0f, 38.0f,
-                      tone, 4, gfx::Align::left);
+        ui::paragraph(list, ink_.fonts.regular, status, left, card.y + 180.0f, 28.0f, width, 38.0f, tone, 4,
+                      gfx::Align::left);
         ui::paragraph(list, ink_.fonts.regular,
-                      "The app asks the PS5 for a pairing code itself; nothing to type. Remote Play must be on "
-                      "for a console user signed in to PSN.",
-                      card.x + 58.0f, card.y + 330.0f, 24.0f, card.w - 116.0f, 32.0f, kFaint, 3, gfx::Align::left);
+                      "The app asks the PS5 for a pairing code itself; nothing to type.", left, card.y + 340.0f, 24.0f,
+                      width, 32.0f, kFaint, 2, gfx::Align::left);
         if (done)
             hints = {{ui::Button::cross, "Done"}};
         else if (!fresh && v.pair_state == "error")
-            hints = {{ui::Button::cross, "Try again"}, {ui::Button::square, "Enter a PIN"}, {ui::Button::circle, "Close"}};
+            hints = {{ui::Button::cross, "Try again"}, {ui::Button::square, "Enter a PIN"}, {ui::Button::circle, "Back"}};
         else
-            hints = {{ui::Button::circle, "Close"}};
+            hints = {{ui::Button::circle, "Back"}};
     }
     else
     {
-        ui::text(list, ink_.fonts.regular, "On the PS5: Settings  ›  System  ›  Remote Play  ›  Link Device.",
-                 card.x + 58.0f, card.y + 150.0f, 26.0f, kDim);
-        ui::text(list, ink_.fonts.regular, "Enter the 8-digit number it shows. Up and down change a digit.",
-                 card.x + 58.0f, card.y + 190.0f, 26.0f, kDim);
+        ui::text(list, ink_.fonts.regular, "On the PS5: Settings  ›  System  ›  Remote Play  ›  Link Device.", left,
+                 card.y + 150.0f, 26.0f, kDim);
+        ui::text(list, ink_.fonts.regular, "Enter the 8-digit number it shows. Up and down change a digit.", left,
+                 card.y + 190.0f, 26.0f, kDim);
         constexpr float kBox = 84.0f, kGap = 20.0f;
         const float x0 = card.cx() - (8 * kBox + 7 * kGap + 24.0f) * 0.5f;
         for (int i = 0; i < 8; ++i)
@@ -640,16 +751,16 @@ void SettingsScreen::draw_pair(const discord::Snapshot &s, DrawList &list) const
         if (pin_sent_)
         {
             if (done)
-                status = "Paired. Go Live is ready.", tone = kOnline;
+                status = "Paired.", tone = kOnline;
             else if (!fresh && v.pair_state == "error")
                 status = v.pair_error.empty() ? "Pairing failed." : v.pair_error, tone = kDnd;
             else
                 status = "Pairing with the console…";
         }
         if (!status.empty())
-            ui::paragraph(list, ink_.fonts.regular, status, card.x + 58.0f, card.y + 420.0f, 26.0f, card.w - 116.0f,
-                          34.0f, tone, 2, gfx::Align::left);
-        hints = {{ui::Button::cross, done ? "Done" : "Pair"}, {ui::Button::circle, "Cancel"}};
+            ui::paragraph(list, ink_.fonts.regular, status, left, card.y + 420.0f, 26.0f, width, 34.0f, tone, 2,
+                          gfx::Align::left);
+        hints = {{ui::Button::cross, done ? "Done" : "Pair"}, {ui::Button::circle, "Back"}};
     }
     ui::HintLayout layout;
     layout.size = 34.0f;

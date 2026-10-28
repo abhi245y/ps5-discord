@@ -5,8 +5,10 @@
 // so the user is never left without a controller. Afterwards the user presses PS to
 // reconnect it to the console.
 //
-// Remote Play: vendored chiaki-ng (third_party/README.md), paired with the console
-// itself (remoteplay.bin = ChiakiRegisteredHost). USB: tools/ds5-usb-bridge/ds5_usb.c.
+// Remote Play: vendored chiaki-ng (third_party/README.md), paired with the console itself
+// per console user (rp_pair.c). Going live as the user on screen takes the USB controller
+// over; as another console user it leaves the controller alone. USB:
+// tools/ds5-usb-bridge/ds5_usb.c.
 #include "broadcast.h"
 
 #include <pthread.h>
@@ -16,10 +18,10 @@
 #include <time.h>
 
 #include "log.h"
+#include "rp_pair.h"
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static char state[16] = "off", error[160];
-static char pair_file[256];
 static const bc_sink *volatile sink;
 
 static void set_state(const char *s, const char *why)
@@ -41,78 +43,9 @@ const char *bc_error(void)
     return error;
 }
 
-static char info_file[256];
-static void set_pair_state(const char *s, const char *why);
-
-void bc_init(const char *data_dir)
-{
-    snprintf(pair_file, sizeof pair_file, "%s/remoteplay.bin", data_dir);
-    snprintf(info_file, sizeof info_file, "%s/remoteplay.txt", data_dir);
-}
-
-// remoteplay.txt: three lines, the console's name, the console user and the time it was made.
-void bc_pair_info(char console[64], char user[64], long long *since)
-{
-    console[0] = user[0] = 0;
-    *since = 0;
-    FILE *f = fopen(info_file, "r");
-    if (!f)
-        return;
-    char line[64];
-    if (fgets(console, 64, f))
-        console[strcspn(console, "\n")] = 0;
-    if (fgets(user, 64, f))
-        user[strcspn(user, "\n")] = 0;
-    if (fgets(line, sizeof line, f))
-        *since = atoll(line);
-    fclose(f);
-}
-
-int bc_unpair(void)
-{
-    int r = remove(pair_file);
-    remove(info_file);
-    set_pair_state("idle", "");
-    LOG("remote play: pairing removed");
-    return r == 0 || !bc_paired() ? 0 : -1;
-}
-
 void bc_set_sink(const bc_sink *s)
 {
     sink = s;
-}
-
-static char pair_state[16] = "idle", pair_error[160];
-
-int bc_paired(void)
-{
-    FILE *f = fopen(pair_file, "rb"); // access() refuses payloads on the console
-    if (f)
-        fclose(f);
-    return f != NULL;
-}
-
-const char *bc_pair_state(void)
-{
-    return pair_state;
-}
-
-const char *bc_pair_error(void)
-{
-    return pair_error;
-}
-
-static void set_pair(const char *s, const char *why)
-{
-    set_pair_state(s, why);
-}
-
-static void set_pair_state(const char *s, const char *why)
-{
-    pthread_mutex_lock(&lock);
-    snprintf(pair_state, sizeof pair_state, "%s", s);
-    snprintf(pair_error, sizeof pair_error, "%s", why ? why : "");
-    pthread_mutex_unlock(&lock);
 }
 
 #ifndef __PROSPERO__
@@ -130,12 +63,6 @@ void bc_request_keyframe(void)
 {
 }
 
-int bc_pair(const char *pin)
-{
-    (void)pin;
-    set_pair("error", "Pairing needs the console.");
-    return -1;
-}
 #else
 
 #include <dlfcn.h>
@@ -153,14 +80,6 @@ int bc_pair(const char *pin)
 static ChiakiSession session;
 static volatile int want, running, connected, quit, ds5_done, live;
 static unsigned frames, audio_frames, keyframes;
-
-static int chiaki_ready(void)
-{
-    static int ok;
-    if (!ok)
-        ok = chiaki_lib_init() == CHIAKI_ERR_SUCCESS;
-    return ok;
-}
 
 static void rp_log(ChiakiLogLevel level, const char *msg, void *user)
 {
@@ -318,71 +237,15 @@ static void *usb_main(void *arg)
 
 // ---- the session -------------------------------------------------------------------
 
-int sceUserServiceInitialize(void *);
-int sceUserServiceGetForegroundUser(int32_t *);
-int sceUserServiceGetUserName(int32_t, char *, size_t);
-
-// The foreground console user's PSN account id (0 when it has none) and name. The core
-// does not use the user service otherwise, so it starts it here (already-started is fine).
-static uint64_t account_id_named(char *name, size_t cap)
-{
-    int init = sceUserServiceInitialize(NULL);
-    int32_t user = -1;
-    int fg = sceUserServiceGetForegroundUser(&user);
-    if (name && cap) {
-        name[0] = 0;
-        if (fg == 0)
-            sceUserServiceGetUserName(user, name, cap);
-    }
-    int (*acct)(int32_t, uint64_t *) = NULL;
-    void *lib = dlopen("libSceUserService.sprx", RTLD_LAZY);
-    if (lib)
-        acct = (int (*)(int32_t, uint64_t *))dlsym(lib, "sceUserServiceGetNpAccountId");
-    uint64_t id = 0;
-    int ar = fg == 0 && acct ? acct(user, &id) : -1;
-    LOG("remote play: user service %#x, foreground user %#x (%#x), account id %#x %s", (unsigned)init,
-        (unsigned)user, (unsigned)fg, (unsigned)ar, id ? "present" : "missing");
-    return id;
-}
-
-static uint64_t account_id(void)
-{
-    return account_id_named(NULL, 0);
-}
-
-// The console's own Remote Play service (what Settings > Remote Play > Link Device uses):
-// a PIN made here opens the console for pairing, no screen needed. 0 when it refuses.
-static int (*rp_notify_pin_error)(int);
-
-static uint32_t system_pin(void)
-{
-    void *lib = dlopen("libSceRemoteplay.sprx", RTLD_LAZY);
-    int (*init)(void *, size_t) = lib ? (int (*)(void *, size_t))dlsym(lib, "sceRemoteplayInitialize") : NULL;
-    int (*gen)(uint32_t *) = lib ? (int (*)(uint32_t *))dlsym(lib, "sceRemoteplayGeneratePinCode") : NULL;
-    rp_notify_pin_error = lib ? (int (*)(int))dlsym(lib, "sceRemoteplayNotifyPinCodeError") : NULL;
-    if (!init || !gen) {
-        LOG("remote play: the console's pairing service is not reachable (%s)", lib ? "symbols" : "library");
-        return 0;
-    }
-    int ir = init(NULL, 0);
-    uint32_t pin = 0;
-    int gr = gen(&pin);
-    LOG("remote play: console pairing service init %#x, PIN %s (%#x)", (unsigned)ir, gr == 0 && pin ? "made" : "refused",
-        (unsigned)gr);
-    return gr == 0 ? pin : 0;
-}
-
 static const char *run(void)
 {
     ChiakiRegisteredHost host;
-    FILE *f = fopen(pair_file, "rb");
-    size_t got = f ? fread(&host, sizeof host, 1, f) : 0;
-    if (f)
-        fclose(f);
-    if (got != 1)
+    uint64_t id = 0;
+    int mine = 0; // Go Live as the user on screen: the USB controller plays through the session
+    if (rp_load(&host, sizeof host, &id, &mine) != 0)
         return "Remote Play is not paired with this console.";
 
-    if (!chiaki_ready())
+    if (!rp_chiaki_ready())
         return "Remote Play could not start.";
 
     static ChiakiLog log;
@@ -399,7 +262,6 @@ static const char *run(void)
     info.video_profile.codec = CHIAKI_CODEC_H264;
     info.packet_loss_max = 0.05;
     info.enable_idr_on_fec_failure = true;
-    uint64_t id = account_id();
     for (int i = 0; i < 8; i++)
         info.psn_account_id[i] = (uint8_t)(id >> (8 * i));
 
@@ -422,19 +284,22 @@ static const char *run(void)
     pthread_t usb;
     int usb_running = 0;
     if (!why && connected) {
-        LOG("broadcast: Remote Play connected, taking the controller");
-        vau_ext_set(1);
-        usb_running = pthread_create(&usb, NULL, usb_main, NULL) == 0;
+        if (mine) {
+            LOG("broadcast: Remote Play connected, taking the controller");
+            vau_ext_set(1);
+            usb_running = pthread_create(&usb, NULL, usb_main, NULL) == 0;
+        } else // another console user's session: the controller stays the user's own
+            LOG("broadcast: Remote Play connected as another console user; the controller stays yours");
         live = 1;
         set_state("live", "");
         unsigned tick = 0;
-        while (want && !quit && !ds5_done && voice_wanted()) {
+        while (want && !quit && !(usb_running && ds5_done) && voice_wanted()) {
             usleep(200000);
             if (++tick % 25 == 0)
                 LOG("broadcast: %u video frames (%u keyframes), %u audio frames", frames, keyframes, audio_frames);
         }
         live = 0;
-        if (ds5_done && want && !quit)
+        if (usb_running && ds5_done && want && !quit)
             why = "Plug the controller in by USB to broadcast.";
         else if (quit && want)
             why = "Remote Play ended.";
@@ -461,124 +326,16 @@ static void *worker(void *arg)
     return NULL;
 }
 
-// ---- pairing ----------------------------------------------------------------------
-
-static volatile int regist_done;
-static ChiakiRegisteredHost regist_host;
-
-static void regist_cb(ChiakiRegistEvent *e, void *user)
-{
-    (void)user;
-    if (e->type == CHIAKI_REGIST_EVENT_TYPE_FINISHED_SUCCESS)
-        regist_host = *e->registered_host;
-    regist_done = e->type == CHIAKI_REGIST_EVENT_TYPE_FINISHED_SUCCESS ? 1 : 2;
-}
-
-static void *pair_main(void *arg)
-{
-    uint32_t pin = (uint32_t)(uintptr_t)arg;
-    const char *why = NULL;
-    int made_pin = pin == 0;
-    if (made_pin && !(pin = system_pin())) {
-        set_pair("need_pin", "Open Settings > System > Remote Play > Link Device on the PS5 and enter its PIN.");
-        return NULL;
-    }
-    char user[64];
-    uint64_t id = account_id_named(user, sizeof user);
-    static ChiakiLog log;
-    chiaki_log_init(&log, CHIAKI_LOG_ERROR | CHIAKI_LOG_WARNING, rp_log, NULL);
-    ChiakiRegistInfo info;
-    memset(&info, 0, sizeof info);
-    info.target = CHIAKI_TARGET_PS5_1;
-    info.host = "127.0.0.1";
-    info.pin = pin;
-    for (int i = 0; i < 8; i++) // little-endian, as Sony's account id is sent
-        info.psn_account_id[i] = (uint8_t)(id >> (8 * i));
-    ChiakiRegist regist;
-    regist_done = 0;
-    if (!id)
-        why = "The console user has no account id (sign in to PSN once on this user).";
-    else if (chiaki_regist_start(&regist, &log, &info, regist_cb, NULL) != CHIAKI_ERR_SUCCESS)
-        why = "Pairing could not start.";
-    else {
-        for (int i = 0; i < 300 && !regist_done; i++) // 30 s
-            usleep(100000);
-        if (!regist_done)
-            chiaki_regist_stop(&regist);
-        chiaki_regist_fini(&regist);
-        if (regist_done != 1)
-            why = regist_done ? "The console refused the PIN. Open Link Device again and use the new PIN."
-                              : "The console did not answer. Is Link Device open?";
-    }
-    if (made_pin && rp_notify_pin_error)
-        rp_notify_pin_error(1); // close the console's pairing window again
-    if (!why) { // write it whole, then move it into place
-        char tmp[300];
-        snprintf(tmp, sizeof tmp, "%s.new", pair_file);
-        FILE *f = fopen(tmp, "wb");
-        int ok = f && fwrite(&regist_host, sizeof regist_host, 1, f) == 1;
-        if (f)
-            ok &= fclose(f) == 0;
-        if (ok) {
-            chmod(tmp, 0600);
-            ok = rename(tmp, pair_file) == 0;
-        }
-        FILE *info = ok ? fopen(info_file, "w") : NULL;
-        if (info) {
-            fprintf(info, "%.63s\n%.63s\n%lld\n", regist_host.server_nickname, user, (long long)time(NULL));
-            fclose(info);
-        }
-        if (!ok)
-            why = "Could not save the pairing.";
-        memset(&regist_host, 0, sizeof regist_host); // the keys stay only in the file
-    }
-    LOG("remote play: pairing %s%s%s", why ? "failed: " : "done", why ? why : "", "");
-    set_pair(why ? "error" : "paired", why);
-    return NULL;
-}
-
-int bc_pair(const char *pin)
-{
-    char *end = NULL;
-    unsigned long n = pin && *pin ? strtoul(pin, &end, 10) : 0;
-    if (pin && *pin && (strlen(pin) != 8 || *end)) {
-        set_pair("error", "The PIN has 8 digits.");
-        return -1;
-    }
-    pthread_mutex_lock(&lock);
-    int busy = strcmp(pair_state, "pairing") == 0;
-    if (!busy)
-        snprintf(pair_state, sizeof pair_state, "pairing"), pair_error[0] = 0;
-    pthread_mutex_unlock(&lock);
-    if (busy)
-        return 0;
-    if (!chiaki_ready()) {
-        set_pair("error", "Remote Play could not start.");
-        return -1;
-    }
-    pthread_t t;
-    pthread_attr_t attr;
-    pthread_attr_init(&attr);
-    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-    if (pthread_create(&t, &attr, pair_main, (void *)(uintptr_t)n) != 0) {
-        set_pair("error", "Pairing could not start.");
-        return -1;
-    }
-    return 0;
-}
-
 int bc_start(void)
 {
     if (!voice_wanted()) {
         set_state("error", "Join a call first.");
         return -1;
     }
-    FILE *f = fopen(pair_file, "rb"); // access() refuses payloads on the console
-    if (!f) {
+    if (rp_used() < 0) {
         set_state("error", "Remote Play is not paired with this console.");
         return -1;
     }
-    fclose(f);
     want = 1;
     if (running)
         return 0;
