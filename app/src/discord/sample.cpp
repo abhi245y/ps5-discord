@@ -311,7 +311,7 @@ void apply_sample(Snapshot &s, const Request &r)
         s.prefs.set(r.content, r.value);
         return;
     }
-    if (r.kind == Request::Kind::sign_out)
+    if (r.kind == Request::Kind::sign_out || r.kind == Request::Kind::quit)
         return; // the sample account stays
     if (r.kind >= Request::Kind::voice_join)
     {

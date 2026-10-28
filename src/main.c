@@ -27,6 +27,7 @@
 #include "controller_voice.h"
 #include "broadcast.h"
 #include "http.h"
+#include "notify.h"
 #include "prefs.h"
 #include "rp_pair.h"
 #include "stream.h"
@@ -94,17 +95,31 @@ int core_sign_out(void)
     return (r.status >= 200 && r.status < 300) || r.status == 401 ? 0 : -1;
 }
 
-// After a sign out: Go Live gives the USB controller back, the call ends, the token goes
-// and the core quits. The app starts it again, at the QR code.
-void core_signed_out(void)
+// Quit (the app's Quit, or a sign out with forget_token): Go Live gives the USB
+// controller back and the call ends first. After a sign out the app starts the core
+// again, at the QR code.
+void core_quit(int forget_token)
 {
     stream_stop();
     bc_stop();
     for (int i = 0; i < 100 && strcmp(bc_state(), "off") != 0 && strcmp(bc_state(), "error") != 0; i++)
         usleep(100000);
     voice_leave();
-    remove(TOKEN_PATH);
+    if (forget_token)
+        remove(TOKEN_PATH);
     _exit(0);
+}
+
+// A message worth an alert (chat.c). On screen the app shows its own banner; otherwise
+// (a game covers the app, or the PS button closed it) the PS5's pop-up.
+static void alert(const char *text)
+{
+    if (web_app_on_screen() || !prefs_get("notify_system"))
+        return;
+    const char *b = bc_state();
+    if ((strcmp(b, "live") == 0 || strcmp(b, "starting") == 0) && !prefs_get("notify_live"))
+        return; // the stream shows the screen: viewers would read it
+    notify_system(text);
 }
 
 static int claim_instance(void)
@@ -153,6 +168,7 @@ int main(void)
     cv_init();
     rp_init(DATA_DIR);
     prefs_init(DATA_DIR);
+    chat_set_alert(alert);
     stream_init();
     if (tls_global_init() != 0) {
         LOG("tls init failed");

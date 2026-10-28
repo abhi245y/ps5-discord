@@ -592,10 +592,10 @@ int main()
         if (frames % 20 == 0)
         {
             poll_request();
-            if (quit_requested || collect_wait > kCollectSeconds)
+            if (quit_requested || client.quit_wanted() || collect_wait > kCollectSeconds)
             {
                 sys::log("[HUI] closing: %s",
-                         quit_requested ? "quit requested" : "tour evidence window over");
+                         quit_requested || client.quit_wanted() ? "quit requested" : "tour evidence window over");
                 voice_audio.stop();
                 pad.close();
                 sys::quit();

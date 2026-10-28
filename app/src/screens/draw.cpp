@@ -416,4 +416,23 @@ void mic_meter(DrawList &list, float x, float cy, float w, float level, bool mut
                           kOnline);
 }
 
+void confirm_card(DrawList &list, const Ink &ink, const std::string &title, const std::string &text,
+                  const char *yes)
+{
+    namespace ui = hui::ui;
+    list.rounded_rect({0, 0, 1920, 1080}, 0.0f, Color::rgb(0x0d0e12, 0.78f));
+    const Rect card{560.0f, 340.0f, 800.0f, 400.0f};
+    list.shadow(card, 28.0f, 50.0f, Color::rgb(0, 0.5f));
+    list.rounded_rect(card, 28.0f, style::kRaised);
+    ui::text(list, ink.fonts.display, title, card.x + 56.0f, card.y + 92.0f, 50.0f, style::kText);
+    ui::paragraph(list, ink.fonts.regular, text, card.x + 58.0f, card.y + 150.0f, 26.0f, card.w - 116.0f, 36.0f,
+                  style::kDim, 4, hui::gfx::Align::left);
+    const ui::Hint hints[] = {{ui::Button::cross, yes}, {ui::Button::circle, "Cancel"}};
+    ui::HintLayout layout;
+    layout.size = 34.0f;
+    layout.text_size = 23.0f;
+    layout.cy = card.y + card.h - 44.0f;
+    ui::draw_hints(list, ink.fonts, hint_glyphs(), hints, 2, card.x + card.w - 48.0f, true, layout);
+}
+
 } // namespace screens

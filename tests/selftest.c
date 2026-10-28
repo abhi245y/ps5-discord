@@ -158,6 +158,59 @@ static void test_chat(void)
     free(t);
 }
 
+// The "notify" the newest event got (chat.c notify_kind).
+static int last_notify(const char *message)
+{
+    cJSON *m = cJSON_Parse(message);
+    chat_dispatch("MESSAGE_CREATE", m);
+    cJSON_Delete(m);
+    char *e = chat_events_json(0, 0);
+    cJSON *j = cJSON_Parse(e), *ev = cJSON_GetObjectItem(j, "events");
+    int n = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(cJSON_GetArrayItem(ev, cJSON_GetArraySize(ev) - 1), "notify"));
+    cJSON_Delete(j);
+    free(e);
+    return n;
+}
+
+// Discord's notification settings, then the app's: 0 nothing, 1 server, 2 mention, 3 DM.
+static void test_notify(void)
+{
+    cJSON *ready = cJSON_Parse(
+        "{\"user\":{\"id\":\"1\",\"username\":\"me\"},"
+        "\"guilds\":[{\"id\":\"10\",\"properties\":{\"name\":\"G\",\"owner_id\":\"1\","
+        "\"default_message_notifications\":1},\"roles\":[{\"id\":\"10\",\"permissions\":\"3072\"}],"
+        "\"channels\":[{\"id\":\"11\",\"name\":\"general\",\"type\":0},"
+        "{\"id\":\"15\",\"name\":\"club\",\"type\":0}]}],"
+        "\"private_channels\":[{\"id\":\"20\",\"type\":1,\"recipient_ids\":[\"2\"]},"
+        "{\"id\":\"21\",\"type\":1,\"recipient_ids\":[\"2\"]}],"
+        "\"user_guild_settings\":{\"entries\":["
+        "{\"guild_id\":\"10\",\"muted\":false,\"message_notifications\":3,\"suppress_everyone\":true,"
+        "\"channel_overrides\":[{\"channel_id\":\"11\",\"muted\":false,\"message_notifications\":0},"
+        "{\"channel_id\":\"15\",\"muted\":true,\"mute_config\":{\"end_time\":\"2001-01-01T00:00:00+00:00\"},"
+        "\"message_notifications\":3}]},"
+        "{\"guild_id\":null,\"channel_overrides\":[{\"channel_id\":\"20\",\"muted\":true,\"mute_config\":null}]}]}}");
+    chat_dispatch("READY", ready);
+    cJSON_Delete(ready);
+    const char *bob = "\"author\":{\"id\":\"2\",\"username\":\"bob\"}";
+    char m[512];
+    snprintf(m, sizeof m, "{\"id\":\"50\",\"type\":0,\"guild_id\":\"10\",\"channel_id\":\"11\",\"content\":\"a\",%s}", bob);
+    assert(last_notify(m) == 1); // the channel says all messages; the app follows Discord
+    snprintf(m, sizeof m, "{\"id\":\"51\",\"type\":0,\"guild_id\":\"10\",\"channel_id\":\"15\",\"content\":\"b\",%s}", bob);
+    assert(last_notify(m) == 0); // its mute ran out; the server's default is mentions only
+    snprintf(m, sizeof m, "{\"id\":\"52\",\"type\":0,\"guild_id\":\"10\",\"channel_id\":\"15\",\"content\":\"<@1>\","
+             "\"mentions\":[{\"id\":\"1\"}],%s}", bob);
+    assert(last_notify(m) == 2);
+    snprintf(m, sizeof m, "{\"id\":\"53\",\"type\":0,\"guild_id\":\"10\",\"channel_id\":\"15\",\"content\":\"@everyone\","
+             "\"mention_everyone\":true,%s}", bob);
+    assert(last_notify(m) == 0); // @everyone suppressed for this server
+    snprintf(m, sizeof m, "{\"id\":\"54\",\"type\":7,\"guild_id\":\"10\",\"channel_id\":\"11\",\"content\":\"\",%s}", bob);
+    assert(last_notify(m) == 0); // a join, not a message
+    snprintf(m, sizeof m, "{\"id\":\"55\",\"type\":0,\"channel_id\":\"20\",\"content\":\"c\",%s}", bob);
+    assert(last_notify(m) == 0); // a muted DM
+    snprintf(m, sizeof m, "{\"id\":\"56\",\"type\":0,\"channel_id\":\"21\",\"content\":\"d\",%s}", bob);
+    assert(last_notify(m) == 3);
+}
+
 static cJSON *parse_free(char *s)
 {
     cJSON *j = cJSON_Parse(s);
@@ -527,6 +580,7 @@ static void test_audio(void)
 int main(void)
 {
     test_chat();
+    test_notify();
     test_ratelimit();
     test_ws_frame();
     test_zstream();

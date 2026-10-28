@@ -87,6 +87,10 @@ std::string compact(int n);
 // Controller glyphs for hint rows: each face button ringed in its own colour.
 hui::ui::GlyphStyle hint_glyphs();
 
+// A yes-or-no question over a dimmed screen: Cross does it (yes is its label), Circle cancels.
+void confirm_card(DrawList &list, const Ink &ink, const std::string &title, const std::string &text,
+                  const char *yes);
+
 // Up to 99, then "99+".
 std::string count_text(int count);
 

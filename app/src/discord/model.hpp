@@ -269,9 +269,8 @@ enum class Connection : std::uint8_t
     reconnecting,
 };
 
-// A message worth interrupting for: a DM, or a mention, that arrived live.
-// A live message worth a banner: a DM or a mention (Prefs::notify_dm), or any server
-// message (Prefs::notify_all).
+// A live message worth a banner, as the core judged it (Discord's mutes and levels,
+// then Prefs): a DM, a mention, or a server message.
 struct Notice
 {
     std::uint64_t seq = 0; // grows with each notice; 0 = none yet
@@ -281,7 +280,9 @@ struct Notice
     std::string place;     // "Raid Night · #general"; empty for a DM
     std::string text;
     User author;
+    int kind = 0;          // 1 a server message, 2 a mention of you, 3 a DM
     bool for_me = false;   // a DM or a mention of you
+    bool quiet = false;    // in the quiet hours: no sound
 };
 
 // The settings kept by the core (its /api/voice "prefs"), so they outlast the app.
@@ -290,7 +291,10 @@ struct Prefs
     int golive_quality = 0; // 0 720p30, 1 720p60, 2 1080p30, 3 1080p60
     int mic_gain = 5;       // 0..10, 5 = as captured
     bool notify_dm = true;
-    bool notify_all = false;
+    int notify_server = 1;     // 0 off, 1 as set in Discord, 2 every message
+    bool notify_system = true; // PS5 alerts while the app is not on screen
+    bool notify_live = false;  // ... also while Go Live is on
+    int quiet_hours = 0;       // 0 off, else a preset (screens/settings.cpp kQuiet)
 
     void set(const std::string &key, int value) // a set_pref request, applied here
     {
@@ -300,8 +304,14 @@ struct Prefs
             mic_gain = value;
         else if (key == "notify_dm")
             notify_dm = value != 0;
-        else if (key == "notify_all")
-            notify_all = value != 0;
+        else if (key == "notify_server")
+            notify_server = value;
+        else if (key == "notify_system")
+            notify_system = value != 0;
+        else if (key == "notify_live")
+            notify_live = value != 0;
+        else if (key == "quiet_hours")
+            quiet_hours = value;
     }
 };
 

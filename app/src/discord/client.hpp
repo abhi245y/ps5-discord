@@ -65,6 +65,7 @@ class Client
     std::vector<KeyPress> take_keys();
     // Development: raises a notice as if a DM had arrived (the toast's path, from the PC).
     void test_notice(const std::string &text);
+    bool quit_wanted() const { return quit_; }
 
   private:
     void run();
@@ -100,6 +101,7 @@ class Client
     std::int64_t last_mentions_ms_ = 0;
     std::int64_t last_voice_ms_ = 0; // a voice command zeroes it: the state comes back at once
     std::uint64_t notice_seq_ = 0; // Notice::seq, under mutex_
+    std::atomic<bool> quit_{false}; // a quit request went through: the app closes
     std::string browser_error_; // client thread only; retained across state polls
     bool prefetched_ = false; // recent conversations' history asked for once after sign-in
     std::atomic<bool> ready_{false}; // read by the image thread too

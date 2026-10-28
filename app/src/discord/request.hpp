@@ -36,6 +36,7 @@ struct Request
         voice_broadcast, // Go Live on or off: on
         set_pref,     // a console-side setting (Prefs): content = its key, value
         sign_out,     // end the session with Discord and forget it on the console
+        quit,         // stop the core (no alerts or calls) and close the app
     };
     Kind kind = Kind::open_channel;
     std::string guild_id; // empty for a DM

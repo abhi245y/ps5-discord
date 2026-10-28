@@ -856,6 +856,7 @@ void Client::test_notice(const std::string &text)
     n.author = snapshot_.me;
     n.title = snapshot_.me.name + " (test)";
     n.text = text;
+    n.kind = 3;
     n.for_me = true;
     snapshot_.notices.push_back(std::move(n));
     if (snapshot_.notices.size() > 8)
@@ -1124,7 +1125,10 @@ void Client::poll_voice()
             prefs.golive_quality = std::clamp(static_cast<int>(p.value("golive_quality", 0.0)), 0, 3);
             prefs.mic_gain = std::clamp(static_cast<int>(p.value("mic_gain", 5.0)), 0, 10);
             prefs.notify_dm = p.value("notify_dm", 1.0) != 0.0;
-            prefs.notify_all = p.value("notify_all", 0.0) != 0.0;
+            prefs.notify_server = std::clamp(static_cast<int>(p.value("notify_server", 1.0)), 0, 2);
+            prefs.notify_system = p.value("notify_system", 1.0) != 0.0;
+            prefs.notify_live = p.value("notify_live", 0.0) != 0.0;
+            prefs.quiet_hours = std::clamp(static_cast<int>(p.value("quiet_hours", 0.0)), 0, 4);
         }
         if (v.contains("speaking") && v["speaking"].is_array())
             for (const json &id : v["speaking"])
@@ -1183,20 +1187,21 @@ bool Client::poll_events()
         }
         if (type == "MESSAGE_CREATE")
         {
-            // Someone else's message becomes a notice, open channel or not: a DM or a mention
-            // when those are on, any server message when every one is.
+            // The core says what a message is worth (Discord's mutes and levels, then the
+            // settings): a notice, open channel or not. One older than a few seconds came in
+            // a backlog (the app was behind a game, where the PS5 alert already showed it).
             const Message m = message_from(ev, snapshot_.me.id);
             const std::string guild = text(ev, "guild_id");
-            const bool for_me = guild.empty() || m.mentions_me;
-            const Prefs &prefs = snapshot_.prefs;
-            if (m.author_id != snapshot_.me.id && !m.author_id.empty() &&
-                (for_me ? prefs.notify_dm : prefs.notify_all))
+            const int kind = static_cast<int>(ev.value("notify", 0.0));
+            if (kind > 0 && (m.time_ms == 0 || now_ms() - m.time_ms < 15000))
             {
                 Notice n;
                 n.seq = ++notice_seq_;
                 n.guild_id = guild;
                 n.channel_id = channel;
-                n.for_me = for_me;
+                n.kind = kind;
+                n.for_me = kind >= 2;
+                n.quiet = ev.value("quiet", false);
                 n.author = ev.contains("author") && ev["author"].is_object() ? user_from(ev["author"]) : User{};
                 n.title = n.author.name;
                 for (const Guild &g : snapshot_.guilds)
@@ -1524,6 +1529,10 @@ void Client::handle(const Request &request)
         last_voice_ms_ = 0;
         break;
     }
+    case Request::Kind::quit: // the core stops (Go Live and the call first), then the app closes
+        hui::sys::log("[CLIENT] /api/quit answered %d", http(port_, "POST", "/api/quit").status);
+        quit_ = true;
+        break;
     case Request::Kind::sign_out: {
         // The core ends the session with Discord, forgets it and quits; poll_state starts
         // it again, at the QR code.

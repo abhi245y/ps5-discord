@@ -16,8 +16,11 @@ typedef struct {
 static pref prefs[] = {
     {"golive_quality", 0, 3, 0}, // broadcast.h bc_profile: 720p30, 720p60, 1080p30, 1080p60
     {"mic_gain", 0, 10, 5},      // 5 = as captured, 10 = twice
-    {"notify_dm", 0, 1, 1},      // banners for DMs and mentions (the app reads these two)
-    {"notify_all", 0, 1, 0},     // banners for every server message
+    {"notify_dm", 0, 1, 1},      // DMs and mentions (chat.c notify_kind)
+    {"notify_server", 0, 2, 1},  // server messages: 0 off, 1 as set in Discord, 2 every one
+    {"notify_system", 0, 1, 1},  // PS5 alerts while the app is not on screen
+    {"notify_live", 0, 1, 0},    // ... and while Go Live is on (they would be on the stream)
+    {"quiet_hours", 0, 4, 0},    // notify.c: no sounds, no PS5 alerts
 };
 #define COUNT ((int)(sizeof prefs / sizeof *prefs))
 

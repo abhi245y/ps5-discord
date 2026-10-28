@@ -504,7 +504,7 @@ void Home::draw(const discord::Snapshot &s, DrawList &list) const
 
     ui::Hint hints[5] = {
         {ui::Button::cross, "Select"},
-        {ui::Button::circle, "Back"},
+        {ui::Button::circle, "Quit"},
         {ui::Button::l1, "Tabs", ui::Button::r1},
         {ui::Button::options, "Settings"},
     };

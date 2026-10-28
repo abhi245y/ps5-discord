@@ -92,6 +92,9 @@ constexpr app::TourStep kTour[] = {
     {0.4f, action_bit(Action::back)},
     {0.4f, action_bit(Action::back)},
     {0.6f, 0, Direction::none, "home-after-settings"},
+    {0.4f, action_bit(Action::back)},
+    {0.6f, 0, Direction::none, "home-quit"},
+    {0.4f, action_bit(Action::back)},
     {0.5f, 0, Direction::right},
     {0.6f, 0, Direction::right, "home-rooms-scroll"},
     {0.5f, 0, Direction::down},
@@ -248,6 +251,27 @@ class DiscordApp final : public app::Concept
             }
             context_.settings_changed |= changed;
         }
+        else if (quitting_)
+        {
+            if (input.is_pressed(Action::confirm))
+            {
+                discord::Request r;
+                r.kind = discord::Request::Kind::quit;
+                requests.push_back(r);
+                feedback.play(hui::audio::Cue::select);
+                quitting_ = false;
+            }
+            else if (input.is_pressed(Action::back))
+            {
+                quitting_ = false;
+                feedback.play(hui::audio::Cue::modal_close);
+            }
+        }
+        else if (route_ == Route::home && input.is_pressed(Action::back)) // Circle on Home: quit?
+        {
+            quitting_ = true;
+            feedback.play(hui::audio::Cue::modal_open);
+        }
         else if (route_ == Route::home && input.is_pressed(Action::menu)) // Options: settings
             open_settings(feedback);
         else if (route_ == Route::home)
@@ -358,6 +382,18 @@ class DiscordApp final : public app::Concept
             open_voice(context_.snapshot.voice.channel_id);
             feedback.play(hui::audio::Cue::open);
         }
+        // Touchpad: the newest banner's chat.
+        if (input.is_pressed(Action::touch) && !banners_.empty() &&
+            context_.snapshot.connection == discord::Connection::ready)
+        {
+            const discord::Notice n = banners_.front().notice;
+            banners_.erase(banners_.begin());
+            chat_.open(context_.snapshot, n.guild_id, n.channel_id, requests);
+            route_ = Route::chat;
+            from_server_ = false;
+            fade_.snap(0.0f);
+            feedback.play(hui::audio::Cue::open);
+        }
         update_banners(dt, feedback);
         fade_.target = 1.0f;
         fade_.update(dt, 16.0f);
@@ -389,6 +425,8 @@ class DiscordApp final : public app::Concept
         if (const discord::Call *ring = discord::ringing_call(context_.snapshot);
             ring && ring->channel_id != dismissed_ring_)
             draw_incoming(frame.scene, ink_, context_.snapshot, *ring);
+        if (quitting_)
+            confirm_card(frame.scene, ink_, "Quit Discord?", kQuitText, "Quit");
         for (int i = static_cast<int>(banners_.size()) - 1; i >= 0; --i)
             draw_banner(frame.scene, banners_[i]);
     }
@@ -420,6 +458,7 @@ class DiscordApp final : public app::Concept
     std::string dismissed_ring_;     // a ring answered or declined: hidden until it ends
     std::string cued_ring_;          // the ring whose chime has played
     bool from_server_ = false; // the open chat came from a server's page
+    bool quitting_ = false;    // the Quit question is up (Circle on Home)
     float browser_cooldown_ = 0.0f;
     std::string waiting_dm_; // a friend whose new DM is being made, opened when it lands
     // Banners at the top right, newest on top: DMs and mentions, and every server message
@@ -461,10 +500,13 @@ class DiscordApp final : public app::Concept
             banners_.insert(banners_.begin(), b);
             if (banners_.size() > kBannerMax)
                 banners_.pop_back();
-            // Server chatter chimes softly; a DM or a mention is the full chime.
+            // Each kind its own chime: a DM, a mention a little higher, server chatter low and
+            // soft. None in the quiet hours.
             // ponytail: one chime per message; a busy server with every message on is noisy,
             // rate-limit the soft chime if that bites.
-            feedback.play(hui::audio::Cue::notify, 1.0f, 0.0f, n.for_me ? 1.0f : 0.35f);
+            if (!n.quiet)
+                feedback.play(hui::audio::Cue::notify, n.kind == 3 ? 1.0f : n.kind == 2 ? 1.2f : 0.85f, 0.0f,
+                              n.kind == 1 ? 0.35f : 1.0f);
         }
         const float ease = context_.settings.reduced_motion ? 1.0f : std::min(1.0f, dt * 14.0f);
         for (std::size_t i = 0; i < banners_.size(); ++i)
@@ -491,6 +533,7 @@ class DiscordApp final : public app::Concept
         avatar(list, ink_, n.author, r.x + 64.0f, r.cy(), 36.0f, false);
         if (b.count > 1)
             count_badge(list, ink_, b.count, r.x + 104.0f, r.cy() + 26.0f, 30.0f);
+        const bool newest = &b == &banners_.front(); // the touchpad opens it
         const float text_x = r.x + 120.0f, text_w = r.w - 148.0f;
         const std::string title = fit(ink_.fonts.semibold, n.title, 25.0f, text_w * 0.5f);
         hui::ui::text(list, ink_.fonts.semibold, title, text_x, r.y + 46.0f, 25.0f, style::kText);
@@ -498,8 +541,17 @@ class DiscordApp final : public app::Concept
         const std::string place = n.place.empty() ? "Direct message" : n.place;
         hui::ui::text(list, ink_.fonts.regular, fit(ink_.fonts.regular, place, 21.0f, text_w - title_w),
                       r.x + r.w - 28.0f, r.y + 45.0f, 21.0f, style::kFaint, hui::gfx::Align::right);
-        hui::ui::text(list, ink_.fonts.regular, fit(ink_.fonts.regular, n.text, 23.0f, text_w), text_x, r.y + 82.0f,
-                      23.0f, style::kDim);
+        hui::ui::text(list, ink_.fonts.regular, fit(ink_.fonts.regular, n.text, 23.0f, text_w - (newest ? 110.0f : 0.0f)),
+                      text_x, r.y + 82.0f, 23.0f, style::kDim);
+        if (newest)
+        {
+            const hui::ui::Hint open[] = {{hui::ui::Button::touchpad, "Open"}};
+            hui::ui::HintLayout layout;
+            layout.size = 26.0f;
+            layout.text_size = 19.0f;
+            layout.cy = r.y + 75.0f;
+            hui::ui::draw_hints(list, ink_.fonts, hint_glyphs(), open, 1, r.x + r.w - 28.0f, true, layout);
+        }
         list.pop_opacity();
     }
     // Settings, reached from the current screen (Circle returns there).

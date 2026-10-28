@@ -575,6 +575,16 @@ static void api_dlsym(int c, const char *query)
     reply(c, "200 OK", "application/json", json, strlen(json));
 }
 
+// The app polls every few seconds while it is on screen; a game in front suspends it
+// (or the PS button closes it), and then it is silent. Only the app sends the native
+// header. The core stays either way, for alerts and calls; the app's Quit stops it.
+static volatile time_t app_seen;
+
+int web_app_on_screen(void)
+{
+    return app_seen && time(NULL) - app_seen <= 8;
+}
+
 // The line is among the headers: body text cannot impersonate one.
 static const char *header_line(const char *req, const char *body, const char *line)
 {
@@ -644,6 +654,8 @@ static void handle(int c, int local)
         reply(c, "403 Forbidden", "text/plain", "native app only", 15);
         return;
     }
+    if (local && header_line(req, body, "\r\nX-Discord-Native: 1\r\n"))
+        app_seen = time(NULL);
     if (!local && strncmp(path, "/api/", 5) == 0 && strcmp(path, "/api/state") != 0 &&
         strcmp(path, "/api/quit") != 0) {
         reply(c, "403 Forbidden", "text/plain", "local only", 10);
@@ -715,7 +727,7 @@ static void handle(int c, int local)
         } else {
             reply(c, "200 OK", "application/json", "{\"ok\":true}", 11);
             close(c);
-            core_signed_out();
+            core_quit(1);
         }
     } else if (post && strcmp(path, "/api/edit") == 0) {
         api_change(c, body, 0);
@@ -725,9 +737,9 @@ static void handle(int c, int local)
         api_dlsym(c, query);
     } else if (post && strcmp(path, "/api/quit") == 0) {
         reply(c, "200 OK", "application/json", "{\"ok\":true}", 11);
-        LOG("quit requested from the web UI");
+        LOG("quit requested");
         close(c);
-        _exit(0);
+        core_quit(0);
     } else {
         reply(c, "404 Not Found", "text/plain", "not found", 9);
     }
@@ -759,34 +771,9 @@ static void *serve_one(void *arg)
 // accept loop serves it itself, which also slows accepting down.
 #define MAX_CONNECTIONS 8
 
-#if CORE_FOLLOWS_APP
-// Test builds: the app starts the core, so the core leaves with it. The app
-// polls every few seconds; once it has been seen, a long silence means it closed.
-// A game suspends the app the same way, so a wanted call keeps the core.
-#define APP_GONE_SECONDS 30
-static volatile time_t app_seen;
-
-static void *follow_app(void *arg)
-{
-    (void)arg;
-    for (;;) {
-        sleep(5);
-        if (app_seen && time(NULL) - app_seen > APP_GONE_SECONDS && !browser_auth_keepalive() &&
-            !voice_wanted()) {
-            LOG("the app closed: the core leaves with it");
-            _exit(0);
-        }
-    }
-}
-#endif
 
 void web_serve(int fd)
 {
-#if CORE_FOLLOWS_APP
-    pthread_t follower;
-    if (pthread_create(&follower, NULL, follow_app, NULL) == 0)
-        pthread_detach(follower);
-#endif
     for (;;) {
         struct sockaddr_in peer;
         socklen_t plen = sizeof peer;
@@ -794,10 +781,6 @@ void web_serve(int fd)
         if (c < 0)
             continue;
         int local = peer.sin_family == AF_INET && ntohl(peer.sin_addr.s_addr) >> 24 == 127;
-#if CORE_FOLLOWS_APP
-        if (local)
-            app_seen = time(NULL);
-#endif
         struct timeval tv = {.tv_sec = 5};
         setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
         setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);

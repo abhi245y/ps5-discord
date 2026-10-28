@@ -33,10 +33,8 @@ enum class Act
     none,
     pair,
     sign_out,
-    quality,
-    mic_gain,
-    notify_dm,
-    notify_all,
+    quit,
+    pref, // a console-side setting (Row::key, discord::Prefs)
     ui_volume,
     sfx_volume,
     motion,
@@ -63,11 +61,35 @@ struct Row
     Act act = Act::none;
     int percent = 10;   // a slider's step in percent
     bool meter = false; // the mic level in place of the description, while in a call
+    const char *key = nullptr;             // Act::pref: the setting
+    const char *const *options = nullptr;  // a choice's values, level indexes them
+    int count = 0;
 };
 
 // Prefs::golive_quality. Remote Play streams 1080p at most; Discord wants H.264.
 constexpr const char *kQualities[] = {"720p · 30 fps", "720p · 60 fps", "1080p · 30 fps", "1080p · 60 fps"};
-constexpr int kQualityCount = sizeof kQualities / sizeof *kQualities;
+// Prefs::notify_server and quiet_hours (the core's notify.c has the same hours).
+constexpr const char *kServerMessages[] = {"Off", "As in Discord", "Every message"};
+constexpr const char *kQuiet[] = {"Off", "22:00 – 07:00", "23:00 – 08:00", "00:00 – 08:00", "21:00 – 06:00"};
+
+template <int N>
+Row choice_row(const char *title, const char *desc, const char *key, const char *const (&options)[N], int level)
+{
+    Row r{Kind::choice, title, desc, options[std::clamp(level, 0, N - 1)], std::clamp(level, 0, N - 1)};
+    r.act = Act::pref;
+    r.key = key;
+    r.options = options;
+    r.count = N;
+    return r;
+}
+
+Row toggle_row(const char *title, const char *desc, const char *key, bool on)
+{
+    Row r{Kind::toggle, title, desc, "", 0, on};
+    r.act = Act::pref;
+    r.key = key;
+    return r;
+}
 
 struct Section
 {
@@ -98,6 +120,8 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
             {Kind::button, "Sign out",
              s.sign_out_error.empty() ? "Ends this session with Discord and forgets it here." : s.sign_out_error,
              "Sign out", 0, false, false, Act::sign_out},
+            {Kind::button, "Quit Discord", "Stops calls and alerts. Closing with the PS button keeps them on.", "Quit",
+             0, false, false, Act::quit},
         };
     case 1: {
         Row pair;
@@ -121,23 +145,28 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
             pair.desc = "Pair a console user once so Go Live can show your game.";
         }
         Row mic{Kind::slider, "Input volume", "How loud you are in calls. Join one to see your level here.", "",
-                s.prefs.mic_gain, false, false, Act::mic_gain};
+                s.prefs.mic_gain, false, false, Act::pref};
+        mic.key = "mic_gain";
         mic.percent = 20;
         mic.meter = v.active();
         return {
             mic,
             pair,
-            {Kind::choice, "Go Live quality", "From the next Go Live on. Above 720p · 30 fps may need Nitro.",
-             kQualities[std::clamp(s.prefs.golive_quality, 0, kQualityCount - 1)], s.prefs.golive_quality, false,
-             false, Act::quality},
+            choice_row("Go Live quality", "From the next Go Live on. Above 720p · 30 fps may need Nitro.",
+                       "golive_quality", kQualities, s.prefs.golive_quality),
         };
     }
     case 2:
         return {
-            {Kind::toggle, "Direct messages and mentions", "A banner when someone writes to you or mentions you.", "", 0,
-             s.prefs.notify_dm, false, Act::notify_dm},
-            {Kind::toggle, "Every server message", "A quieter banner for each message in your servers.", "", 0,
-             s.prefs.notify_all, false, Act::notify_all},
+            toggle_row("Direct messages and mentions", "DMs and @mentions. Chats muted in Discord stay quiet.", "notify_dm", s.prefs.notify_dm),
+            choice_row("Server messages", "As in Discord follows each server's notification setting.",
+                       "notify_server", kServerMessages, s.prefs.notify_server),
+            toggle_row("PS5 alerts while playing", "When a game covers the app, the PS5 shows who wrote.",
+                       "notify_system", s.prefs.notify_system),
+            toggle_row("Alerts during Go Live", "Off keeps your messages off your stream.", "notify_live",
+                       s.prefs.notify_live),
+            choice_row("Quiet hours", "No sounds and no PS5 alerts; banners in the app still show.", "quiet_hours",
+                       kQuiet, s.prefs.quiet_hours),
         };
     case 3:
         return {
@@ -253,7 +282,7 @@ void SettingsScreen::open()
     section_ = 0;
     row_ = 0;
     in_rows_ = false;
-    signing_out_ = false;
+    confirm_ = Confirm::none;
     pair_ = Pair::none;
 }
 
@@ -468,20 +497,19 @@ bool SettingsScreen::update(const discord::Snapshot &s, const hui::InputFrame &i
         r.value = value;
         requests.push_back(r);
     };
-    if (signing_out_)
+    if (confirm_ != Confirm::none)
     {
         if (input.is_pressed(Action::confirm))
         {
             discord::Request r;
-            r.kind = discord::Request::Kind::sign_out;
+            r.kind = confirm_ == Confirm::quit ? discord::Request::Kind::quit : discord::Request::Kind::sign_out;
             requests.push_back(r);
             feedback.play(hui::audio::Cue::select);
-            signing_out_ = false;
             open();
         }
         else if (input.is_pressed(Action::back))
         {
-            signing_out_ = false;
+            confirm_ = Confirm::none;
             feedback.play(hui::audio::Cue::modal_close);
         }
         return true;
@@ -552,7 +580,7 @@ bool SettingsScreen::update(const discord::Snapshot &s, const hui::InputFrame &i
     }
     if (is_slider && (input.nav == Direction::left || input.nav == Direction::right))
     {
-        const int top = row.kind == Kind::choice ? kQualityCount - 1 : 10;
+        const int top = row.kind == Kind::choice ? row.count - 1 : 10;
         const int next = std::clamp(row.level + (input.nav == Direction::right ? 1 : -1), 0, top);
         if (next == row.level)
             feedback.play(hui::audio::Cue::error, 1.0f, 0.0f, 0.5f);
@@ -564,7 +592,7 @@ bool SettingsScreen::update(const discord::Snapshot &s, const hui::InputFrame &i
                 changed = true;
             }
             else
-                set_pref(row.act == Act::quality ? "golive_quality" : "mic_gain", next);
+                set_pref(row.key, next);
             feedback.play(hui::audio::Cue::slider);
         }
     }
@@ -582,17 +610,21 @@ bool SettingsScreen::update(const discord::Snapshot &s, const hui::InputFrame &i
             changed = true;
             feedback.play(hui::audio::Cue::toggle);
             break;
-        case Act::notify_dm:
-        case Act::notify_all:
-            set_pref(row.act == Act::notify_dm ? "notify_dm" : "notify_all", row.on ? 0 : 1);
-            feedback.play(hui::audio::Cue::toggle);
-            break;
-        case Act::quality: // Cross steps through them too
-            set_pref("golive_quality", (row.level + 1) % kQualityCount);
-            feedback.play(hui::audio::Cue::slider);
+        case Act::pref:
+            if (row.kind == Kind::toggle)
+            {
+                set_pref(row.key, row.on ? 0 : 1);
+                feedback.play(hui::audio::Cue::toggle);
+            }
+            else if (row.kind == Kind::choice) // Cross steps through them too
+            {
+                set_pref(row.key, (row.level + 1) % row.count);
+                feedback.play(hui::audio::Cue::slider);
+            }
             break;
         case Act::sign_out:
-            signing_out_ = true;
+        case Act::quit:
+            confirm_ = row.act == Act::quit ? Confirm::quit : Confirm::sign_out;
             feedback.play(hui::audio::Cue::modal_open);
             break;
         case Act::pair:
@@ -673,7 +705,7 @@ void SettingsScreen::draw(const discord::Snapshot &s, const hui::Settings &app, 
             const float w = 300.0f;
             ui::text(list, ink_.fonts.regular, row.value, right - w * 0.5f, cy + 9.0f, 26.0f, kText,
                      gfx::Align::center);
-            chevron(list, right - 6.0f, cy, row.level < kQualityCount - 1 ? kDim : kLine);
+            chevron(list, right - 6.0f, cy, row.level < row.count - 1 ? kDim : kLine);
             list.line(right - w + 6.0f, cy - 10.0f, right - w - 4.0f, cy, 3.0f, row.level > 0 ? kDim : kLine);
             list.line(right - w - 4.0f, cy, right - w + 6.0f, cy + 10.0f, 3.0f, row.level > 0 ? kDim : kLine);
             break;
@@ -713,27 +745,13 @@ void SettingsScreen::draw(const discord::Snapshot &s, const hui::Settings &app, 
 
     if (pair_ != Pair::none)
         draw_pair(s, list);
-    if (signing_out_)
-        draw_sign_out(list);
-}
-
-void SettingsScreen::draw_sign_out(DrawList &list) const
-{
-    list.rounded_rect({0, 0, 1920, 1080}, 0.0f, Color::rgb(0x0d0e12, 0.78f));
-    const Rect card{560.0f, 340.0f, 800.0f, 400.0f};
-    list.shadow(card, 28.0f, 50.0f, Color::rgb(0, 0.5f));
-    list.rounded_rect(card, 28.0f, kRaised);
-    ui::text(list, ink_.fonts.display, "Sign out?", card.x + 56.0f, card.y + 92.0f, 50.0f, kText);
-    ui::paragraph(list, ink_.fonts.regular,
-                  "Discord ends this console's session and the app forgets it. A call or Go Live stops. To come "
-                  "back, scan the QR code again.",
-                  card.x + 58.0f, card.y + 150.0f, 26.0f, card.w - 116.0f, 36.0f, kDim, 4, gfx::Align::left);
-    const ui::Hint hints[] = {{ui::Button::cross, "Sign out"}, {ui::Button::circle, "Cancel"}};
-    ui::HintLayout layout;
-    layout.size = 34.0f;
-    layout.text_size = 23.0f;
-    layout.cy = card.y + card.h - 44.0f;
-    ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints, 2, card.x + card.w - 48.0f, true, layout);
+    if (confirm_ == Confirm::sign_out)
+        confirm_card(list, ink_, "Sign out?",
+                     "Discord ends this console's session and the app forgets it. A call or Go Live stops. To "
+                     "come back, scan the QR code again.",
+                     "Sign out");
+    else if (confirm_ == Confirm::quit)
+        confirm_card(list, ink_, "Quit Discord?", kQuitText, "Quit");
 }
 
 void SettingsScreen::draw_pair(const discord::Snapshot &s, DrawList &list) const
