@@ -31,7 +31,7 @@ OPUS_INCLUDES := -I$(OPUS)/include -I$(OPUS)/celt -I$(OPUS)/silk -I$(OPUS)/silk/
 
 DS5 := tools/ds5-usb-bridge
 APP_SRC := src/main.c src/log.c src/status.c src/web.c src/chat.c src/gateway.c src/remote_auth.c src/browser_auth.c src/browser_storage.c src/http.c src/props.c src/ws.c src/tls.c src/zstream.c src/ratelimit.c \
-	src/voice.c src/voice_proto.c src/voice_audio.c src/controller_voice.c src/broadcast.c src/rp_pair.c src/stream.c $(DS5)/pcm_stream.c
+	src/voice.c src/voice_proto.c src/voice_audio.c src/controller_voice.c src/broadcast.c src/rp_pair.c src/prefs.c src/stream.c $(DS5)/pcm_stream.c
 # Controller voice (console only): a loopback Remote Play session (vendored chiaki-ng,
 # third_party/README.md) and the DualSense USB runtime from tools/ds5-usb-bridge.
 CHIAKI := third_party/chiaki-ng
@@ -130,7 +130,7 @@ test: build/host/selftest build/host/browser-storage-test build/host/client-read
 
 # The external sender is libdave's test helper (C++, tests/dave): it signs the group's proposals.
 # The media leg links the engine's packet code, Opus and mbedTLS (GCM) as objects.
-DAVE_TEST_LIB = build/host/src/voice_audio.o build/host/$(DS5)/pcm_stream.o build/host/src/voice_proto.o build/host/$(CJSON)/cJSON.o \
+DAVE_TEST_LIB = build/host/src/voice_audio.o build/host/src/prefs.o build/host/$(DS5)/pcm_stream.o build/host/src/voice_proto.o build/host/$(CJSON)/cJSON.o \
 	$(patsubst %.c,build/host/%.o,$(OPUS_SRC) $(wildcard $(MBED)/library/*.c))
 build/host/dave-test: tests/dave_session.c tests/dave/external_sender.cpp tests/dave/external_sender_wrapper.cpp \
 		$(DAVE_TEST_LIB)
@@ -148,7 +148,7 @@ build/host/browser-storage-test: tests/browser_storage.c src/browser_storage.c $
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ $^ -lm
 build/host/selftest: tests/selftest.c src/ws.c src/tls.c src/zstream.c src/log.c src/status.c src/chat.c src/ratelimit.c \
-		src/voice.c src/voice_proto.c src/voice_audio.c $(DS5)/pcm_stream.c $(OPUS_SRC) $(HOST_DAVE_SRC) \
+		src/voice.c src/voice_proto.c src/voice_audio.c src/prefs.c $(DS5)/pcm_stream.c $(OPUS_SRC) $(HOST_DAVE_SRC) \
 		$(CJSON)/cJSON.c $(QRGEN)/qrcodegen.c $(ZLIB_SRC) \
 		$(ZLIB)/deflate.c $(ZLIB)/trees.c $(wildcard $(MBED)/library/*.c) build/ca_bundle.c
 	@mkdir -p $(@D)

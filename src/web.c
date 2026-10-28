@@ -23,6 +23,7 @@
 #include "voice_audio.h"
 #include "controller_voice.h"
 #include "broadcast.h"
+#include "prefs.h"
 #include "rp_pair.h"
 #include "stream.h"
 #include "browser_auth.h"
@@ -483,6 +484,20 @@ static void api_remoteplay(int c, const char *path, const char *body)
         refuse(c, "400 Bad Request", strcmp(path, "/api/remoteplay/pair") == 0 ? rp_pair_error() : "No such pairing.");
 }
 
+// The console-side settings (prefs.h): {"golive_quality": 2, ...}, any of them.
+static void api_prefs(int c, const char *body)
+{
+    cJSON *in = cJSON_Parse(body ? body : "");
+    int ok = cJSON_IsObject(in) && in->child;
+    for (cJSON *k = in ? in->child : NULL; ok && k; k = k->next)
+        ok = cJSON_IsNumber(k) && prefs_set(k->string, k->valueint) == 0;
+    cJSON_Delete(in);
+    if (ok)
+        reply_ok(c);
+    else
+        refuse(c, "400 Bad Request", "Unknown setting or value out of range.");
+}
+
 // GET /api/voice: the call, plus the controller audio, the pick and the broadcast.
 static char *voice_json(void)
 {
@@ -531,6 +546,7 @@ static char *voice_json(void)
     cJSON_AddBoolToObject(bc, "paired", used >= 0);
     cJSON_AddStringToObject(bc, "pair_state", rp_pair_state());
     cJSON_AddStringToObject(bc, "pair_error", rp_pair_error());
+    cJSON_AddItemToObject(o, "prefs", prefs_json());
     s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     return s;
@@ -690,6 +706,13 @@ static void handle(int c, int local)
     } else if (post && (strcmp(path, "/api/remoteplay/pair") == 0 || strcmp(path, "/api/remoteplay/unpair") == 0 ||
                         strcmp(path, "/api/remoteplay/use") == 0)) {
         api_remoteplay(c, path, body);
+    } else if (post && strcmp(path, "/api/prefs") == 0) {
+        api_prefs(c, body);
+    } else if (post && strcmp(path, "/api/signout") == 0) {
+        LOG("sign out requested");
+        reply(c, "200 OK", "application/json", "{\"ok\":true}", 11);
+        close(c);
+        core_sign_out();
     } else if (post && strcmp(path, "/api/edit") == 0) {
         api_change(c, body, 0);
     } else if (post && strcmp(path, "/api/delete") == 0) {

@@ -17,6 +17,7 @@ void bc_set_sink(const bc_sink *sink); // NULL: frames are only counted
 int bc_start(void); // needs a call and a pairing; 0 when accepted, -1 with bc_error()
 void bc_stop(void);
 void bc_request_keyframe(void); // a viewer lost the picture
+void bc_profile(int *w, int *h, int *fps); // the picture's size and rate (prefs golive_quality)
 const char *bc_state(void); // "off", "starting", "live" or "error"
 const char *bc_error(void); // why it stopped or could not start; "" when none
 

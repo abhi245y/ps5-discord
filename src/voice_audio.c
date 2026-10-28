@@ -15,6 +15,7 @@
 
 #include "log.h"
 #include "pcm_stream.h"
+#include "prefs.h"
 #include "voice_proto.h"
 
 // ponytail: fixed thresholds, tuned by ear. add a knob when a mic needs another level.
@@ -473,8 +474,15 @@ static void speak_stop(void)
 }
 
 // One 20 ms mic frame. The VAD decides; SPEAKING goes out before the first audio.
-static void mic_frame(const int16_t *pcm, uint8_t *scratch)
+// The input volume (prefs mic_gain) comes first, so the VAD hears what the call will.
+static void mic_frame(const int16_t *in, uint8_t *scratch)
 {
+    int16_t pcm[VAU_FRAME];
+    int gain = prefs_get("mic_gain"); // 5 = as captured
+    for (int i = 0; i < VAU_FRAME; i++) {
+        int v = in[i] * gain / 5;
+        pcm[i] = (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v);
+    }
     int sp = vau_vad_frame(&vad, pcm, VAU_FRAME);
     if (sp && !vad_on) {
         vad_on = 1;

@@ -26,6 +26,8 @@
 #include "voice.h"
 #include "controller_voice.h"
 #include "broadcast.h"
+#include "http.h"
+#include "prefs.h"
 #include "rp_pair.h"
 #include "stream.h"
 #include "tls.h"
@@ -80,6 +82,23 @@ static void login(char *token, size_t cap)
     }
 }
 
+// POST /api/signout (web.c). Discord ends the session first, so the token is dead even
+// if a copy was taken; then the console forgets it and the core quits. The app starts it
+// again, at the QR code. Go Live stops first: it gives the USB controller back.
+void core_sign_out(void)
+{
+    stream_stop();
+    bc_stop();
+    for (int i = 0; i < 100 && strcmp(bc_state(), "off") != 0 && strcmp(bc_state(), "error") != 0; i++)
+        usleep(100000);
+    voice_leave();
+    http_response r = http_post_json("/auth/logout", "{\"provider\":null,\"voip_provider\":null}", chat_token());
+    LOG("sign out: Discord answered %d", r.status);
+    free(r.body);
+    remove(TOKEN_PATH);
+    _exit(0);
+}
+
 static int claim_instance(void)
 {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -125,6 +144,7 @@ int main(void)
     voice_init(DATA_DIR);
     cv_init();
     rp_init(DATA_DIR);
+    prefs_init(DATA_DIR);
     stream_init();
     if (tls_global_init() != 0) {
         LOG("tls init failed");

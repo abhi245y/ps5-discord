@@ -18,6 +18,7 @@
 #include <time.h>
 
 #include "log.h"
+#include "prefs.h"
 #include "rp_pair.h"
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
@@ -46,6 +47,19 @@ const char *bc_error(void)
 void bc_set_sink(const bc_sink *s)
 {
     sink = s;
+}
+
+// The prefs' golive_quality picks one; a broadcast keeps the one it started with.
+static const struct {
+    int w, h, fps;
+} profiles[] = {{1280, 720, 30}, {1280, 720, 60}, {1920, 1080, 30}, {1920, 1080, 60}};
+static volatile int profile;
+
+void bc_profile(int *w, int *h, int *fps)
+{
+    *w = profiles[profile].w;
+    *h = profiles[profile].h;
+    *fps = profiles[profile].fps;
 }
 
 #ifndef __PROSPERO__
@@ -256,9 +270,12 @@ static const char *run(void)
     info.host = "127.0.0.1";
     memcpy(info.regist_key, host.rp_regist_key, sizeof info.regist_key);
     memcpy(info.morning, host.rp_key, sizeof info.morning);
-    // ponytail: 720p30 to start; a quality setting comes with the viewers' feedback.
-    chiaki_connect_video_profile_preset(&info.video_profile, CHIAKI_VIDEO_RESOLUTION_PRESET_720p,
-                                        CHIAKI_VIDEO_FPS_PRESET_30);
+    // Remote Play's presets stop at 1080p; Discord's viewers need H.264.
+    chiaki_connect_video_profile_preset(&info.video_profile,
+                                        profiles[profile].h == 1080 ? CHIAKI_VIDEO_RESOLUTION_PRESET_1080p
+                                                                    : CHIAKI_VIDEO_RESOLUTION_PRESET_720p,
+                                        profiles[profile].fps == 60 ? CHIAKI_VIDEO_FPS_PRESET_60
+                                                                    : CHIAKI_VIDEO_FPS_PRESET_30);
     info.video_profile.codec = CHIAKI_CODEC_H264;
     info.packet_loss_max = 0.05;
     info.enable_idr_on_fec_failure = true;
@@ -340,6 +357,7 @@ int bc_start(void)
     if (running)
         return 0;
     running = 1;
+    profile = prefs_get("golive_quality");
     set_state("starting", "");
     pthread_t t;
     pthread_attr_t attr;
