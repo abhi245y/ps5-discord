@@ -18,6 +18,7 @@
 #include <time.h>
 
 #include "log.h"
+#include "notify.h"
 #include "prefs.h"
 #include "rp_pair.h"
 
@@ -338,6 +339,8 @@ static void *worker(void *arg)
     const char *why = run();
     LOG("broadcast: off%s%s", why ? ": " : "", why ? why : "");
     set_state(why ? "error" : "off", why ? why : "");
+    if (why)
+        app_alert("Go Live stopped", why, NULL, 1); // the game is in front: say so there
     want = 0;
     running = 0;
     return NULL;

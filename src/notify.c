@@ -17,7 +17,7 @@ static const struct {
 
 static int local_hour(void);
 
-#define GAP_SECONDS 8
+#define GAP_SECONDS 2
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t wake = PTHREAD_COND_INITIALIZER;
 static char latest_title[160], latest_body[200], latest_icon[160];
@@ -42,6 +42,7 @@ static void *pacer(void *arg)
             snprintf(title, sizeof title, "%s", latest_title);
         else
             snprintf(title, sizeof title, "%d new messages · %s", waiting, latest_title);
+        // ponytail: a fixed couple of seconds between notifications; the PS5 queues its own too.
         snprintf(body, sizeof body, "%s", latest_body);
         snprintf(icon, sizeof icon, "%s", latest_icon);
         waiting = 0;
@@ -60,13 +61,13 @@ static void start_pacer(void)
         pthread_detach(t);
 }
 
-void notify_message(const char *title, const char *body, const char *icon)
+void notify_message(const char *context, const char *text, const char *icon)
 {
     static pthread_once_t once = PTHREAD_ONCE_INIT;
     pthread_once(&once, start_pacer);
     pthread_mutex_lock(&lock);
-    snprintf(latest_title, sizeof latest_title, "%s", title);
-    snprintf(latest_body, sizeof latest_body, "%s", body);
+    snprintf(latest_title, sizeof latest_title, "%s", context);
+    snprintf(latest_body, sizeof latest_body, "%s", text);
     snprintf(latest_icon, sizeof latest_icon, "%s", icon ? icon : "");
     waiting++;
     pthread_cond_signal(&wake);
@@ -87,6 +88,8 @@ int notify_quiet_now(void)
 #include <stdbool.h>
 
 #include <cJSON.h>
+
+#include "rp_pair.h"
 
 typedef struct {
     char reserved[45];
@@ -131,7 +134,8 @@ static void debug_toast(const char *title, const char *body)
 // The PS5's own notification (libSceNotification, as the payload SDK's notify sample):
 // a toast with an icon, title and text that stays in the notification list. Only a
 // payload can load the library (an app gets 0x80020063). Logged, or it never shows;
-// "ServiceFeedback" shows during games.
+// "ServiceFeedback" shows during games. It goes to the user on screen, not the system
+// (0xFE), so other console users never find the messages in their list.
 static int (*send_json)(int user, bool logged, const char *json);
 
 static void load_notification(void)
@@ -142,17 +146,18 @@ static void load_notification(void)
         LOG("notify: libSceNotification unavailable, plain toasts only");
 }
 
-void notify_system(const char *title, const char *body, const char *icon)
+void notify_system(const char *context, const char *text, const char *icon)
 {
     static pthread_once_t once = PTHREAD_ONCE_INIT;
     static unsigned id;
     pthread_once(&once, load_notification);
-    char t[200], b[200];
-    snprintf(t, sizeof t, "%s", title);
-    snprintf(b, sizeof b, "%s", body);
+    char t[200], b[200]; // t on top, small and grey; b the main line
+    snprintf(t, sizeof t, "%s", context);
+    snprintf(b, sizeof b, "%s", text);
     cut(t, 120);
     cut(b, 160);
-    if (!send_json) {
+    const int32_t user = rp_foreground();
+    if (!send_json || user < 0) { // nobody on screen to give it to: the toast, which is not kept
         debug_toast(t, b);
         return;
     }
@@ -173,8 +178,8 @@ void notify_system(const char *title, const char *body, const char *icon)
         cJSON_AddStringToObject(ic, "type", "Predefined");
         cJSON_AddStringToObject(cJSON_AddObjectToObject(ic, "parameters"), "icon", "community");
     }
-    cJSON_AddStringToObject(cJSON_AddObjectToObject(view, "message"), "body", t);
-    cJSON_AddStringToObject(cJSON_AddObjectToObject(view, "subMessage"), "body", b);
+    cJSON_AddStringToObject(cJSON_AddObjectToObject(view, "message"), "body", b);    // the main line
+    cJSON_AddStringToObject(cJSON_AddObjectToObject(view, "subMessage"), "body", t); // grey, above it
     char when[40], idtext[16];
     time_t now = time(NULL);
     struct tm tm;
@@ -185,7 +190,7 @@ void notify_system(const char *title, const char *body, const char *icon)
     cJSON_AddStringToObject(o, "localNotificationId", idtext);
     char *json = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
-    int r = json ? send_json(0xFE, true, json) : -1; // 0xFE: the system, for every user
+    int r = json ? send_json(user, true, json) : -1;
     free(json);
     if (r != 0) {
         LOG("notify: sceNotificationSend failed (0x%x), plain toast instead", (unsigned)r);
@@ -201,8 +206,8 @@ static int local_hour(void)
     return tm.tm_hour;
 }
 
-void notify_system(const char *title, const char *body, const char *icon)
+void notify_system(const char *context, const char *text, const char *icon)
 {
-    LOG("notify: %s | %s | %s", title, body, icon ? icon : "-");
+    LOG("notify: %s | %s | %s", context, text, icon ? icon : "-");
 }
 #endif

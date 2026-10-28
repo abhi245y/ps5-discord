@@ -110,16 +110,19 @@ void core_quit(int forget_token)
     _exit(0);
 }
 
-// A message worth an alert (chat.c). With the app in front it shows its own banner;
+// Any of the app's notifications (notify.h). With the app in front it shows its own;
 // otherwise (home screen, a game, the PS menu, or closed with the PS button) the PS5's.
-static void alert(const char *title, const char *body, const char *icon)
+void app_alert(const char *context, const char *text, const char *icon, int urgent)
 {
     if (web_app_on_screen() || !prefs_get("notify_system"))
         return;
     const char *b = bc_state();
     if ((strcmp(b, "live") == 0 || strcmp(b, "starting") == 0) && !prefs_get("notify_live"))
         return; // the stream shows the screen: viewers would read it
-    notify_message(title, body, icon);
+    if (urgent)
+        notify_system(context, text, icon);
+    else
+        notify_message(context, text, icon);
 }
 
 static int claim_instance(void)
@@ -168,7 +171,7 @@ int main(void)
     cv_init();
     rp_init(DATA_DIR);
     prefs_init(DATA_DIR);
-    chat_set_alert(alert);
+    chat_set_alert(app_alert);
     stream_init();
     if (tls_global_init() != 0) {
         LOG("tls init failed");
@@ -186,6 +189,7 @@ int main(void)
             pause(); // keep the web UI up so the failure is visible; quit from there
         }
         LOG("token rejected, logging in again");
+        app_alert("Discord", "Signed out. Open the app to sign in again.", NULL, 1);
         remove(TOKEN_PATH);
     }
 }

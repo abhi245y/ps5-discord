@@ -517,6 +517,17 @@ static void push_event(const char *type, cJSON *d)
 
 // CALL_CREATE / CALL_UPDATE / CALL_DELETE. The calls entry holds who is ringing; the
 // event tells the app to look (the app's ring screen does not wait for a tree refresh).
+static void ring_alert(cJSON *d);
+
+static int has_ringing(cJSON *call, const char *me)
+{
+    cJSON *r;
+    cJSON_ArrayForEach(r, cJSON_GetObjectItem(call, "ringing"))
+        if (me && cJSON_IsString(r) && strcmp(r->valuestring, me) == 0)
+            return 1;
+    return 0;
+}
+
 static void call_changed(cJSON *d, int gone)
 {
     const char *cid = str(d, "channel_id");
@@ -528,6 +539,10 @@ static void call_changed(cJSON *d, int gone)
     cJSON *old = cJSON_GetObjectItem(calls, cid);
     if (old && !gone && strcmp(str(old, "message_id") ? str(old, "message_id") : "", str(d, "message_id") ? str(d, "message_id") : "") == 0)
         snprintf(caller, sizeof caller, "%s", str(old, "caller") ? str(old, "caller") : "");
+    const char *me = str(cJSON_GetObjectItem(tree, "me"), "id");
+    int was_ringing = old && has_ringing(old, me);
+    if (!gone && !was_ringing && has_ringing(d, me))
+        ring_alert(d);
     cJSON_DeleteItemFromObject(calls, cid);
     if (!gone) {
         cJSON *c = cJSON_AddObjectToObject(calls, cid), *r, *vs;
@@ -551,11 +566,12 @@ static void call_changed(cJSON *d, int gone)
 // Discord's own settings decide first (mutes, each server's "All messages / Only
 // mentions / Nothing", @everyone and role mentions), then the app's (prefs.h).
 
-static void (*alert_sink)(const char *title, const char *body, const char *icon);
+static void (*alert_sink)(const char *context, const char *text, const char *icon, int urgent);
 // Composed under the lock, sent after it (gateway thread only).
 static char alert_title[160], alert_body[200], alert_icon[160];
+static int alert_urgent;
 
-void chat_set_alert(void (*sink)(const char *title, const char *body, const char *icon))
+void chat_set_alert(void (*sink)(const char *context, const char *text, const char *icon, int urgent))
 {
     alert_sink = sink;
 }
@@ -712,6 +728,27 @@ static void alert_text(cJSON *d)
         snprintf(alert_icon, sizeof alert_icon, "https://cdn.discordapp.com/embed/avatars/0.png");
 }
 
+// A DM call starts ringing us: "Incoming call", who, their avatar; at once, quiet hours or not.
+static void ring_alert(cJSON *d)
+{
+    if (!alert_sink)
+        return;
+    cJSON *dm = find_channel(str(d, "channel_id"));
+    cJSON *ids = cJSON_GetObjectItem(dm, "recipient_ids");
+    cJSON *who = cJSON_GetObjectItem(cJSON_GetObjectItem(tree, "users"), cJSON_GetStringValue(cJSON_GetArrayItem(ids, 0)));
+    const char *name = str(dm, "name");
+    if (!name || !*name)
+        name = str(who, "global_name") ? str(who, "global_name") : str(who, "username");
+    snprintf(alert_title, sizeof alert_title, "Incoming call");
+    snprintf(alert_body, sizeof alert_body, "%s is calling", name ? name : "Someone");
+    if (cJSON_GetArraySize(ids) == 1 && str(who, "id") && str(who, "avatar"))
+        snprintf(alert_icon, sizeof alert_icon, "https://cdn.discordapp.com/avatars/%s/%s.png?size=128", str(who, "id"),
+                 str(who, "avatar"));
+    else
+        snprintf(alert_icon, sizeof alert_icon, "https://cdn.discordapp.com/embed/avatars/0.png");
+    alert_urgent = 1;
+}
+
 static void message_created(cJSON *d)
 {
     const char *channel_id = str(d, "channel_id");
@@ -825,8 +862,9 @@ void chat_dispatch(const char *type, cJSON *d)
         put_notify(d);
     pthread_mutex_unlock(&lock);
     if (alert_title[0]) {
-        alert_sink(alert_title, alert_body, alert_icon);
+        alert_sink(alert_title, alert_body, alert_icon, alert_urgent);
         alert_title[0] = 0;
+        alert_urgent = 0;
     }
 }
 
