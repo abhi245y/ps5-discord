@@ -190,6 +190,7 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
             {Kind::value, "Version", "The app and its core.", version.empty() ? "development" : version},
             {Kind::value, "License", "Free software: you may share and change it.", "AGPL-3.0"},
             {Kind::value, "Source", "Where the code lives.", "github.com/abhi245y/ps5-discord"},
+            {Kind::value, "Emoji", "Twemoji graphics by Twitter and contributors.", "CC-BY 4.0"},
         };
     }
 }

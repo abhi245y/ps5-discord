@@ -75,6 +75,16 @@ struct Channel
     std::int64_t last_ms = 0; // when its newest message was sent
 };
 
+// A server's own emoji, for the picker. Without Nitro only the server's own (and none
+// animated) can be sent there.
+struct GuildEmoji
+{
+    std::string id;
+    std::string name;
+    bool animated = false;
+    bool available = true; // false: the server lost the boost level it needs
+};
+
 struct Guild
 {
     std::string id;
@@ -87,6 +97,7 @@ struct Guild
     int online = 0;
     int members = 0;
     int unread = 0;
+    std::vector<GuildEmoji> emojis;
 };
 
 struct Conversation // a row in Recent conversations
@@ -344,6 +355,7 @@ struct Snapshot
     std::set<std::string> load_failed; // history that did not load (network, core); retried on open
     std::set<std::string> history_start; // channels loaded back to their first message
     std::map<std::string, std::string> dm_by_user; // one-to-one DM channel by the other person's id
+    bool nitro = false;          // the account has Nitro: any server's emoji, animated too
     std::vector<Notice> notices; // the latest few, oldest first
     std::string sign_out_error;  // the last sign out failed, and why
     Prefs prefs;

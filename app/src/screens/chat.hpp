@@ -10,6 +10,7 @@
 #include "core/tween.hpp"
 #include "discord/request.hpp"
 #include "screens/draw.hpp"
+#include "screens/emoji_picker.hpp"
 #include "screens/keyboard.hpp"
 
 namespace screens
@@ -61,6 +62,7 @@ class Chat
         channels, // the server's channel list is open (Options)
         profile,  // the DM person's card is open (Options in a DM)
         image,    // the focused message's pictures, full screen
+        emoji,    // the emoji picker: to react, or into the keyboard's text
     };
 
     const std::vector<discord::Message> &messages(const discord::Snapshot &snapshot) const;
@@ -94,6 +96,8 @@ class Chat
 
     const Ink &ink_;
     Keyboard keys_; // the app's own keyboard, when the system one is not there
+    EmojiPicker picker_;
+    bool picker_react_ = false; // the picker reacts to the focused message (else it types)
     int list_index_ = 0;        // focused row of the channel list
     hui::tween::Spring list_scroll_;
     void draw_channel_list(const discord::Snapshot &s, DrawList &list) const;

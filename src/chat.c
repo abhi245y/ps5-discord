@@ -309,6 +309,24 @@ static cJSON *guild_of(const char *id)
     return NULL;
 }
 
+// A guild's own emoji or stickers, trimmed: {id, name, animated, available} or
+// {id, name, format_type, available}. Lock held.
+static void put_emojis(cJSON *og, cJSON *src, const char *key)
+{
+    cJSON *list = cJSON_CreateArray(), *e;
+    cJSON_ArrayForEach(e, cJSON_GetObjectItem(src, key))
+    {
+        cJSON *o = cJSON_CreateObject();
+        copy(o, e, "id");
+        copy(o, e, "name");
+        copy(o, e, strcmp(key, "emojis") == 0 ? "animated" : "format_type");
+        copy(o, e, "available");
+        cJSON_AddItemToArray(list, o);
+    }
+    cJSON_DeleteItemFromObject(og, key);
+    cJSON_AddItemToObject(og, key, list);
+}
+
 // One guild as the tree keeps it: visible channels (with can_send), rooms,
 // and its voice states recorded. my_roles: the account's role ids there.
 static cJSON *guild_tree(cJSON *g, const char *me, cJSON *my_roles)
@@ -323,6 +341,8 @@ static cJSON *guild_tree(cJSON *g, const char *me, cJSON *my_roles)
     copy(og, props ? props : g, "splash");
     copy(og, g, "member_count");
     copy(og, props ? props : g, "default_message_notifications"); // 0 all messages, 1 mentions
+    put_emojis(og, cJSON_GetObjectItem(g, "emojis") ? g : props, "emojis");
+    put_emojis(og, cJSON_GetObjectItem(g, "stickers") ? g : props, "stickers");
     cJSON_AddArrayToObject(og, "channels");
     cJSON_AddArrayToObject(og, "rooms");
     // Role names by id, so <@&id> in a message reads as the role.
@@ -379,6 +399,7 @@ static void load_ready(cJSON *d)
     cJSON *t = cJSON_CreateObject(), *g, *c;
     tree = t; // remember_user and friends write here; the lock is held by the caller
     cJSON_AddItemToObject(t, "me", trim_user(cJSON_GetObjectItem(d, "user")));
+    copy(cJSON_GetObjectItem(t, "me"), cJSON_GetObjectItem(d, "user"), "premium_type"); // Nitro: emoji from anywhere
     cJSON_AddObjectToObject(t, "users");
     cJSON_AddObjectToObject(t, "presence");
     cJSON_AddObjectToObject(t, "voice");
@@ -869,6 +890,9 @@ void chat_dispatch(const char *type, cJSON *d)
     }
     else if (strcmp(type, "USER_GUILD_SETTINGS_UPDATE") == 0)
         put_notify(d);
+    else if ((strcmp(type, "GUILD_EMOJIS_UPDATE") == 0 || strcmp(type, "GUILD_STICKERS_UPDATE") == 0) &&
+             guild_of(str(d, "guild_id")))
+        put_emojis(guild_of(str(d, "guild_id")), d, type[6] == 'E' ? "emojis" : "stickers");
     pthread_mutex_unlock(&lock);
     if (alert_title[0]) {
         alert_sink(alert_title, alert_body, alert_icon, alert_urgent);

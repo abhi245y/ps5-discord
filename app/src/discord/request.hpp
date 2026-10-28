@@ -18,7 +18,7 @@ struct Request
         open_channel, // load history and subscribe to the guild
         load_older,   // the next page of history above what is loaded
         send,         // post content to channel_id
-        react,        // add emoji to message_id in channel_id
+        react,        // add (or remove) emoji to message_id in channel_id: Unicode, or a server's name:id
         open_dm,      // find or create the DM with user_id (Snapshot::dm_by_user)
         prefetch,     // load history ahead of an open, without marking it read
         edit,         // replace message_id's content (the account's own message)
@@ -51,6 +51,7 @@ struct Request
     bool deaf = false;    // voice_set
     bool tv = false;      // voice_output
     bool on = false;      // voice_broadcast
+    bool remove = false;  // react: take this account's reaction off
     int value = 0;        // set_pref
 };
 

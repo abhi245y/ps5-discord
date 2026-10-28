@@ -13,6 +13,8 @@
 
 #include "screens/chat.hpp"
 
+#include "discord/emoji.hpp"
+
 #include <algorithm>
 #include <functional>
 #include <cctype>
@@ -120,6 +122,42 @@ std::vector<Action_> actions_for(const discord::Message &m, bool mine)
     }
     return a;
 }
+// The emoji on a message, to react with each: its reactions (yours lit: Cross takes it
+// off), then the emoji in its text nobody has reacted with yet.
+struct OnMessage
+{
+    std::string text; // a Unicode emoji, or a server emoji's name
+    std::string id;   // a server emoji's id
+    bool me = false;
+};
+constexpr int kOnMessageMax = 15;
+constexpr int kMenuColumns = 5;
+
+std::vector<OnMessage> on_message(const discord::Message &m)
+{
+    std::vector<OnMessage> out;
+    for (const discord::Reaction &r : m.reactions)
+    {
+        std::string text = r.emoji;
+        if (!r.emoji_id.empty() && text.size() > 2 && text.front() == ':' && text.back() == ':')
+            text = text.substr(1, text.size() - 2);
+        out.push_back({text, r.emoji_id, r.me});
+    }
+    for (const discord::Emoji &e : m.emojis)
+    {
+        bool seen = false;
+        for (const OnMessage &o : out)
+            seen = seen || (e.id.empty() ? o.id.empty() && discord::emoji_index(o.text) == discord::emoji_index(e.name) &&
+                                               (discord::emoji_index(o.text) >= 0 || o.text == e.name)
+                                         : o.id == e.id);
+        if (!seen)
+            out.push_back({e.name, e.id, false});
+    }
+    if (out.size() > kOnMessageMax)
+        out.resize(kOnMessageMax);
+    return out;
+}
+
 const char *const kReactions[] = {"\xE2\x9D\xA4\xEF\xB8\x8F", "\xF0\x9F\x91\x8D", "\xF0\x9F\x98\x82",
                                   "\xF0\x9F\x98\xAE", "\xF0\x9F\x94\xA5"};
 constexpr int kReactionCount = 5;
@@ -171,7 +209,7 @@ std::vector<float> list_tops(const std::vector<const discord::Channel *> &all)
 
 } // namespace
 
-Chat::Chat(const Ink &ink) : ink_(ink), keys_(ink)
+Chat::Chat(const Ink &ink) : ink_(ink), keys_(ink), picker_(ink)
 {
     std::string saved;
     if (hui::save::read_file(kTextSizePath, &saved, 8))
@@ -450,6 +488,35 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
         requests.push_back(r);
     }
 
+    if (mode_ == Mode::emoji)
+    {
+        switch (picker_.update(input, dt, feedback))
+        {
+        case EmojiPicker::Result::picked:
+            if (picker_react_ && focus_ >= 0 && focus_ < count)
+            {
+                discord::Request r;
+                r.kind = discord::Request::Kind::react;
+                r.channel_id = channel_id_;
+                r.message_id = ms[static_cast<std::size_t>(focus_)].id;
+                r.emoji = picker_.reaction();
+                requests.push_back(r);
+                mode_ = Mode::browse;
+            }
+            else
+            {
+                keys_.insert(picker_.markup());
+                mode_ = Mode::keys;
+            }
+            break;
+        case EmojiPicker::Result::cancel:
+            mode_ = picker_react_ ? Mode::actions : Mode::keys;
+            break;
+        case EmojiPicker::Result::none:
+            break;
+        }
+        return true;
+    }
     if (mode_ == Mode::image)
     {
         // Left and right go through the message's pictures; Circle (or Cross) closes.
@@ -481,26 +548,44 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
         const bool mine = focus_ >= 0 && fm.author_id == s.me.id;
         const std::vector<Action_> acts = actions_for(fm, mine);
         const int kActionCount = static_cast<int>(acts.size());
-        const int entries = kActionCount + kReactionCount;
+        // Entries: the actions, top to bottom; the quick reactions, a row; the emoji on
+        // the message, in rows of kMenuColumns.
+        const std::vector<OnMessage> here = on_message(fm);
+        const int quick = kActionCount, on = kActionCount + kReactionCount;
+        const int entries = on + static_cast<int>(here.size());
         const Act at = action_ < kActionCount ? acts[static_cast<std::size_t>(action_)].act : Act::react;
         auto chosen = [&](Act a) { return input.is_pressed(Action::confirm) && action_ < kActionCount && at == a; };
         if (input.nav != Direction::none)
             delete_armed_ = false;
+        const int k = action_ - on; // in the message's emoji rows
+        const int before = action_;
         if (input.nav == Direction::down && action_ < kActionCount - 1)
             ++action_;
         else if (input.nav == Direction::down && action_ < kActionCount)
-            action_ = kActionCount;
+            action_ = quick;
+        else if (input.nav == Direction::down && action_ < on && on < entries)
+            action_ = on + std::min(action_ - quick, entries - on - 1);
+        else if (input.nav == Direction::down && k >= 0 && on + (k / kMenuColumns + 1) * kMenuColumns < entries)
+            action_ = std::min(action_ + kMenuColumns, entries - 1);
+        else if (input.nav == Direction::up && k >= kMenuColumns)
+            action_ -= kMenuColumns;
+        else if (input.nav == Direction::up && k >= 0)
+            action_ = quick + std::min(k, kReactionCount - 1);
         else if (input.nav == Direction::up && action_ >= kActionCount)
             action_ = kActionCount - 1;
         else if (input.nav == Direction::up && action_ > 0)
             --action_;
-        else if (input.nav == Direction::right && action_ >= kActionCount && action_ < entries - 1)
+        else if (input.nav == Direction::right && action_ >= quick && action_ < on - 1)
             ++action_;
-        else if (input.nav == Direction::left && action_ > kActionCount)
+        else if (input.nav == Direction::left && action_ > quick && action_ < on)
             --action_;
-        else if (input.nav != Direction::none)
+        else if (input.nav == Direction::right && k >= 0 && k % kMenuColumns < kMenuColumns - 1 && action_ < entries - 1)
+            ++action_;
+        else if (input.nav == Direction::left && k > 0 && k % kMenuColumns > 0)
+            --action_;
+        if (input.nav != Direction::none && action_ == before)
             feedback.play(hui::audio::Cue::error, 1.0f, 0.0f, 0.5f);
-        if (input.nav != Direction::none)
+        else if (input.nav != Direction::none)
             feedback.play(hui::audio::Cue::focus, 1.0f + 0.02f * static_cast<float>(action_));
         const bool reply = chosen(Act::reply);
         if (input.is_pressed(Action::back))
@@ -554,21 +639,35 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
                 feedback.play(hui::audio::Cue::erase);
             }
         }
-        else if (chosen(Act::react) || input.is_pressed(Action::west))
+        else if (chosen(Act::react)) // every emoji, as Discord's picker
         {
-            action_ = kActionCount; // React (or Square): to the emoji row
+            picker_.open(s, guild_id_, "React");
+            picker_react_ = true;
+            mode_ = Mode::emoji;
+            feedback.play(hui::audio::Cue::modal_open);
+        }
+        else if (input.is_pressed(Action::west)) // Square: to the quick reactions
+        {
+            action_ = quick;
             feedback.play(hui::audio::Cue::focus);
         }
-        else if (input.is_pressed(Action::confirm) && action_ >= kActionCount)
+        else if (input.is_pressed(Action::confirm) && action_ >= quick)
         {
             discord::Request r;
             r.kind = discord::Request::Kind::react;
             r.channel_id = channel_id_;
             r.message_id = fm.id;
-            r.emoji = kReactions[action_ - kActionCount];
+            if (action_ < on)
+                r.emoji = kReactions[action_ - quick];
+            else // one already on the message: yours comes off, else it is added
+            {
+                const OnMessage &o = here[static_cast<std::size_t>(action_ - on)];
+                r.emoji = o.id.empty() ? o.text : o.text + ":" + o.id;
+                r.remove = o.me;
+            }
             requests.push_back(r);
             mode_ = Mode::browse;
-            feedback.play(hui::audio::Cue::select);
+            feedback.play(r.remove ? hui::audio::Cue::favorite_off : hui::audio::Cue::select);
         }
         menu_show_.target = mode_ == Mode::actions ? 1.0f : 0.0f;
         menu_show_.update(dt, 18.0f);
@@ -668,6 +767,11 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
                 keys_.set_text(draft_before_edit_);
             }
             mode_ = Mode::browse; // the draft stays for next time
+            break;
+        case Keyboard::Result::emoji:
+            picker_.open(s, guild_id_, "Add to message");
+            picker_react_ = false;
+            mode_ = Mode::emoji;
             break;
         case Keyboard::Result::none:
             break;
@@ -1246,8 +1350,11 @@ void Chat::draw_composer(const discord::Snapshot &s, DrawList &list) const
         const float w = std::max(110.0f, ink_.fonts.semibold.measure(kQuickReplies[i], 26.0f) + 64.0f);
         const Rect chip{x, y, w, 58.0f};
         list.rounded_rect(chip, 29.0f, kRaisedHigh);
-        ui::text(list, ink_.fonts.semibold, kQuickReplies[i], chip.cx(), chip.cy() + 9.0f, 26.0f, kText,
-                 gfx::Align::center);
+        const std::string reply = kQuickReplies[i];
+        if (discord::emoji_length(reply, 0) == reply.size()) // an emoji alone: its picture
+            emoji_picture(list, ink_, reply, std::string(), {chip.cx() - 17.0f, chip.cy() - 17.0f, 34.0f, 34.0f});
+        else
+            ui::text(list, ink_.fonts.semibold, reply, chip.cx(), chip.cy() + 9.0f, 26.0f, kText, gfx::Align::center);
         if (i == quick_)
             focus_outline(list, chip, 29.0f, 1.0f);
         x += w + 16.0f;
@@ -1265,8 +1372,10 @@ void Chat::draw_actions(const discord::Snapshot &s, DrawList &list, const Rect &
     const float show = menu_show_.value;
     if (show <= 0.01f)
         return;
+    const std::vector<OnMessage> here = on_message(fm);
+    const int on_rows = (static_cast<int>(here.size()) + kMenuColumns - 1) / kMenuColumns;
     const float w = 500.0f;
-    const float h = 72.0f * kActionCount + 132.0f;
+    const float h = 72.0f * kActionCount + 132.0f + (on_rows > 0 ? 48.0f + 92.0f * on_rows : 0.0f);
     const float y = std::clamp(anchor.cy() - h * 0.5f, 140.0f, kComposerY - h - 10.0f);
     const Rect panel{kRight - w, y, w, h};
     list.push_opacity(show);
@@ -1293,6 +1402,23 @@ void Chat::draw_actions(const discord::Snapshot &s, DrawList &list, const Rect &
         emoji_picture(list, ink_, kReactions[i], std::string(), {cell.cx() - 24.0f, cell.cy() - 24.0f, 48.0f, 48.0f});
         if (action_ == kActionCount + i)
             focus_outline(list, cell, 18.0f, 1.0f);
+    }
+    if (!here.empty()) // the emoji on the message, yours lit
+    {
+        const float oy = ry + 92.0f;
+        ui::text(list, ink_.fonts.semibold, "On this message", panel.x + 24.0f, oy + 28.0f, 21.0f, kDim);
+        for (int i = 0; i < static_cast<int>(here.size()); ++i)
+        {
+            const Rect cell{panel.x + 20.0f + (i % kMenuColumns) * 92.0f, oy + 44.0f + (i / kMenuColumns) * 92.0f, 80.0f,
+                            80.0f};
+            const OnMessage &o = here[static_cast<std::size_t>(i)];
+            list.rounded_rect(cell, 18.0f, o.me ? Color::rgb(0x3a2a28) : kRaisedHigh);
+            if (o.me)
+                list.bordered_rect(cell, 18.0f, Color::rgb(0, 0.0f), 2.0f, kCoral);
+            emoji_picture(list, ink_, o.text, o.id, {cell.cx() - 24.0f, cell.cy() - 24.0f, 48.0f, 48.0f});
+            if (action_ == kActionCount + kReactionCount + i)
+                focus_outline(list, cell, 18.0f, 1.0f);
+        }
     }
     list.pop_opacity();
 }
@@ -1413,8 +1539,10 @@ void Chat::draw(const discord::Snapshot &s, DrawList &list) const
     layout.cy = kHintsBaseline;
     layout.item_gap = 38.0f;
     ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints, count, kRight, true, layout);
-    if (mode_ == Mode::keys)
+    if (mode_ == Mode::keys || (mode_ == Mode::emoji && !picker_react_))
         keys_.draw(list);
+    if (mode_ == Mode::emoji)
+        picker_.draw(list);
     if (mode_ == Mode::image)
         draw_image(s, list);
     if (mode_ == Mode::channels)

@@ -531,6 +531,7 @@ void apply_tree(Snapshot &s, const json &t)
     const json &me = t.contains("me") ? t["me"] : json::object();
     s.me = user_from(me);
     s.me.presence = Presence::online;
+    s.nitro = me.contains("premium_type") && me["premium_type"].is_number() && me["premium_type"].get<double>() > 0;
     const json &presence = t.contains("presence") ? t["presence"] : json::object();
     const json &voice = t.contains("voice") ? t["voice"] : json::object();
     const json &reads = t.contains("reads") ? t["reads"] : json::object();
@@ -571,6 +572,13 @@ void apply_tree(Snapshot &s, const json &t)
                 guild.banner_url = "https://cdn.discordapp.com/splashes/" + guild.id + "/" + splash + ".png?size=640";
             guild.art = art_for(guild.id, kSceneArt);
             guild.members = static_cast<int>(g.value("member_count", 0.0));
+            if (g.contains("emojis") && g["emojis"].is_array())
+                for (const json &e : g["emojis"])
+                    if (e.is_object() && !text(e, "id").empty())
+                        guild.emojis.push_back({text(e, "id"), text(e, "name"),
+                                                e.contains("animated") && e["animated"].is_boolean() && e["animated"].get<bool>(),
+                                                !(e.contains("available") && e["available"].is_boolean()) ||
+                                                    e["available"].get<bool>()}); // null: the core had none
             {
                 std::lock_guard<std::mutex> lock(g_names_mutex);
                 if (g.contains("roles") && g["roles"].is_object())
@@ -1479,7 +1487,8 @@ void Client::handle(const Request &request)
         break;
     }
     case Request::Kind::react: {
-        json body{{"channel", request.channel_id}, {"message", request.message_id}, {"emoji", request.emoji}};
+        json body{{"channel", request.channel_id}, {"message", request.message_id}, {"emoji", request.emoji},
+                  {"remove", request.remove}};
         const Reply reply = http(port_, "POST", "/api/react", body.dump());
         if (reply.status != 200)
             hui::sys::log("[CLIENT] react failed (%d)", reply.status);

@@ -7,6 +7,8 @@
 
 #include "screens/keyboard.hpp"
 
+#include "discord/emoji.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -41,8 +43,10 @@ struct Wide
     const char *label;
     float units;
 };
-const Wide kBottom[] = {{"Shift", 1.5f}, {"@", 1.0f}, {"!", 1.0f}, {"Space", 3.5f}, {"Erase", 1.5f}, {"Send", 1.5f}};
-constexpr int kBottomCount = 6;
+const Wide kBottom[] = {{"Shift", 1.5f}, {"@", 1.0f}, {"!", 1.0f}, {"Emoji", 1.5f},
+                        {"Space", 2.0f}, {"Erase", 1.5f}, {"Send", 1.5f}};
+constexpr int kBottomCount = 7;
+constexpr int kEmojiKey = 3, kEraseKey = 5;
 constexpr int kRowCount = kKeyRows + 1;
 
 constexpr float kPanelY = 470.0f;
@@ -101,18 +105,37 @@ bool Keyboard::full() const
 
 void Keyboard::erase()
 {
+    // A whole emoji goes at once: a server's <:name:id>, or a Unicode sequence.
+    if (!text_.empty() && text_.back() == '>')
+    {
+        const std::size_t open = text_.rfind('<');
+        if (open != std::string::npos && (text_.compare(open, 2, "<:") == 0 || text_.compare(open, 3, "<a:") == 0))
+        {
+            text_.erase(open);
+            return;
+        }
+    }
+    for (std::size_t at = text_.size() > 40 ? text_.size() - 40 : 0; at < text_.size(); ++at)
+        if ((static_cast<unsigned char>(text_[at]) & 0xc0) != 0x80 && discord::emoji_length(text_, at) == text_.size() - at)
+        {
+            text_.erase(at);
+            return;
+        }
     while (!text_.empty() && (static_cast<unsigned char>(text_.back()) & 0xc0) == 0x80)
         text_.pop_back(); // continuation bytes of the last letter
     if (!text_.empty())
         text_.pop_back();
-    // An emoji with a variation selector leaves the base behind: take it too.
-    if (text_.size() >= 3 && text_.compare(text_.size() - 3, 3, "\xEF\xB8\x8F") == 0)
-        erase();
+}
+
+void Keyboard::insert(const std::string &text)
+{
+    if (!full())
+        text_ += text;
 }
 
 void Keyboard::press(int row, int col, hui::ui::Feedback &feedback)
 {
-    if (full() && !(row == kKeyRows && (col == 0 || col == 4)))
+    if (full() && !(row == kKeyRows && (col == 0 || col == kEraseKey || col == kEmojiKey)))
     {
         feedback.play(hui::audio::Cue::error); // Discord's limit; Shift and Erase still work
         return;
@@ -136,11 +159,14 @@ void Keyboard::press(int row, int col, hui::ui::Feedback &feedback)
         text_ += kBottom[col].label;
         feedback.play(hui::audio::Cue::type);
         break;
-    case 3:
+    case kEmojiKey:
+        emoji_asked_ = true; // update() answers Result::emoji
+        break;
+    case 4:
         text_ += ' ';
         feedback.play(hui::audio::Cue::type, 0.9f);
         break;
-    case 4:
+    case kEraseKey:
         erase();
         feedback.play(hui::audio::Cue::erase);
         break;
@@ -217,7 +243,13 @@ Keyboard::Result Keyboard::update(const hui::InputFrame &input, float dt, hui::u
         press(row_, col_, feedback);
         type_held_ = 0.0f;
     }
-    else if (input.is_held(Action::confirm) && !(row_ == kKeyRows && col_ == 0))
+    if (emoji_asked_ || input.is_pressed(Action::page_next)) // the Emoji key, or R1
+    {
+        emoji_asked_ = false;
+        feedback.play(hui::audio::Cue::modal_open);
+        return Result::emoji;
+    }
+    else if (input.is_held(Action::confirm) && !(row_ == kKeyRows && (col_ == 0 || col_ == kEmojiKey)))
     {
         // Held: the key repeats after a beat, as TV keyboards do (not Shift).
         const float before = type_held_;
@@ -311,13 +343,14 @@ void Keyboard::draw(DrawList &list) const
                               {ui::Button::square, "Erase"},
                               {ui::Button::triangle, "Space"},
                               {ui::Button::l1, "Shift"},
+                              {ui::Button::r1, "Emoji"},
                               {ui::Button::r2, "Send"},
                               {ui::Button::circle, "Close"}};
     ui::HintLayout layout;
     layout.size = 30.0f;
     layout.text_size = 22.0f;
     layout.cy = kHintsBaseline;
-    ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints, 6, 1920.0f - kMargin, true, layout);
+    ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints, 7, 1920.0f - kMargin, true, layout);
 }
 
 } // namespace screens

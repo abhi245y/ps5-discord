@@ -21,11 +21,13 @@ class Keyboard
         none,
         send,   // text() is ready to post
         cancel, // closed; the text stays as a draft
+        emoji,  // the Emoji key (or R1): the caller opens the picker, then insert()s
     };
     explicit Keyboard(const Ink &ink) : ink_(ink) {}
 
     // initial: replaces the draft (editing a message); empty keeps the draft.
     void open(const std::string &title, const std::string &initial = {});
+    void insert(const std::string &text); // at the end, where the caret is
     Result update(const hui::InputFrame &input, float dt, hui::ui::Feedback &feedback);
     void draw(DrawList &list) const;
     const std::string &text() const
@@ -44,6 +46,7 @@ class Keyboard
   private:
     void press(int row, int col, hui::ui::Feedback &feedback);
     void erase();
+    bool emoji_asked_ = false;
 
     const Ink &ink_;
     std::string title_;

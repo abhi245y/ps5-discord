@@ -237,19 +237,20 @@ static void api_react(int c, const char *body)
     cJSON *in = cJSON_Parse(body ? body : "");
     const char *channel = cJSON_GetStringValue(cJSON_GetObjectItem(in, "channel"));
     const char *message = cJSON_GetStringValue(cJSON_GetObjectItem(in, "message"));
-    const char *emoji = cJSON_GetStringValue(cJSON_GetObjectItem(in, "emoji"));
-    if (!channel || !is_id(channel) || !message || !is_id(message) || !emoji || !*emoji || strlen(emoji) > 32) {
+    const char *emoji = cJSON_GetStringValue(cJSON_GetObjectItem(in, "emoji")); // Unicode, or a server's name:id
+    const int remove = cJSON_IsTrue(cJSON_GetObjectItem(in, "remove"));
+    if (!channel || !is_id(channel) || !message || !is_id(message) || !emoji || !*emoji || strlen(emoji) > 80) {
         cJSON_Delete(in);
         reply(c, "400 Bad Request", "text/plain", "react", 5);
         return;
     }
-    char path[256];
+    char path[512];
     int n = snprintf(path, sizeof path, "/channels/%s/messages/%s/reactions/", channel, message);
     for (const unsigned char *e = (const unsigned char *)emoji; *e && n < (int)sizeof path - 16; e++)
         n += snprintf(path + n, sizeof path - n, "%%%02X", *e);
     snprintf(path + n, sizeof path - n, "/@me?location=Message");
     cJSON_Delete(in);
-    reply_rest(c, rest("PUT", path, NULL));
+    reply_rest(c, rest(remove ? "DELETE" : "PUT", path, NULL));
 }
 
 // Edits or deletes one of the account's messages: {channel, message[, content]}.
