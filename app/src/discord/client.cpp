@@ -585,6 +585,16 @@ void apply_tree(Snapshot &s, const json &t)
                                                 e.contains("animated") && e["animated"].is_boolean() && e["animated"].get<bool>(),
                                                 !(e.contains("available") && e["available"].is_boolean()) ||
                                                     e["available"].get<bool>()}); // null: the core had none
+            if (g.contains("stickers") && g["stickers"].is_array())
+                for (const json &st : g["stickers"])
+                    if (st.is_object() && !text(st, "id").empty())
+                        guild.stickers.push_back(
+                            {text(st, "id"), text(st, "name"),
+                             st.contains("format_type") && st["format_type"].is_number()
+                                 ? static_cast<int>(st["format_type"].get<double>())
+                                 : 1,
+                             !(st.contains("available") && st["available"].is_boolean()) ||
+                                 st["available"].get<bool>()});
             {
                 std::lock_guard<std::mutex> lock(g_names_mutex);
                 if (g.contains("roles") && g["roles"].is_object())
@@ -853,6 +863,8 @@ void Client::submit(const Request &incoming)
         m.channel_id = request.channel_id;
         m.author_id = snapshot_.me.id;
         m.content = request.content;
+        if (!request.sticker_id.empty())
+            m.stickers.push_back({request.sticker_id, request.sticker_name, request.sticker_format});
         m.time_ms = now_ms();
         m.pending = true;
         std::vector<Message> &ms = edit_messages(snapshot_, request.channel_id);
@@ -967,7 +979,9 @@ void Client::fetch_images()
         {
             // A sticker: its frames, as one sheet.
             FrameSheet frames;
-            if (lottie ? render_lottie(reply.body, kStickerPixels, frames) : decode_gif(reply.body, frames))
+            const bool still = image.url.find("?still") != std::string::npos; // a picker preview: one small frame
+            if (lottie ? render_lottie(reply.body, still ? 96 : kStickerPixels, frames, still ? 1 : 48)
+                       : decode_gif(reply.body, frames))
             {
                 image.w = frames.w, image.h = frames.h;
                 image.frames = frames.frames, image.columns = frames.columns, image.fps = frames.fps;
@@ -1427,6 +1441,26 @@ void Client::handle(const Request &request)
     }
     case Request::Kind::open_channel:
     case Request::Kind::prefetch:
+    case Request::Kind::load_sticker_packs: {
+        const Reply reply = http(port_, "GET", "/api/sticker-packs");
+        const json r = json::parse(reply.body, nullptr, false);
+        std::vector<StickerPack> packs;
+        if (reply.status == 200 && !r.is_discarded() && r.contains("packs") && r["packs"].is_array())
+            for (const json &p : r["packs"])
+            {
+                StickerPack pack{text(p, "id"), text(p, "name"), {}};
+                if (p.contains("stickers") && p["stickers"].is_array())
+                    for (const json &st : p["stickers"])
+                        pack.stickers.push_back({text(st, "id"), text(st, "name"),
+                                                 static_cast<int>(st.value("format_type", 1.0))});
+                if (!pack.stickers.empty())
+                    packs.push_back(std::move(pack));
+            }
+        std::lock_guard<std::mutex> lock(mutex_);
+        snapshot_.sticker_packs = std::move(packs);
+        publish();
+        break;
+    }
     case Request::Kind::load_older: {
         std::string path = "/api/messages?channel=" + request.channel_id;
         if (!request.guild_id.empty())
@@ -1490,6 +1524,8 @@ void Client::handle(const Request &request)
         json body{{"channel", request.channel_id}, {"content", request.content}, {"nonce", request.nonce}};
         if (!request.reply_to.empty())
             body["reply_to"] = request.reply_to;
+        if (!request.sticker_id.empty())
+            body["sticker"] = request.sticker_id;
         const Reply reply = http(port_, "POST", "/api/send", body.dump());
         const json r = json::parse(reply.body, nullptr, false);
         const int discord_status = r.is_discarded() ? 0 : static_cast<int>(r.value("status", 0.0));

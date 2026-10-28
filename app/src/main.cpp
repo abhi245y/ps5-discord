@@ -26,6 +26,7 @@
 #include "platform/ps5/display_egl.hpp"
 #include "platform/ps5/ime.hpp"
 #include "platform/ps5/usb_keyboard.hpp"
+#include "screens/emoji_picker.hpp"
 #include "platform/ps5/voice_audio.hpp"
 #include "platform/ps5/pad.hpp"
 #include "platform/ps5/system.hpp"
@@ -229,6 +230,7 @@ int main()
     using namespace hui;
     sys::log("[HUI] entry");
     sys::log("[HUI] storage dir=%d", save::ensure_directory(kDataRoot) ? 1 : 0);
+    screens::EmojiPicker::set_store(std::string(kDataRoot) + "/emoji-recent.txt");
 
     // The display opens at the saved resolution (1080p if that fails).
     const Settings saved = app::Shell::load_settings(kDataRoot);

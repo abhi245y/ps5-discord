@@ -204,8 +204,11 @@ static void api_send(int c, const char *body)
     const char *channel = cJSON_GetStringValue(cJSON_GetObjectItem(in, "channel"));
     const char *content = cJSON_GetStringValue(cJSON_GetObjectItem(in, "content"));
     const char *nonce = cJSON_GetStringValue(cJSON_GetObjectItem(in, "nonce"));
+    const char *sticker = cJSON_GetStringValue(cJSON_GetObjectItem(in, "sticker")); // sent on its own
+    if (!content)
+        content = "";
     // Byte cap only; Discord enforces its 2000 character limit itself.
-    if (!channel || !is_id(channel) || !content || !*content || strlen(content) > 8000) {
+    if (!channel || !is_id(channel) || (!*content && !(sticker && is_id(sticker))) || strlen(content) > 8000) {
         cJSON_Delete(in);
         reply(c, "400 Bad Request", "text/plain", "message", 7);
         return;
@@ -217,6 +220,8 @@ static void api_send(int c, const char *body)
         cJSON_AddStringToObject(out, "nonce", nonce);
     cJSON_AddFalseToObject(out, "tts");
     cJSON_AddNumberToObject(out, "flags", 0);
+    if (sticker && is_id(sticker))
+        cJSON_AddItemToArray(cJSON_AddArrayToObject(out, "sticker_ids"), cJSON_CreateString(sticker));
     const char *reply_to = cJSON_GetStringValue(cJSON_GetObjectItem(in, "reply_to"));
     if (reply_to && is_id(reply_to)) {
         cJSON *ref = cJSON_AddObjectToObject(out, "message_reference");
@@ -229,6 +234,44 @@ static void api_send(int c, const char *body)
     cJSON_Delete(in);
     reply_rest(c, rest("POST", path, json));
     free(json);
+}
+
+// Discord's own sticker packs (Wumpus and friends), trimmed to what the picker shows:
+// {"packs": [{"id", "name", "stickers": [{"id", "name", "format_type"}]}]}. Fetched once.
+static void api_sticker_packs(int c)
+{
+    static char *cached;
+    static pthread_mutex_t once = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&once);
+    if (!cached) {
+        http_response r = http_request("GET", "/sticker-packs", NULL, chat_token());
+        cJSON *in = r.status == 200 ? cJSON_Parse(r.body) : NULL, *p, *s;
+        free(r.body);
+        cJSON *out = cJSON_CreateObject(), *packs = cJSON_AddArrayToObject(out, "packs");
+        cJSON_ArrayForEach(p, cJSON_GetObjectItem(in, "sticker_packs"))
+        {
+            cJSON *op = cJSON_CreateObject(), *list = NULL;
+            cJSON_AddStringToObject(op, "id", cJSON_GetStringValue(cJSON_GetObjectItem(p, "id")) ?: "");
+            cJSON_AddStringToObject(op, "name", cJSON_GetStringValue(cJSON_GetObjectItem(p, "name")) ?: "");
+            list = cJSON_AddArrayToObject(op, "stickers");
+            cJSON_ArrayForEach(s, cJSON_GetObjectItem(p, "stickers"))
+            {
+                cJSON *os = cJSON_CreateObject();
+                cJSON_AddStringToObject(os, "id", cJSON_GetStringValue(cJSON_GetObjectItem(s, "id")) ?: "");
+                cJSON_AddStringToObject(os, "name", cJSON_GetStringValue(cJSON_GetObjectItem(s, "name")) ?: "");
+                cJSON_AddNumberToObject(os, "format_type", cJSON_GetNumberValue(cJSON_GetObjectItem(s, "format_type")));
+                cJSON_AddItemToArray(list, os);
+            }
+            cJSON_AddItemToArray(packs, op);
+        }
+        if (in) // a failed fetch is tried again next time
+            cached = cJSON_PrintUnformatted(out);
+        cJSON_Delete(in);
+        cJSON_Delete(out);
+    }
+    const char *body = cached ? cached : "{\"packs\":[]}";
+    reply(c, "200 OK", "application/json", body, strlen(body));
+    pthread_mutex_unlock(&once);
 }
 
 // Adds the account's reaction: {channel, message, emoji} (a Unicode emoji).
@@ -722,6 +765,8 @@ static void handle(int c, int local)
     } else if (post && (strcmp(path, "/api/remoteplay/pair") == 0 || strcmp(path, "/api/remoteplay/unpair") == 0 ||
                         strcmp(path, "/api/remoteplay/use") == 0)) {
         api_remoteplay(c, path, body);
+    } else if (get && strcmp(path, "/api/sticker-packs") == 0) {
+        api_sticker_packs(c);
     } else if (post && strcmp(path, "/api/prefs") == 0) {
         api_prefs(c, body);
     } else if (post && strcmp(path, "/api/signout") == 0) {

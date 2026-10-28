@@ -494,8 +494,25 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
 
     if (mode_ == Mode::emoji)
     {
-        switch (picker_.update(input, dt, feedback))
+        const EmojiPicker::Result result = picker_.update(s, input, dt, feedback);
+        if (result != EmojiPicker::Result::none)
+            picker_.close();
+        switch (result)
         {
+        case EmojiPicker::Result::sticker: { // sent at once, on its own, as in Discord; the draft waits
+            discord::Request r;
+            r.kind = discord::Request::Kind::send;
+            r.guild_id = guild_id_;
+            r.channel_id = channel_id_;
+            r.sticker_id = picker_.sticker().id;
+            r.sticker_name = picker_.sticker().name;
+            r.sticker_format = picker_.sticker().format;
+            requests.push_back(r);
+            mode_ = Mode::browse;
+            focus_ = -1;
+            scroll_.target = 0.0f;
+            break;
+        }
         case EmojiPicker::Result::picked:
             if (picker_react_ && focus_ >= 0 && focus_ < count)
             {
@@ -649,7 +666,7 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
         }
         else if (chosen(Act::react)) // every emoji, as Discord's picker
         {
-            picker_.open(s, guild_id_, "React");
+            picker_.open(s, guild_id_, "React", false);
             picker_react_ = true;
             mode_ = Mode::emoji;
             feedback.play(hui::audio::Cue::modal_open);
@@ -777,7 +794,13 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
             mode_ = Mode::browse; // the draft stays for next time
             break;
         case Keyboard::Result::emoji:
-            picker_.open(s, guild_id_, "Add to message");
+            picker_.open(s, guild_id_, "Add to message", can_send(s));
+            if (s.sticker_packs.empty())
+            {
+                discord::Request r;
+                r.kind = discord::Request::Kind::load_sticker_packs;
+                requests.push_back(r);
+            }
             picker_react_ = false;
             mode_ = Mode::emoji;
             break;

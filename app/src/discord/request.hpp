@@ -17,12 +17,13 @@ struct Request
         browser_cancel,
         open_channel, // load history and subscribe to the guild
         load_older,   // the next page of history above what is loaded
-        send,         // post content to channel_id
+        send,         // post content to channel_id, or a sticker (sticker_id) on its own
         react,        // add (or remove) emoji to message_id in channel_id: Unicode, or a server's name:id
         open_dm,      // find or create the DM with user_id (Snapshot::dm_by_user)
         prefetch,     // load history ahead of an open, without marking it read
         edit,         // replace message_id's content (the account's own message)
         remove,       // delete message_id (the account's own message)
+        load_sticker_packs, // Discord's own sticker packs, for the picker (Snapshot::sticker_packs)
         remoteplay_pair, // pair Go Live's Remote Play for console user user_id ("" on screen): content = the PIN or ""
         remoteplay_unpair, // forget user_id's pairing
         remoteplay_use, // Go Live runs as console user user_id
@@ -52,6 +53,9 @@ struct Request
     bool tv = false;      // voice_output
     bool on = false;      // voice_broadcast
     bool remove = false;  // react: take this account's reaction off
+    std::string sticker_id;   // send: a sticker instead of text
+    std::string sticker_name;
+    int sticker_format = 1;
     int value = 0;        // set_pref
 };
 

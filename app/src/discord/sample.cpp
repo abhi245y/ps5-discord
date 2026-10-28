@@ -370,6 +370,13 @@ void apply_sample(Snapshot &s, const Request &r)
                 s.voice.pair_console = u.console, s.voice.pair_user = u.name, s.voice.pair_since = u.since;
         return;
     }
+    if (r.kind == Request::Kind::load_sticker_packs) // a pack like Discord's own (only Wave's id is real)
+    {
+        s.sticker_packs = {{"847199849233514549", "Wumpus Beyond",
+                            {{"749054660769218631", "Wave", 3}, {"749043879713701898", "Hi", 3},
+                             {"751606065447305216", "Wumpus Nom", 3}, {"816087792291282944", "Party", 3}}}};
+        return;
+    }
     if (r.kind != Request::Kind::send)
         return; // history is all loaded already
     std::vector<Message> &list = edit_messages(s, r.channel_id);
@@ -378,6 +385,8 @@ void apply_sample(Snapshot &s, const Request &r)
     m.channel_id = r.channel_id;
     m.author_id = s.me.id;
     m.content = r.content;
+    if (!r.sticker_id.empty())
+        m.stickers.push_back({r.sticker_id, r.sticker_name, r.sticker_format});
     m.time_ms = s.now_ms;
     for (const Message &original : list)
         if (original.id == r.reply_to)

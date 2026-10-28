@@ -20,8 +20,9 @@ struct FrameSheet
     std::vector<std::uint8_t> rgba;
 };
 
-// A Lottie animation (JSON) at size px square, up to a couple of seconds' worth of frames.
-bool render_lottie(const std::string &json, int size, FrameSheet &out);
+// A Lottie animation (JSON) at size px square, up to max_frames (48: a couple of seconds;
+// 1: a still from its middle).
+bool render_lottie(const std::string &json, int size, FrameSheet &out, int max_frames = 48);
 // A GIF, every frame (up to the same limit).
 bool decode_gif(const std::string &data, FrameSheet &out);
 

@@ -42,7 +42,7 @@ void place(FrameSheet &out, int index, const std::uint8_t *frame, int cell_w, in
 
 } // namespace
 
-bool render_lottie(const std::string &json, int size, FrameSheet &out)
+bool render_lottie(const std::string &json, int size, FrameSheet &out, int max_frames)
 {
     static const bool ready = tvg::Initializer::init(0) == tvg::Result::Success; // one thread: the caller's
     if (!ready)
@@ -67,12 +67,12 @@ bool render_lottie(const std::string &json, int size, FrameSheet &out)
         canvas->add(picture) != tvg::Result::Success)
         return false;
     const float total = animation->totalFrame(), seconds = animation->duration();
-    const int frames = std::clamp(static_cast<int>(std::lround(seconds * 20.0f)), 1, kMaxFrames);
+    const int frames = std::clamp(static_cast<int>(std::lround(seconds * 20.0f)), 1, std::min(max_frames, kMaxFrames));
     sheet(out, size, size, frames);
     out.fps = seconds > 0.0f ? static_cast<float>(frames) / seconds : 0.0f;
     for (int i = 0; i < frames; ++i)
     {
-        animation->frame(total * static_cast<float>(i) / static_cast<float>(frames));
+        animation->frame(frames == 1 ? total * 0.5f : total * static_cast<float>(i) / static_cast<float>(frames));
         std::fill(frame.begin(), frame.end(), 0u);
         canvas->update();
         canvas->draw(true);
