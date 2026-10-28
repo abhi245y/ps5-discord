@@ -181,8 +181,8 @@ std::vector<OnMessage> on_message(const discord::Message &m)
 }
 
 const char *const kReactions[] = {"\xE2\x9D\xA4\xEF\xB8\x8F", "\xF0\x9F\x91\x8D", "\xF0\x9F\x98\x82",
-                                  "\xF0\x9F\x98\xAE", "\xF0\x9F\x94\xA5"};
-constexpr int kReactionCount = 5;
+                                  "\xF0\x9F\x98\xAE"};
+constexpr int kReactionCount = 5; // the quick row: those four, then More (the picker)
 
 std::string clock_time(std::int64_t ms, int utc_offset_minutes)
 {
@@ -596,8 +596,8 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
         const bool mine = focus_ >= 0 && fm.author_id == s.me.id;
         const std::vector<Action_> acts = actions_for(fm, mine);
         const int kActionCount = static_cast<int>(acts.size());
-        // Entries: the actions, top to bottom; the quick reactions, a row; the emoji on
-        // the message, in rows of kMenuColumns.
+        // Entries: the actions, top to bottom; the quick reactions and More, a row; the
+        // emoji on the message, in rows of kMenuColumns.
         const std::vector<OnMessage> here = on_message(fm);
         const int quick = kActionCount, on = kActionCount + kReactionCount;
         const int entries = on + static_cast<int>(here.size());
@@ -685,7 +685,7 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
                 feedback.play(hui::audio::Cue::erase);
             }
         }
-        else if (chosen(Act::react)) // every emoji, as Discord's picker
+        else if (chosen(Act::react) || (input.is_pressed(Action::confirm) && action_ == on - 1)) // React, or More
         {
             picker_.open(s, guild_id_, "React", false, false);
             pick_for_ = PickFor::react;
@@ -1419,7 +1419,15 @@ void Chat::draw_actions(const discord::Snapshot &s, DrawList &list, const Rect &
     {
         const Rect cell{panel.x + 20.0f + i * 92.0f, ry, 80.0f, 80.0f};
         list.rounded_rect(cell, 18.0f, kRaisedHigh);
-        emoji_picture(list, ink_, kReactions[i], std::string(), {cell.cx() - 24.0f, cell.cy() - 24.0f, 48.0f, 48.0f});
+        if (i == kReactionCount - 1) // More: a face with a plus, the picker
+        {
+            emoji_picture(list, ink_, "\xF0\x9F\x99\x82", std::string(), {cell.cx() - 26.0f, cell.cy() - 24.0f, 40.0f, 40.0f});
+            list.circle(cell.cx() + 18.0f, cell.cy() + 17.0f, 15.0f, kCoral);
+            list.rounded_rect({cell.cx() + 17.0f, cell.cy() + 9.0f, 3.0f, 16.0f}, 1.5f, kOnCoral);
+            list.rounded_rect({cell.cx() + 10.0f, cell.cy() + 15.5f, 16.0f, 3.0f}, 1.5f, kOnCoral);
+        }
+        else
+            emoji_picture(list, ink_, kReactions[i], std::string(), {cell.cx() - 24.0f, cell.cy() - 24.0f, 48.0f, 48.0f});
         if (action_ == kActionCount + i)
             focus_outline(list, cell, 18.0f, 1.0f);
     }
