@@ -23,7 +23,12 @@ const char *bc_error(void); // why it stopped or could not start; "" when none
 
 // Remote Play pairing with the console itself, once: the user opens Settings > System >
 // Remote Play > Link Device on the console and enters its 8-digit PIN in the app.
+// pin NULL or "": the core makes the PIN itself through the console's Remote Play service,
+// so the user enters nothing; if the console refuses that, the state turns "need_pin".
 int bc_paired(void);              // 1 when remoteplay.bin is there
 int bc_pair(const char *pin);     // starts pairing; 0 when started, -1 with bc_pair_error()
-const char *bc_pair_state(void);  // "idle", "pairing", "paired" or "error"
+int bc_unpair(void);              // forgets the pairing here (the console lists it until removed there)
+const char *bc_pair_state(void);  // "idle", "pairing", "paired", "need_pin" or "error"
 const char *bc_pair_error(void);
+// The pairing's console name, console user and when it was made (unix seconds; 0 unknown).
+void bc_pair_info(char console[64], char user[64], long long *since);

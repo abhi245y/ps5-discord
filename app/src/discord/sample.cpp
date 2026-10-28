@@ -313,6 +313,15 @@ void apply_sample(Snapshot &s, const Request &r)
     {
         s.voice.paired = true;
         s.voice.pair_state = "paired";
+        s.voice.pair_console = "PS5-0429";
+        s.voice.pair_user = s.me.name;
+        s.voice.pair_since = s.now_ms / 1000;
+        return;
+    }
+    if (r.kind == Request::Kind::remoteplay_unpair)
+    {
+        s.voice.paired = false;
+        s.voice.pair_state = "idle";
         return;
     }
     if (r.kind != Request::Kind::send)

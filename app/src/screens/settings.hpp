@@ -1,5 +1,5 @@
 // ps5-discord - Settings (framework frame 11): sections on the left, the chosen
-// section's rows on the right, and the Remote Play pairing PIN for Go Live.
+// section's rows on the right, and the Remote Play pairing dialog for Go Live.
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 #pragma once
@@ -33,14 +33,26 @@ class SettingsScreen
     int section_ = 0;
     int row_ = 0;
     bool in_rows_ = false; // focus is on the rows, not the sections
-    // The pairing PIN: eight digits, -1 while empty; the digit being entered.
-    bool pin_open_ = false, pin_sent_ = false;
-    int pin_[8] = {};
+    // The pairing dialog: a menu while paired (pair again, remove), the wait while the
+    // core pairs, and the PIN boxes when the console wants its Link Device PIN typed.
+    enum class Pair
+    {
+        none,
+        menu,
+        wait,
+        pin,
+    };
+    Pair pair_ = Pair::none;
+    int menu_at_ = 0;
+    float sent_time_ = 9.0f; // since the last pairing request
+    bool pin_sent_ = false;
+    int pin_[8] = {}; // -1 while empty
     int pin_at_ = 0;
 
-    void draw_pin(const discord::Snapshot &snapshot, DrawList &list) const;
-    bool update_pin(const discord::Snapshot &snapshot, const hui::InputFrame &input, hui::ui::Feedback &feedback,
-                    std::vector<discord::Request> &requests);
+    void draw_pair(const discord::Snapshot &snapshot, DrawList &list) const;
+    void update_pair(const discord::Snapshot &snapshot, const hui::InputFrame &input, hui::ui::Feedback &feedback,
+                     std::vector<discord::Request> &requests);
+    void start_pin();
 };
 
 } // namespace screens

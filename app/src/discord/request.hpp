@@ -23,7 +23,8 @@ struct Request
         prefetch,     // load history ahead of an open, without marking it read
         edit,         // replace message_id's content (the account's own message)
         remove,       // delete message_id (the account's own message)
-        remoteplay_pair, // pair Go Live's Remote Play with the console: content = the 8-digit PIN
+        remoteplay_pair, // pair Go Live's Remote Play with the console: content = the PIN, or "" (the core makes it)
+        remoteplay_unpair, // forget that pairing
         voice_join,   // join a server voice channel: guild_id, channel_id
         voice_call,   // join a DM's call, ringing the other side: channel_id
         voice_answer, // join a DM's call that rings us: channel_id

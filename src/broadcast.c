@@ -11,7 +11,9 @@
 
 #include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "log.h"
 
@@ -39,9 +41,40 @@ const char *bc_error(void)
     return error;
 }
 
+static char info_file[256];
+static void set_pair_state(const char *s, const char *why);
+
 void bc_init(const char *data_dir)
 {
     snprintf(pair_file, sizeof pair_file, "%s/remoteplay.bin", data_dir);
+    snprintf(info_file, sizeof info_file, "%s/remoteplay.txt", data_dir);
+}
+
+// remoteplay.txt: three lines, the console's name, the console user and the time it was made.
+void bc_pair_info(char console[64], char user[64], long long *since)
+{
+    console[0] = user[0] = 0;
+    *since = 0;
+    FILE *f = fopen(info_file, "r");
+    if (!f)
+        return;
+    char line[64];
+    if (fgets(console, 64, f))
+        console[strcspn(console, "\n")] = 0;
+    if (fgets(user, 64, f))
+        user[strcspn(user, "\n")] = 0;
+    if (fgets(line, sizeof line, f))
+        *since = atoll(line);
+    fclose(f);
+}
+
+int bc_unpair(void)
+{
+    int r = remove(pair_file);
+    remove(info_file);
+    set_pair_state("idle", "");
+    LOG("remote play: pairing removed");
+    return r == 0 || !bc_paired() ? 0 : -1;
 }
 
 void bc_set_sink(const bc_sink *s)
@@ -70,6 +103,11 @@ const char *bc_pair_error(void)
 }
 
 static void set_pair(const char *s, const char *why)
+{
+    set_pair_state(s, why);
+}
+
+static void set_pair_state(const char *s, const char *why)
 {
     pthread_mutex_lock(&lock);
     snprintf(pair_state, sizeof pair_state, "%s", s);
@@ -280,20 +318,58 @@ static void *usb_main(void *arg)
 
 // ---- the session -------------------------------------------------------------------
 
-static uint64_t account_id(void)
+int sceUserServiceInitialize(void *);
+int sceUserServiceGetForegroundUser(int32_t *);
+int sceUserServiceGetUserName(int32_t, char *, size_t);
+
+// The foreground console user's PSN account id (0 when it has none) and name. The core
+// does not use the user service otherwise, so it starts it here (already-started is fine).
+static uint64_t account_id_named(char *name, size_t cap)
 {
-    int (*fg)(int32_t *) = NULL;
+    int init = sceUserServiceInitialize(NULL);
+    int32_t user = -1;
+    int fg = sceUserServiceGetForegroundUser(&user);
+    if (name && cap) {
+        name[0] = 0;
+        if (fg == 0)
+            sceUserServiceGetUserName(user, name, cap);
+    }
     int (*acct)(int32_t, uint64_t *) = NULL;
     void *lib = dlopen("libSceUserService.sprx", RTLD_LAZY);
-    if (lib) {
-        fg = (int (*)(int32_t *))dlsym(lib, "sceUserServiceGetForegroundUser");
+    if (lib)
         acct = (int (*)(int32_t, uint64_t *))dlsym(lib, "sceUserServiceGetNpAccountId");
-    }
-    int32_t user = -1;
     uint64_t id = 0;
-    if (fg && acct && fg(&user) == 0)
-        acct(user, &id);
+    int ar = fg == 0 && acct ? acct(user, &id) : -1;
+    LOG("remote play: user service %#x, foreground user %#x (%#x), account id %#x %s", (unsigned)init,
+        (unsigned)user, (unsigned)fg, (unsigned)ar, id ? "present" : "missing");
     return id;
+}
+
+static uint64_t account_id(void)
+{
+    return account_id_named(NULL, 0);
+}
+
+// The console's own Remote Play service (what Settings > Remote Play > Link Device uses):
+// a PIN made here opens the console for pairing, no screen needed. 0 when it refuses.
+static int (*rp_notify_pin_error)(int);
+
+static uint32_t system_pin(void)
+{
+    void *lib = dlopen("libSceRemoteplay.sprx", RTLD_LAZY);
+    int (*init)(void *, size_t) = lib ? (int (*)(void *, size_t))dlsym(lib, "sceRemoteplayInitialize") : NULL;
+    int (*gen)(uint32_t *) = lib ? (int (*)(uint32_t *))dlsym(lib, "sceRemoteplayGeneratePinCode") : NULL;
+    rp_notify_pin_error = lib ? (int (*)(int))dlsym(lib, "sceRemoteplayNotifyPinCodeError") : NULL;
+    if (!init || !gen) {
+        LOG("remote play: the console's pairing service is not reachable (%s)", lib ? "symbols" : "library");
+        return 0;
+    }
+    int ir = init(NULL, 0);
+    uint32_t pin = 0;
+    int gr = gen(&pin);
+    LOG("remote play: console pairing service init %#x, PIN %s (%#x)", (unsigned)ir, gr == 0 && pin ? "made" : "refused",
+        (unsigned)gr);
+    return gr == 0 ? pin : 0;
 }
 
 static const char *run(void)
@@ -402,7 +478,13 @@ static void *pair_main(void *arg)
 {
     uint32_t pin = (uint32_t)(uintptr_t)arg;
     const char *why = NULL;
-    uint64_t id = account_id();
+    int made_pin = pin == 0;
+    if (made_pin && !(pin = system_pin())) {
+        set_pair("need_pin", "Open Settings > System > Remote Play > Link Device on the PS5 and enter its PIN.");
+        return NULL;
+    }
+    char user[64];
+    uint64_t id = account_id_named(user, sizeof user);
     static ChiakiLog log;
     chiaki_log_init(&log, CHIAKI_LOG_ERROR | CHIAKI_LOG_WARNING, rp_log, NULL);
     ChiakiRegistInfo info;
@@ -428,6 +510,8 @@ static void *pair_main(void *arg)
             why = regist_done ? "The console refused the PIN. Open Link Device again and use the new PIN."
                               : "The console did not answer. Is Link Device open?";
     }
+    if (made_pin && rp_notify_pin_error)
+        rp_notify_pin_error(1); // close the console's pairing window again
     if (!why) { // write it whole, then move it into place
         char tmp[300];
         snprintf(tmp, sizeof tmp, "%s.new", pair_file);
@@ -438,6 +522,11 @@ static void *pair_main(void *arg)
         if (ok) {
             chmod(tmp, 0600);
             ok = rename(tmp, pair_file) == 0;
+        }
+        FILE *info = ok ? fopen(info_file, "w") : NULL;
+        if (info) {
+            fprintf(info, "%.63s\n%.63s\n%lld\n", regist_host.server_nickname, user, (long long)time(NULL));
+            fclose(info);
         }
         if (!ok)
             why = "Could not save the pairing.";
@@ -451,8 +540,8 @@ static void *pair_main(void *arg)
 int bc_pair(const char *pin)
 {
     char *end = NULL;
-    unsigned long n = pin ? strtoul(pin, &end, 10) : 0;
-    if (!pin || strlen(pin) != 8 || *end) {
+    unsigned long n = pin && *pin ? strtoul(pin, &end, 10) : 0;
+    if (pin && *pin && (strlen(pin) != 8 || *end)) {
         set_pair("error", "The PIN has 8 digits.");
         return -1;
     }

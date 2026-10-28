@@ -1102,6 +1102,9 @@ void Client::poll_voice()
             voice.paired = v["broadcast"].value("paired", false);
             voice.pair_state = text(v["broadcast"], "pair_state");
             voice.pair_error = text(v["broadcast"], "pair_error");
+            voice.pair_console = text(v["broadcast"], "pair_console");
+            voice.pair_user = text(v["broadcast"], "pair_user");
+            voice.pair_since = static_cast<std::int64_t>(v["broadcast"].value("pair_since", 0.0));
         }
         if (v.contains("speaking") && v["speaking"].is_array())
             for (const json &id : v["speaking"])
@@ -1463,10 +1466,13 @@ void Client::handle(const Request &request)
         last_voice_ms_ = 0; // the new state comes on the next poll
         break;
     }
-    case Request::Kind::remoteplay_pair: {
-        const Reply reply = http(port_, "POST", "/api/remoteplay/pair", json{{"pin", request.content}}.dump());
+    case Request::Kind::remoteplay_pair:
+    case Request::Kind::remoteplay_unpair: {
+        const bool pair = request.kind == Request::Kind::remoteplay_pair;
+        const Reply reply = pair ? http(port_, "POST", "/api/remoteplay/pair", json{{"pin", request.content}}.dump())
+                                 : http(port_, "POST", "/api/remoteplay/unpair", "{}");
         if (reply.status != 202)
-            hui::sys::log("[CLIENT] pairing answered %d", reply.status);
+            hui::sys::log("[CLIENT] %s answered %d", pair ? "pairing" : "unpairing", reply.status);
         last_voice_ms_ = 0; // the pairing state comes on the next poll
         break;
     }
