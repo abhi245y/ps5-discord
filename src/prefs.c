@@ -9,18 +9,18 @@
 
 typedef struct {
     const char *key;
-    int min, max;
-    int value; // starts as the default
+    int min, max, def;
+    int value;
 } pref;
 
 static pref prefs[] = {
-    {"golive_quality", 0, 3, 0}, // broadcast.h bc_profile: 720p30, 720p60, 1080p30, 1080p60
-    {"mic_gain", 0, 10, 5},      // 5 = as captured, 10 = twice
-    {"notify_dm", 0, 1, 1},      // DMs and mentions (chat.c notify_kind)
-    {"notify_server", 0, 2, 1},  // server messages: 0 off, 1 as set in Discord, 2 every one
-    {"notify_system", 0, 1, 1},  // PS5 alerts while the app is not on screen
-    {"notify_live", 0, 1, 0},    // ... and while Go Live is on (they would be on the stream)
-    {"quiet_hours", 0, 4, 0},    // notify.c: no sounds, no PS5 alerts
+    {"golive_quality", 0, 3, 0, 0}, // broadcast.h bc_profile: 720p30, 720p60, 1080p30, 1080p60
+    {"mic_gain", 0, 10, 5, 5},      // 5 = as captured, 10 = twice
+    {"notify_dm", 0, 1, 1, 1},      // DMs and mentions (chat.c notify_kind)
+    {"notify_server", 0, 2, 1, 1},  // server messages: 0 off, 1 as set in Discord, 2 every one
+    {"notify_system", 0, 1, 1, 1},  // PS5 alerts while the app is not on screen
+    {"notify_live", 0, 1, 0, 0},    // ... and while Go Live is on (they would be on the stream)
+    {"quiet_hours", 0, 4, 0, 0},    // notify.c: no sounds, no PS5 alerts
 };
 #define COUNT ((int)(sizeof prefs / sizeof *prefs))
 
@@ -35,12 +35,23 @@ static pref *find(const char *key)
     return NULL;
 }
 
-void prefs_init(const char *data_dir)
+void prefs_load(const char *data_dir, int32_t user)
 {
-    snprintf(file, sizeof file, "%s/prefs", data_dir);
+    pthread_mutex_lock(&lock);
+    snprintf(file, sizeof file, "%s/prefs-%08x", data_dir, (unsigned)user);
+    for (int i = 0; i < COUNT; i++)
+        prefs[i].value = prefs[i].def;
     FILE *f = fopen(file, "r");
-    if (!f)
+    if (!f) { // the one file of before per-user settings goes to the first user who runs
+        char legacy[220];
+        snprintf(legacy, sizeof legacy, "%s/prefs", data_dir);
+        if (rename(legacy, file) == 0)
+            f = fopen(file, "r");
+    }
+    if (!f) {
+        pthread_mutex_unlock(&lock);
         return;
+    }
     char key[64];
     int v;
     while (fscanf(f, "%63s %d", key, &v) == 2) {
@@ -49,6 +60,7 @@ void prefs_init(const char *data_dir)
             p->value = v;
     }
     fclose(f);
+    pthread_mutex_unlock(&lock);
 }
 
 int prefs_get(const char *key)

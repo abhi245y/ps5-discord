@@ -40,14 +40,24 @@ int sceKernelSetProcessName(const char *name);
 #define DATA_DIR "."
 #endif
 // ponytail: plaintext token on the console's data partition; encrypt at rest before release.
-#define TOKEN_PATH DATA_DIR "/token"
+// One per console user (token-<user>): each signs in to their own Discord account, and the
+// core runs the account of the user on screen.
+static char token_name[32] = "token";
+static volatile int32_t session_user = -1;
+
+static void token_path(char *out, size_t cap)
+{
+    snprintf(out, cap, "%s/%s", DATA_DIR, token_name);
+}
 // Control port: keeps one instance alive and serves the status web UI
 // (http://<ps5>:9041, POST /api/quit for make stop). Future UI app IPC goes here too.
 #define CONTROL_PORT 9041
 
 static int read_token(char *out, size_t cap)
 {
-    FILE *f = fopen(TOKEN_PATH, "r");
+    char path[64];
+    token_path(path, sizeof path);
+    FILE *f = fopen(path, "r");
     if (!f)
         return -1;
     size_t n = fread(out, 1, cap - 1, f);
@@ -58,17 +68,22 @@ static int read_token(char *out, size_t cap)
     return n > 0 ? 0 : -1;
 }
 
-static void login(char *token, size_t cap)
+// 0 when signed in; -1 when another console user came on screen first.
+static int login(char *token, size_t cap)
 {
     browser_auth_allow(1);
     for (int backoff = 2;;) {
+        if (gateway_switching())
+            return -1;
         int browser = browser_auth_pending();
         int result = browser ? browser_auth_login(token, cap) : remote_auth_login(token, cap);
+        if (result == 0 && gateway_switching())
+            return -1; // signed in on the page of a user who left: not theirs to keep
         if (result == 0) {
             browser_auth_allow(0);
-            if (session_save(DATA_DIR, token) != 0)
+            if (session_save(DATA_DIR, token_name, token) != 0)
                 LOG("could not persist session; login will be required on next launch");
-            return;
+            return 0;
         }
         status_state("login");
         // A browser attempt ended (cancelled, timed out) or is starting: no wait for the next step.
@@ -77,7 +92,7 @@ static void login(char *token, size_t cap)
             continue;
         }
         LOG("login failed, new QR in %d s", backoff);
-        for (int i = 0; i < backoff * 10 && !browser_auth_pending(); ++i)
+        for (int i = 0; i < backoff * 10 && !browser_auth_pending() && !gateway_switching(); ++i)
             usleep(100000);
         backoff = backoff < 30 ? backoff * 2 : 30;
     }
@@ -98,16 +113,58 @@ int core_sign_out(void)
 // Quit (the app's Quit, or a sign out with forget_token): Go Live gives the USB
 // controller back and the call ends first. After a sign out the app starts the core
 // again, at the QR code.
-void core_quit(int forget_token)
+// Go Live gives the USB controller back, then the call ends.
+static void end_calls(void)
 {
     stream_stop();
     bc_stop();
     for (int i = 0; i < 100 && strcmp(bc_state(), "off") != 0 && strcmp(bc_state(), "error") != 0; i++)
         usleep(100000);
     voice_leave();
-    if (forget_token)
-        remove(TOKEN_PATH);
+}
+
+void core_quit(int forget_token)
+{
+    end_calls();
+    if (forget_token) {
+        char path[64];
+        token_path(path, sizeof path);
+        remove(path);
+    }
     _exit(0);
+}
+
+// The account follows the console user on screen: the core takes theirs, its settings
+// and notifications. The one sign-in and settings file of before go to the first user.
+static void use_user(int32_t user)
+{
+    session_user = user;
+    snprintf(token_name, sizeof token_name, "token-%08x", (unsigned)user);
+    char path[64];
+    token_path(path, sizeof path);
+    FILE *f = fopen(path, "r"); // access() refuses payloads on the console
+    if (f)
+        fclose(f);
+    else
+        rename(DATA_DIR "/token", path);
+    prefs_load(DATA_DIR, user);
+    notify_set_owner(user);
+    LOG("console user %08x: their Discord account", (unsigned)user);
+}
+
+// Another user on screen: the session ends within a second or two (gateway_switch).
+static void *watch_user(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        sleep(2);
+        int32_t user = rp_foreground();
+        if (user >= 0 && user != session_user && !gateway_switching()) {
+            LOG("console user %08x came on screen: switching accounts", (unsigned)user);
+            gateway_switch(1);
+        }
+    }
+    return NULL;
 }
 
 // Any of the app's notifications (notify.h). With the app in front it shows its own;
@@ -170,7 +227,6 @@ int main(void)
     voice_init(DATA_DIR);
     cv_init();
     rp_init(DATA_DIR);
-    prefs_init(DATA_DIR);
     chat_set_alert(app_alert);
     stream_init();
     if (tls_global_init() != 0) {
@@ -178,11 +234,23 @@ int main(void)
         return 1;
     }
     LOG("starting");
+    pthread_t watcher;
+    if (pthread_create(&watcher, NULL, watch_user, NULL) == 0)
+        pthread_detach(watcher);
     for (;;) {
-        if (read_token(token, sizeof token) != 0)
-            login(token, sizeof token);
-        chat_set_token(token);
-        int code = gateway_run(token);
+        use_user(rp_foreground());
+        gateway_switch(0);
+        int code = GATEWAY_SWITCH;
+        if (read_token(token, sizeof token) == 0 || login(token, sizeof token) == 0) {
+            chat_set_token(token);
+            code = gateway_run(token);
+        }
+        if (code == GATEWAY_SWITCH) { // the user on screen changed: their account next
+            end_calls();
+            chat_reset();
+            status_state("starting");
+            continue;
+        }
         if (code != 4004) {
             status_state("stopped");
             LOG("stopped (%d)", code);
@@ -190,6 +258,8 @@ int main(void)
         }
         LOG("token rejected, logging in again");
         app_alert("Discord", "Signed out. Open the app to sign in again.", NULL, 1);
-        remove(TOKEN_PATH);
+        char path[64];
+        token_path(path, sizeof path);
+        remove(path);
     }
 }

@@ -32,6 +32,15 @@ void chat_set_token(const char *t)
     pthread_mutex_unlock(&lock);
 }
 
+void chat_reset(void)
+{
+    pthread_mutex_lock(&lock);
+    cJSON_Delete(tree);
+    tree = NULL;
+    token[0] = 0;
+    pthread_mutex_unlock(&lock);
+}
+
 const char *chat_token(void)
 {
     return token; // written once per login before the gateway starts

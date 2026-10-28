@@ -5,6 +5,7 @@
 
 void chat_set_token(const char *token);
 const char *chat_token(void); // valid while the session lives
+void chat_reset(void);        // the account is gone (another console user's is next)
 
 // Every gateway dispatch: READY builds the account, the rest keep it current
 // (presence, voice states, read state, DMs) and feed the message event ring.

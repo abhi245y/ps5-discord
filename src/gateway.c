@@ -207,6 +207,18 @@ static int on_message(gateway *g, const char *json)
 
 static int send_pending(gateway *g);
 
+static volatile int switching; // gateway_switch: another console user's account is wanted
+
+void gateway_switch(int on)
+{
+    switching = on;
+}
+
+int gateway_switching(void)
+{
+    return switching;
+}
+
 // One connection. Returns the server close code, 0 for a client-side reconnect, -1 on error.
 static int run_connection(gateway *g)
 {
@@ -227,6 +239,10 @@ static int run_connection(gateway *g)
 
     int result = 0;
     for (;;) {
+        if (switching) {
+            result = GATEWAY_SWITCH;
+            break;
+        }
         int timeout = 1000; // short, so requests from other threads go out quickly
         if (g->next_heartbeat) {
             int64_t left = g->next_heartbeat - now_ms();
@@ -282,8 +298,8 @@ static int run_connection(gateway *g)
             break;
     }
     zstream_free(&g->z);
-    // 4000 keeps the session resumable; 1000 would end it.
-    ws_close(&g->ws, 4000);
+    // 4000 keeps the session resumable; 1000 ends it (another user's account is next).
+    ws_close(&g->ws, result == GATEWAY_SWITCH ? 1000 : 4000);
     return result;
 }
 
@@ -353,6 +369,8 @@ int gateway_run(const char *token)
     int backoff = 1;
     for (;;) {
         int code = run_connection(&g);
+        if (code == GATEWAY_SWITCH)
+            return code;
         switch (code) {
         case 4004: // authentication failed
         case 4010: case 4011: case 4012: case 4013: case 4014:

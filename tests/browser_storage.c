@@ -54,7 +54,7 @@ int main(void)
     snprintf(link, sizeof link, "%s/link.db", directory);
     assert(symlink(path, link) == 0);
     assert(browser_storage_token(link, out, sizeof out) == -1);
-    assert(session_save(directory, valid) == 0);
+    assert(session_save(directory, "token", valid) == 0);
     snprintf(target, sizeof target, "%s/token", directory);
     struct stat st;
     assert(stat(target, &st) == 0 && (st.st_mode & 0777) == 0600);
@@ -63,7 +63,7 @@ int main(void)
     assert(f);
     size_t n = fread(out, 1, sizeof out - 1, f); fclose(f); out[n] = 0;
     assert(strcmp(out, valid) == 0);
-    assert(session_save(link, "replacement") == -1); // never follows a destination symlink
+    assert(session_save(link, "token", "replacement") == -1); // never follows a destination symlink
     unlink(target); unlink(link); unlink(path);
     snprintf(path, sizeof path, "%s/browser.db-wal", directory); unlink(path);
     snprintf(path, sizeof path, "%s/browser.db-shm", directory); unlink(path);

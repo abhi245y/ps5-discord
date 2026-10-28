@@ -67,7 +67,7 @@ done:
     return result;
 }
 
-int session_save(const char *directory, const char *token)
+int session_save(const char *directory, const char *name, const char *token)
 {
     struct stat st;
     if (mkdir(directory, 0700) != 0 && errno != EEXIST)
@@ -75,8 +75,8 @@ int session_save(const char *directory, const char *token)
     if (lstat(directory, &st) != 0 || !S_ISDIR(st.st_mode) || chmod(directory, 0700) != 0)
         return -1;
     char temp[512], target[512];
-    if (snprintf(temp, sizeof temp, "%s/token.XXXXXX", directory) >= (int)sizeof temp ||
-        snprintf(target, sizeof target, "%s/token", directory) >= (int)sizeof target)
+    if (snprintf(temp, sizeof temp, "%s/%s.XXXXXX", directory, name) >= (int)sizeof temp ||
+        snprintf(target, sizeof target, "%s/%s", directory, name) >= (int)sizeof target)
         return -1;
     int fd = mkstemp(temp);
     if (fd < 0)

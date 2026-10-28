@@ -1,6 +1,7 @@
 #include "browser_auth.h"
 #include "browser_storage.h"
 #include "http.h"
+#include "gateway.h"
 #include "log.h"
 #include "status.h"
 
@@ -64,7 +65,7 @@ static int is_cancelled(void)
     pthread_mutex_lock(&lock);
     int value = cancelled;
     pthread_mutex_unlock(&lock);
-    return value;
+    return value || gateway_switching(); // another console user came on screen
 }
 
 static int take_reopen(void)

@@ -1025,6 +1025,13 @@ void Client::poll_state()
     }
     const std::string s = text(state, "state");
     const Connection before = snapshot_.connection;
+    // Signed in before, signing in now: another console user's turn, or signed out. The
+    // last account's servers, chats and DMs go.
+    if (before == Connection::ready && (s == "login" || s == "scanned" || s == "browser" || s == "starting"))
+    {
+        snapshot_ = Snapshot{};
+        events_next_ = -1;
+    }
     if (s == "ready")
         snapshot_.connection = Connection::ready;
     else if (s == "login" || s == "scanned" || s == "browser")

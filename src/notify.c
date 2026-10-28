@@ -137,6 +137,12 @@ static void debug_toast(const char *title, const char *body)
 // "ServiceFeedback" shows during games. It goes to the user on screen, not the system
 // (0xFE), so other console users never find the messages in their list.
 static int (*send_json)(int user, bool logged, const char *json);
+static volatile int32_t owner = -1;
+
+void notify_set_owner(int32_t user)
+{
+    owner = user;
+}
 
 static void load_notification(void)
 {
@@ -157,7 +163,9 @@ void notify_system(const char *context, const char *text, const char *icon)
     cut(t, 120);
     cut(b, 160);
     const int32_t user = rp_foreground();
-    if (!send_json || user < 0) { // nobody on screen to give it to: the toast, which is not kept
+    if (user < 0 || user != owner)
+        return; // the account's console user is not on screen: nobody else sees their messages
+    if (!send_json) {
         debug_toast(t, b);
         return;
     }
@@ -198,6 +206,11 @@ void notify_system(const char *context, const char *text, const char *icon)
     }
 }
 #else
+void notify_set_owner(int32_t user)
+{
+    (void)user;
+}
+
 static int local_hour(void)
 {
     time_t t = time(NULL);
