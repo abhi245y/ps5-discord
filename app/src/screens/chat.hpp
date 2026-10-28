@@ -43,6 +43,11 @@ class Chat
         voice_ = false;
         return out;
     }
+    // A notification banner is up: the touchpad opens its chat, not the emoji.
+    void banner_showing(bool on)
+    {
+        banner_ = on;
+    }
 
   private:
     struct Row // one laid-out message, page coordinates measured up from the composer
@@ -56,7 +61,6 @@ class Chat
     {
         browse,  // moving between messages
         actions, // the action menu of the focused message is open
-        compose, // the composer with quick replies is open
         typing,  // the system keyboard is up over the app
         keys,    // the app's own keyboard is up
         channels, // the server's channel list is open (Options)
@@ -98,14 +102,16 @@ class Chat
     Keyboard keys_; // the app's own keyboard, when the system one is not there
     EmojiPicker picker_;
     // What a pick does: react to the focused message, go into the app keyboard's text,
-    // or be sent at once (from the quick replies).
+    // or be sent at once (the touchpad).
     enum class PickFor
     {
         react,
         keys,
-        quick,
+        send,
     };
     PickFor pick_for_ = PickFor::react;
+    void open_picker(const discord::Snapshot &s, PickFor pick_for, std::vector<discord::Request> &requests);
+    bool banner_ = false; // see banner_showing
     int list_index_ = 0;        // focused row of the channel list
     hui::tween::Spring list_scroll_;
     void draw_channel_list(const discord::Snapshot &s, DrawList &list) const;
@@ -121,7 +127,6 @@ class Chat
     std::string older_asked_for_; // the oldest id an older page was requested above
     int action_ = 0;  // focused entry in the action menu (actions, then reactions)
     int image_at_ = 0; // the picture shown full screen, among the message's
-    int quick_ = 0;   // focused quick reply in compose mode
     std::string reply_to_; // message id the composer answers
     hui::tween::Spring scroll_; // pixels the list is pushed down (history above revealed)
     hui::tween::Spring menu_show_;

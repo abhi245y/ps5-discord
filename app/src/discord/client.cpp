@@ -806,8 +806,8 @@ Client::~Client()
     stop_ = true;
     if (started_)
         pthread_join(thread_, nullptr);
-    if (image_started_)
-        pthread_join(image_thread_, nullptr);
+    for (int i = 0; i < images_started_; ++i)
+        pthread_join(image_threads_[i], nullptr);
     if (events_started_)
         pthread_join(events_thread_, nullptr);
 }
@@ -834,15 +834,16 @@ void Client::start()
                               return nullptr;
                           },
                           this) == 0;
-    image_started_ = pthread_create(
-                         &image_thread_, &attr,
-                         [](void *self) -> void * {
-                             static_cast<Client *>(self)->run_images();
-                             return nullptr;
-                         },
-                         this) == 0;
+    for (pthread_t &t : image_threads_)
+        images_started_ += pthread_create(
+                               &t, &attr,
+                               [](void *self) -> void * {
+                                   static_cast<Client *>(self)->run_images();
+                                   return nullptr;
+                               },
+                               this) == 0;
     pthread_attr_destroy(&attr);
-    if (!started_ || !image_started_ || !events_started_)
+    if (!started_ || !images_started_ || !events_started_)
         hui::sys::log("[CLIENT] could not start its threads");
 }
 

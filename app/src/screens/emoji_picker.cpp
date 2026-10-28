@@ -106,8 +106,9 @@ void EmojiPicker::build(const discord::Snapshot &s)
     scroll_ = scroll_target_ = 0.0f;
     packs_seen_ = s.sticker_packs.size();
 
-    // Each server's own, the chat's server first.
-    std::vector<Section> servers;
+    // Each server's own, the chat's server first. Without Nitro the other servers' go
+    // last, under everything that can be sent.
+    std::vector<Section> servers, locked;
     for (const discord::Guild &g : s.guilds)
     {
         const bool here = g.id == guild_id_;
@@ -143,7 +144,7 @@ void EmojiPicker::build(const discord::Snapshot &s)
         if (here)
             servers.insert(servers.begin(), std::move(sec));
         else
-            servers.push_back(std::move(sec));
+            (nitro_ ? servers : locked).push_back(std::move(sec));
     }
 
     if (on_stickers_)
@@ -160,15 +161,19 @@ void EmojiPicker::build(const discord::Snapshot &s)
                 it.id = st.id, it.name = st.name, it.format = st.format;
                 sec.items.push_back(it);
             }
+            if (sec.items.empty())
+                continue;
             sec.icon = sec.items.front();
             sections_.push_back(std::move(sec));
         }
-        if (sections_.empty())
+        if (s.sticker_packs.empty())
         {
             Section waiting; // Discord's packs are on their way
             waiting.title = "Loading Discord's stickers…";
             sections_.push_back(std::move(waiting));
         }
+        for (Section &sec : locked)
+            sections_.push_back(std::move(sec));
         return;
     }
 
@@ -190,10 +195,11 @@ void EmojiPicker::build(const discord::Snapshot &s)
         if (a == std::string::npos)
             continue;
         const std::string id = k.substr(2, a - 2);
-        for (const Section &sec : servers)
-            for (const Item &it : sec.items)
-                if (it.id == id)
-                    recent.items.push_back(it);
+        for (const std::vector<Section> *list : {&servers, &locked})
+            for (const Section &sec : *list)
+                for (const Item &it : sec.items)
+                    if (it.id == id)
+                        recent.items.push_back(it);
     }
     sections_.push_back(std::move(recent));
     for (Section &sec : servers)
@@ -213,6 +219,8 @@ void EmojiPicker::build(const discord::Snapshot &s)
         it.text = e.text;
         it.name = e.name;
     }
+    for (Section &sec : locked)
+        sections_.push_back(std::move(sec));
 }
 
 float EmojiPicker::section_top(int section) const

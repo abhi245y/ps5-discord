@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstring>
 #include <memory>
+#include <mutex>
 
 #include "third_party/stb/stb_image.h"
 #include "third_party/thorvg/thorvg.h"
@@ -44,7 +45,11 @@ void place(FrameSheet &out, int index, const std::uint8_t *frame, int cell_w, in
 
 bool render_lottie(const std::string &json, int size, FrameSheet &out, int max_frames)
 {
-    static const bool ready = tvg::Initializer::init(0) == tvg::Result::Success; // one thread: the caller's
+    // One at a time: ThorVG's renderer keeps shared buffers (tvgRender.cpp), and the
+    // image threads are several.
+    static std::mutex one;
+    std::lock_guard<std::mutex> lock(one);
+    static const bool ready = tvg::Initializer::init(0) == tvg::Result::Success; // no threads of its own
     if (!ready)
         return false;
     std::unique_ptr<tvg::Animation> animation(tvg::Animation::gen());
