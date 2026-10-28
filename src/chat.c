@@ -551,10 +551,11 @@ static void call_changed(cJSON *d, int gone)
 // Discord's own settings decide first (mutes, each server's "All messages / Only
 // mentions / Nothing", @everyone and role mentions), then the app's (prefs.h).
 
-static void (*alert_sink)(const char *text);
-static char alert[256]; // composed under the lock, sent after it (gateway thread only)
+static void (*alert_sink)(const char *title, const char *body, const char *icon);
+// Composed under the lock, sent after it (gateway thread only).
+static char alert_title[160], alert_body[200], alert_icon[160];
 
-void chat_set_alert(void (*sink)(const char *text))
+void chat_set_alert(void (*sink)(const char *title, const char *body, const char *icon))
 {
     alert_sink = sink;
 }
@@ -686,25 +687,29 @@ static void plain_text(const char *in, cJSON *guild, char *out, size_t cap)
     out[n] = 0;
 }
 
-// The PS5 alert's two lines: who and where, then what.
-static void alert_text(cJSON *d, char *out, size_t cap)
+// The PS5 alert: who and where, what, and the sender's avatar.
+static void alert_text(cJSON *d)
 {
     cJSON *author = cJSON_GetObjectItem(d, "author"), *g = guild_of(str(d, "guild_id"));
     const char *who = str(cJSON_GetObjectItem(d, "member"), "nick");
     if (!who)
         who = str(author, "global_name") ? str(author, "global_name") : str(author, "username");
-    char text[160];
-    plain_text(str(d, "content"), g, text, sizeof text);
-    if (!text[0])
-        snprintf(text, sizeof text, "%s",
+    plain_text(str(d, "content"), g, alert_body, sizeof alert_body);
+    if (!alert_body[0])
+        snprintf(alert_body, sizeof alert_body, "%s",
                  cJSON_GetArraySize(cJSON_GetObjectItem(d, "sticker_items")) > 0 ? "sent a sticker"
                                                                                 : "sent an attachment");
     cJSON *c = find_channel(str(d, "channel_id"));
     if (g)
-        snprintf(out, cap, "%s · %s #%s\n%s", who ? who : "Someone", str(g, "name") ? str(g, "name") : "a server",
-                 str(c, "name") ? str(c, "name") : "", text);
+        snprintf(alert_title, sizeof alert_title, "%s · %s #%s", who ? who : "Someone",
+                 str(g, "name") ? str(g, "name") : "a server", str(c, "name") ? str(c, "name") : "");
     else
-        snprintf(out, cap, "%s\n%s", who ? who : "Someone", text);
+        snprintf(alert_title, sizeof alert_title, "%s", who ? who : "Someone");
+    if (str(author, "id") && str(author, "avatar"))
+        snprintf(alert_icon, sizeof alert_icon, "https://cdn.discordapp.com/avatars/%s/%s.png?size=128",
+                 str(author, "id"), str(author, "avatar"));
+    else
+        snprintf(alert_icon, sizeof alert_icon, "https://cdn.discordapp.com/embed/avatars/0.png");
 }
 
 static void message_created(cJSON *d)
@@ -747,7 +752,7 @@ static void message_created(cJSON *d)
     cJSON_AddNumberToObject(d, "notify", kind);
     cJSON_AddBoolToObject(d, "quiet", quiet);
     if (kind && !quiet && alert_sink)
-        alert_text(d, alert, sizeof alert);
+        alert_text(d);
 }
 
 void chat_dispatch(const char *type, cJSON *d)
@@ -819,9 +824,9 @@ void chat_dispatch(const char *type, cJSON *d)
     else if (strcmp(type, "USER_GUILD_SETTINGS_UPDATE") == 0)
         put_notify(d);
     pthread_mutex_unlock(&lock);
-    if (alert[0]) {
-        alert_sink(alert);
-        alert[0] = 0;
+    if (alert_title[0]) {
+        alert_sink(alert_title, alert_body, alert_icon);
+        alert_title[0] = 0;
     }
 }
 

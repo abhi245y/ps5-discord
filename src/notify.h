@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// PS5 system alerts (the console's own pop-up, shown over games) and quiet hours.
+// PS5 system alerts (the console's own notification, shown over games and kept in its
+// notification list) and quiet hours.
 #pragma once
 
-void notify_system(const char *text); // a line or two; long text is cut
-// An alert for a message, paced: the pop-ups stack and stay, so a burst becomes one
-// "N new messages" alert with the latest, at most one every few seconds.
-void notify_message(const char *text);
-int notify_quiet_now(void);           // inside the quiet hours (prefs quiet_hours)
+// title: who and where; body: what; icon: an image URL (the sender's avatar), NULL for none.
+void notify_system(const char *title, const char *body, const char *icon);
+// An alert for a message, paced: a burst becomes one "N new messages" alert with the
+// latest, at most one every few seconds.
+void notify_message(const char *title, const char *body, const char *icon);
+int notify_quiet_now(void); // inside the quiet hours (prefs quiet_hours)

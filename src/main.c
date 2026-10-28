@@ -112,14 +112,14 @@ void core_quit(int forget_token)
 
 // A message worth an alert (chat.c). With the app in front it shows its own banner;
 // otherwise (home screen, a game, the PS menu, or closed with the PS button) the PS5's.
-static void alert(const char *text)
+static void alert(const char *title, const char *body, const char *icon)
 {
     if (web_app_on_screen() || !prefs_get("notify_system"))
         return;
     const char *b = bc_state();
     if ((strcmp(b, "live") == 0 || strcmp(b, "starting") == 0) && !prefs_get("notify_live"))
         return; // the stream shows the screen: viewers would read it
-    notify_message(text);
+    notify_message(title, body, icon);
 }
 
 static int claim_instance(void)
