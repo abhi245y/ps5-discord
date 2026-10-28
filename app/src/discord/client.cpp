@@ -1442,8 +1442,6 @@ void Client::handle(const Request &request)
         poll_state();
         break;
     }
-    case Request::Kind::open_channel:
-    case Request::Kind::prefetch:
     case Request::Kind::load_sticker_packs: {
         const Reply reply = http(port_, "GET", "/api/sticker-packs");
         const json r = json::parse(reply.body, nullptr, false);
@@ -1464,6 +1462,8 @@ void Client::handle(const Request &request)
         publish();
         break;
     }
+    case Request::Kind::open_channel:
+    case Request::Kind::prefetch:
     case Request::Kind::load_older: {
         std::string path = "/api/messages?channel=" + request.channel_id;
         if (!request.guild_id.empty())
