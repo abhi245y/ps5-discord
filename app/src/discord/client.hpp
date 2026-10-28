@@ -34,6 +34,8 @@ struct Image
     int w = 0;
     int h = 0;
     std::vector<std::uint8_t> rgba;
+    int frames = 1, columns = 1; // an animated sticker: a sheet of frames (discord/stickers.hpp)
+    float fps = 0.0f;
 };
 
 // A key from the console's keyboard, as the core read it (USB HID usage code,

@@ -495,7 +495,7 @@ int main()
         for (const discord::Image &image : client.take_images())
             if (const auto wanted = remote_textures.find(image.url); wanted != remote_textures.end() && image.w > 0)
                 wanted->second = {renderer.batch().create_texture(image.w, image.h, image.rgba.data()), image.w,
-                                  image.h};
+                                  image.h, image.frames, image.columns, image.fps};
         shell.update(input, dt);
         if (shell.take_settings_changed())
         {

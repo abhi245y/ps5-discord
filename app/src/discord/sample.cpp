@@ -211,6 +211,7 @@ Snapshot sample_snapshot()
         msg("d6", "dm-theo", "theo", "https://clips.example.com/watch/ThisIsAVeryLongClipIdentifierWithoutAnySpaces_8f3a91c2d7e4",
             kNow - 40 * kMinute),
         msg("d7", "dm-theo", "me", "same, see you at nine", kNow - 39 * kMinute),
+        msg("d8", "dm-theo", "theo", "", kNow - 38 * kMinute),
     });
     {
         std::vector<Message> &dm = *s.messages["dm-theo"];
@@ -218,6 +219,7 @@ Snapshot sample_snapshot()
         dm[5].reply_text = "We can try the new route on the left side. Looks super chill.";
         dm[5].reactions = {{"🔥", "", 3, true}, {"😂", "", 2}, {"👍", "", 5}, {"🎮", "", 1}, {"🍕", "", 2}};
         dm[7].edited = true;
+        dm[8].stickers = {{"749054660769218631", "Wave", 3}}; // Wumpus waving (Lottie)
         for (Message &m : dm) // Unicode emoji become marks, as the client makes them
         {
             std::string out;

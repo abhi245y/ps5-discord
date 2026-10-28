@@ -68,6 +68,7 @@ void apply_text_level(int level)
     kReplyLine = sizes[g_text_level][3];
 }
 constexpr float kAttachH = 128.0f;
+constexpr float kStickerSize = 160.0f;
 constexpr float kReactH = 40.0f;
 constexpr float kPadTop = 10.0f;
 constexpr float kPadGrouped = 2.0f;
@@ -313,6 +314,7 @@ float Chat::row_height(const discord::Snapshot &s, int index, bool grouped) cons
         h += kLineH * static_cast<float>(lines + (edit_tag_wraps(s, m, width) ? 1 : 0));
     }
     h += static_cast<float>(m.attachments.size()) * (kAttachH + 10.0f);
+    h += static_cast<float>(m.stickers.size()) * (kStickerSize + 10.0f);
     if (!m.reactions.empty())
         h += (kReactH + 10.0f) * static_cast<float>(reaction_lines(m, width));
     if (dm())
@@ -441,6 +443,8 @@ float Chat::bubble_fit(const discord::Snapshot &s, const discord::Message &m, fl
         w = std::max(w, 16.0f + ink_.fonts.regular.measure(m.reply_author + ": " + m.reply_text, 22.0f));
     if (!m.attachments.empty())
         w = std::max(w, 560.0f);
+    if (!m.stickers.empty())
+        w = std::max(w, kStickerSize);
     float x = 0.0f; // the reactions wrap as drawn
     for (const discord::Reaction &r : m.reactions)
     {
@@ -1131,8 +1135,11 @@ void Chat::draw_message(const discord::Snapshot &s, DrawList &list, const Row &r
         if (mine)
             bubble.x += bw - fitted;
         bubble.w = fitted;
-        list.rounded_rect(bubble, 18.0f, mine ? Color::rgb(0x3a2a28) : kRaised);
-        if (mine)
+        // A sticker on its own stands bare, as in Discord.
+        const bool bare = m.content.empty() && m.reply_author.empty() && m.attachments.empty() && !m.stickers.empty();
+        if (!bare)
+            list.rounded_rect(bubble, 18.0f, mine ? Color::rgb(0x3a2a28) : kRaised);
+        if (mine && !bare)
             list.rounded_rect({bubble.x, bubble.y + 10.0f, 4.0f, bubble.h - 20.0f}, 2.0f, kCoral);
         text_x = bubble.x + 24.0f;
     }
@@ -1240,6 +1247,12 @@ void Chat::draw_message(const discord::Snapshot &s, DrawList &list, const Row &r
                  26.0f, kText);
         ui::text(list, ink_.fonts.regular, a.size_text, card.x + 250.0f, card.y + 92.0f, 22.0f, kDim);
         y += kAttachH + 10.0f;
+    }
+
+    for (const discord::Sticker &st : m.stickers)
+    {
+        sticker_picture(list, ink_, st, {text_x, y + 6.0f, kStickerSize, kStickerSize});
+        y += kStickerSize + 10.0f;
     }
 
     if (!m.reactions.empty())

@@ -91,6 +91,10 @@ hui::ui::GlyphStyle hint_glyphs();
 // atlas or else Twemoji over the network; a quiet square while it loads.
 void emoji_picture(DrawList &list, const Ink &ink, const std::string &text, const std::string &id, const Rect &r);
 
+// A sticker in r, playing when it is animated; its name on a quiet card while it loads
+// (or where it cannot be shown).
+void sticker_picture(DrawList &list, const Ink &ink, const discord::Sticker &sticker, const Rect &r);
+
 // A yes-or-no question over a dimmed screen: Cross does it (yes is its label), Circle cancels.
 void confirm_card(DrawList &list, const Ink &ink, const std::string &title, const std::string &text,
                   const char *yes);

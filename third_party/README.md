@@ -44,3 +44,15 @@ emoji-test.txt 15.1; `app/src/discord/emoji_table.inc` lists them. Both come fro
 `app/tools/bake-emoji.py`. Twemoji graphics are © Twitter, Inc. and other contributors,
 licensed under CC-BY 4.0 (https://creativecommons.org/licenses/by/4.0/). Other emoji
 (skin tones) load from the same Twemoji release on the CDN at run time.
+
+## ThorVG 1.1.3
+
+`app/src/third_party/thorvg` holds the part of ThorVG (https://github.com/thorvg/thorvg, tag
+v1.1.3, MIT, see its LICENSE there) the app needs to draw Lottie stickers: the CPU renderer,
+the Lottie and raw loaders, rapidjson, and `config.h` as meson writes it for
+`-Dengines=cpu -Dloaders=lottie -Dthreads=false -Dsimd=false -Dextra=`. The files sit in
+one folder. Patches, each marked `ps5-discord` in the code:
+- `rapidjson/rapidjson.h` includes `../tvgCommon.h` (the files sit one folder up).
+- `tvgInitializer.cpp` leaves out its global `operator new`/`delete`; the app's runtime has them.
+- `tvgRender.cpp` keeps its scratch paths `static`, not `thread_local` (the SDK lacks
+  `__cxa_thread_atexit`); stickers render on one thread.

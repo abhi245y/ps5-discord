@@ -72,6 +72,8 @@ struct ArtSet
     {
         std::uint32_t texture = 0;
         int w = 0, h = 0;
+        int frames = 1, columns = 1; // an animated sticker's sheet of frames
+        float fps = 0.0f;
     };
     std::function<Remote(const std::string &)> remote;
     // Frees a big picture once it is out of sight (the full-screen viewer's); asking

@@ -134,6 +134,24 @@ struct Attachment
     ArtIndex art = 0; // stand-in thumbnail while the image loads (and in samples)
 };
 
+// A sticker sent in a message. format: 1 PNG, 2 APNG, 3 Lottie, 4 GIF.
+struct Sticker
+{
+    std::string id;
+    std::string name;
+    int format = 1;
+};
+
+// Where its picture comes from: Lottie as JSON (drawn by ThorVG), GIF animated, the
+// rest as a still from the media proxy.
+inline std::string sticker_url(const Sticker &s)
+{
+    if (s.format == 3)
+        return "https://cdn.discordapp.com/stickers/" + s.id + ".json";
+    return "https://media.discordapp.net/stickers/" + s.id + (s.format == 4 ? ".gif" : ".png") + "?size=160";
+}
+inline constexpr int kStickerPixels = 160; // how large a Lottie sticker is rendered
+
 struct Reaction
 {
     std::string emoji; // the Unicode emoji, or ":name:" for a server's own
@@ -172,6 +190,7 @@ struct Message
     std::vector<Attachment> attachments;
     std::vector<Reaction> reactions;
     std::vector<Emoji> emojis; // server emoji in content, in order
+    std::vector<Sticker> stickers;
 };
 
 // The text with each server emoji as :name: (previews, toasts), or as Discord's

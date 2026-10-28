@@ -3,6 +3,7 @@
 
 #include "discord/client.hpp"
 #include "discord/emoji.hpp"
+#include "discord/stickers.hpp"
 #include "third_party/stb/stb_image.h"
 
 #include <arpa/inet.h>
@@ -387,9 +388,13 @@ Message message_from(const json &m, const std::string &me_id)
         out.content = "changed the name or icon.";
     else if (type == 18)
         out.content = "started a thread.";
-    if (out.content.empty() && m.contains("sticker_items") && m["sticker_items"].is_array() &&
-        !m["sticker_items"].empty())
-        out.content = "[Sticker: " + text(m["sticker_items"][0], "name") + "]";
+    if (m.contains("sticker_items") && m["sticker_items"].is_array())
+        for (const json &st : m["sticker_items"])
+            if (st.is_object() && !text(st, "id").empty())
+                out.stickers.push_back({text(st, "id"), text(st, "name"),
+                                        st.contains("format_type") && st["format_type"].is_number()
+                                            ? static_cast<int>(st["format_type"].get<double>())
+                                            : 1});
     if (out.content.empty() && m.contains("embeds") && m["embeds"].is_array() && !m["embeds"].empty())
     {
         const std::string title = text(m["embeds"][0], "title");
@@ -403,7 +408,8 @@ Message message_from(const json &m, const std::string &me_id)
         const std::string text_of = readable(text(original, "content"), original);
         out.content = "\xE2\x86\xAA Forwarded" + (text_of.empty() ? std::string() : ": " + text_of);
     }
-    if (out.content.empty() && out.attachments.empty() && !(m.contains("attachments") && !m["attachments"].empty()))
+    if (out.content.empty() && out.attachments.empty() && out.stickers.empty() &&
+        !(m.contains("attachments") && !m["attachments"].empty()))
         out.content = type != 0 ? "[Discord notice]" : "[A message this app cannot show yet]";
     if (m.contains("author") && m["author"].is_object())
     {
@@ -955,7 +961,20 @@ void Client::fetch_images()
             }
         }
         const Reply reply = http(port_, "GET", "/api/image?url=" + query);
-        if (reply.status == 200)
+        const bool lottie = image.url.find("/stickers/") != std::string::npos && image.url.find(".json") != std::string::npos;
+        const bool gif = image.url.find("/stickers/") != std::string::npos && image.url.find(".gif") != std::string::npos;
+        if (reply.status == 200 && (lottie || gif))
+        {
+            // A sticker: its frames, as one sheet.
+            FrameSheet frames;
+            if (lottie ? render_lottie(reply.body, kStickerPixels, frames) : decode_gif(reply.body, frames))
+            {
+                image.w = frames.w, image.h = frames.h;
+                image.frames = frames.frames, image.columns = frames.columns, image.fps = frames.fps;
+                image.rgba = std::move(frames.rgba);
+            }
+        }
+        else if (reply.status == 200)
         {
             int n = 0;
             if (std::uint8_t *px = stbi_load_from_memory(reinterpret_cast<const std::uint8_t *>(reply.body.data()),
@@ -1262,7 +1281,10 @@ bool Client::poll_events()
                             if (c.id == channel)
                                 n.place += " · #" + c.name;
                     }
-                n.text = m.content.empty() && !m.attachments.empty() ? "sent an attachment" : plain_text(m);
+                n.text = !m.content.empty()       ? plain_text(m)
+                         : !m.stickers.empty()    ? "sent a sticker: " + m.stickers.front().name
+                         : !m.attachments.empty() ? "sent an attachment"
+                                                  : plain_text(m);
                 snapshot_.notices.push_back(std::move(n));
                 if (snapshot_.notices.size() > 8)
                     snapshot_.notices.erase(snapshot_.notices.begin());
