@@ -521,7 +521,7 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
             break;
         }
         case EmojiPicker::Result::picked:
-            if (picker_react_ && focus_ >= 0 && focus_ < count)
+            if (pick_for_ == PickFor::react && focus_ >= 0 && focus_ < count)
             {
                 discord::Request r;
                 r.kind = discord::Request::Kind::react;
@@ -531,6 +531,20 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
                 requests.push_back(r);
                 mode_ = Mode::browse;
             }
+            else if (pick_for_ == PickFor::quick) // sent at once, as a quick reply is
+            {
+                discord::Request r;
+                r.kind = discord::Request::Kind::send;
+                r.guild_id = guild_id_;
+                r.channel_id = channel_id_;
+                r.content = picker_.markup();
+                r.reply_to = reply_to_;
+                requests.push_back(r);
+                reply_to_.clear();
+                mode_ = Mode::browse;
+                focus_ = -1;
+                scroll_.target = 0.0f;
+            }
             else
             {
                 keys_.insert(picker_.markup());
@@ -538,7 +552,7 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
             }
             break;
         case EmojiPicker::Result::cancel:
-            mode_ = picker_react_ ? Mode::actions : Mode::keys;
+            mode_ = pick_for_ == PickFor::react ? Mode::actions : pick_for_ == PickFor::quick ? Mode::compose : Mode::keys;
             break;
         case EmojiPicker::Result::none:
             break;
@@ -674,7 +688,7 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
         else if (chosen(Act::react)) // every emoji, as Discord's picker
         {
             picker_.open(s, guild_id_, "React", false);
-            picker_react_ = true;
+            pick_for_ = PickFor::react;
             mode_ = Mode::emoji;
             feedback.play(hui::audio::Cue::modal_open);
         }
@@ -808,7 +822,7 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
                 r.kind = discord::Request::Kind::load_sticker_packs;
                 requests.push_back(r);
             }
-            picker_react_ = false;
+            pick_for_ = PickFor::keys;
             mode_ = Mode::emoji;
             break;
         case Keyboard::Result::none:
@@ -867,6 +881,20 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
     {
         if (input.is_pressed(Action::north) && start_typing(s, feedback))
             return true;
+        if (input.is_pressed(Action::west)) // Square: emoji and stickers, sent like a quick reply
+        {
+            picker_.open(s, guild_id_, "Emoji & stickers", true);
+            pick_for_ = PickFor::quick;
+            mode_ = Mode::emoji;
+            if (s.sticker_packs.empty())
+            {
+                discord::Request r;
+                r.kind = discord::Request::Kind::load_sticker_packs;
+                requests.push_back(r);
+            }
+            feedback.play(hui::audio::Cue::modal_open);
+            return true;
+        }
         if (input.nav == Direction::left && quick_ > 0)
             --quick_;
         else if (input.nav == Direction::right && quick_ < kQuickCount - 1)
@@ -1356,7 +1384,7 @@ void Chat::draw_composer(const discord::Snapshot &s, DrawList &list) const
             if (c->id == channel_id_)
                 placeholder = "Message #" + c->name;
     }
-    ui::text(list, ink_.fonts.regular, composing ? std::string("Pick a quick reply, or press Triangle to type") : placeholder,
+    ui::text(list, ink_.fonts.regular, composing ? std::string("Pick a quick reply, Square for emoji and stickers, Triangle to type") : placeholder,
              bar.x + 112.0f, bar.cy() + 10.0f, 28.0f, kDim);
 
     ui::GlyphStyle glyphs = hint_glyphs();
@@ -1586,7 +1614,7 @@ void Chat::draw(const discord::Snapshot &s, DrawList &list) const
     layout.cy = kHintsBaseline;
     layout.item_gap = 38.0f;
     ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints, count, kRight, true, layout);
-    if (mode_ == Mode::keys || (mode_ == Mode::emoji && !picker_react_))
+    if (mode_ == Mode::keys || (mode_ == Mode::emoji && pick_for_ == PickFor::keys))
         keys_.draw(list);
     if (mode_ == Mode::emoji)
         picker_.draw(list);

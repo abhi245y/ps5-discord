@@ -97,7 +97,15 @@ class Chat
     const Ink &ink_;
     Keyboard keys_; // the app's own keyboard, when the system one is not there
     EmojiPicker picker_;
-    bool picker_react_ = false; // the picker reacts to the focused message (else it types)
+    // What a pick does: react to the focused message, go into the app keyboard's text,
+    // or be sent at once (from the quick replies).
+    enum class PickFor
+    {
+        react,
+        keys,
+        quick,
+    };
+    PickFor pick_for_ = PickFor::react;
     int list_index_ = 0;        // focused row of the channel list
     hui::tween::Spring list_scroll_;
     void draw_channel_list(const discord::Snapshot &s, DrawList &list) const;
