@@ -76,7 +76,14 @@ void mic_meter(DrawList &list, float x, float cy, float w, float level, bool mut
 
 // A crossed-out microphone centred on (cx, cy), s across.
 void mic_off(DrawList &list, float cx, float cy, float s, Color c);
+// The call's controls in line: a microphone (mic_off slashes the same shape), headphones
+// (slashed when deafened) and the hang-up handset; s is the icon's size, centred on (cx, cy).
+void mic(DrawList &list, float cx, float cy, float s, Color c);
+void headphones(DrawList &list, float cx, float cy, float s, Color c, bool slash);
+void hang_up(DrawList &list, float cx, float cy, float s, Color c);
 
+// "In Raid Night · 12", "Call with Theo", "Connecting…": the call in a few words.
+std::string voice_status(const discord::Voice &voice);
 // The pill at the top right of every screen while in voice: room, count, muted.
 void voice_pill(DrawList &list, const Ink &ink, const discord::Voice &voice, float y, float h);
 // The same on a chat or server page: the room's faces too. Nothing while idle.

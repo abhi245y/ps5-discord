@@ -170,6 +170,14 @@ constexpr app::TourStep kTour[] = {
     {0.4f, action_bit(Action::back)},
     {0.5f, action_bit(Action::page_next)},
     {0.8f, 0, Direction::none, "chat-next-channel"},
+    // Options: the channel list (the raid room's dock under it), then closed again.
+    {0.4f, action_bit(Action::menu)},
+    {0.7f, 0, Direction::none, "chat-channels"},
+    {0.3f, 0, Direction::down},
+    {0.3f, 0, Direction::down},
+    {0.3f, 0, Direction::down},
+    {0.6f, 0, Direction::none, "chat-channels-dock"},
+    {0.4f, action_bit(Action::menu)},
     {0.5f, action_bit(Action::back)},
     // The DM with Theo.
     {0.5f, 0, Direction::right},

@@ -210,6 +210,23 @@ std::string author_name(const discord::Snapshot &s, const discord::Message &m)
 }
 
 // Tops of the channel list's rows, from 0: a category heading adds room above its first row.
+// The Options channel list: a card at the left, the call's dock under it while in voice.
+constexpr float kListX = 40.0f, kListW = 450.0f, kListTop = 36.0f, kListEnd = 1000.0f, kDockH = 330.0f;
+constexpr float kListRows = 128.0f; // the first row, below the server's name
+constexpr int kDockButtons = 3;     // Mute, Deafen, Leave
+Rect channel_card(bool call)
+{
+    return {kListX, kListTop, kListW, (call ? kListEnd - kDockH - 20.0f : kListEnd) - kListTop};
+}
+Rect dock_card()
+{
+    return {kListX, kListEnd - kDockH, kListW, kDockH};
+}
+float list_view(bool call) // the rows' visible height
+{
+    return channel_card(call).h - kListRows - 16.0f;
+}
+
 std::vector<float> list_tops(const std::vector<const discord::Channel *> &all)
 {
     std::vector<float> tops;
@@ -734,37 +751,60 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
 
     if (mode_ == Mode::channels)
     {
+        // The channels, then (in a call) the dock's Mute, Deafen and Leave.
         const std::vector<const discord::Channel *> all = chips(s);
         const int n = static_cast<int>(all.size());
-        if (input.nav == Direction::down || input.nav == Direction::up)
-        {
-            const int next = list_index_ + (input.nav == Direction::down ? 1 : -1);
-            if (next >= 0 && next < n)
-            {
-                list_index_ = next;
-                feedback.play(hui::audio::Cue::focus, 1.0f + 0.01f * static_cast<float>(next % 8));
-            }
-            else
-                feedback.play(hui::audio::Cue::error, 1.0f, 0.0f, 0.5f);
-        }
+        const discord::Voice &v = s.voice;
+        const bool call = v.active();
+        const int last = n - 1 + (call ? kDockButtons : 0);
+        list_index_ = std::clamp(list_index_, 0, std::max(0, last)); // the call may have ended
+        const int before = list_index_;
+        if (list_index_ < n && (input.nav == Direction::down || input.nav == Direction::up))
+            list_index_ = std::clamp(list_index_ + (input.nav == Direction::down ? 1 : -1), 0, std::max(0, last));
+        else if (list_index_ >= n && input.nav == Direction::up)
+            list_index_ = std::max(0, n - 1);
+        else if (list_index_ >= n && (input.nav == Direction::left || input.nav == Direction::right))
+            list_index_ = std::clamp(list_index_ + (input.nav == Direction::right ? 1 : -1), n, last);
+        if (input.nav != Direction::none && list_index_ == before)
+            feedback.play(hui::audio::Cue::error, 1.0f, 0.0f, 0.5f);
+        else if (input.nav != Direction::none)
+            feedback.play(hui::audio::Cue::focus, 1.0f + 0.01f * static_cast<float>(list_index_ % 8));
         if (input.is_pressed(Action::confirm) && list_index_ < n)
         {
             open(s, guild_id_, all[static_cast<std::size_t>(list_index_)]->id, requests);
             feedback.play(hui::audio::Cue::open);
+        }
+        else if (input.is_pressed(Action::confirm) && call)
+        {
+            discord::Request r;
+            r.kind = list_index_ - n == 2 ? discord::Request::Kind::voice_leave : discord::Request::Kind::voice_set;
+            r.mute = list_index_ - n == 0 ? !v.muted : v.muted;
+            r.deaf = list_index_ - n == 1 ? !v.deafened : v.deafened;
+            requests.push_back(r);
+            if (r.kind == discord::Request::Kind::voice_leave)
+                list_index_ = std::max(0, n - 1);
+            feedback.play(r.kind == discord::Request::Kind::voice_leave ? hui::audio::Cue::back
+                                                                         : hui::audio::Cue::toggle);
+        }
+        else if (input.is_pressed(Action::west) && call) // Square: the voice room
+        {
+            mode_ = Mode::browse; // closed first, so coming back finds the chat
+            voice_ = true;
         }
         else if (input.is_pressed(Action::back) || input.is_pressed(Action::menu))
         {
             mode_ = Mode::browse;
             feedback.play(hui::audio::Cue::modal_close);
         }
-        // Keep the focused row inside the panel.
-        const std::vector<float> tops = list_tops(all);
-        // Room above the focused row for its category heading.
-        const float row_y = 150.0f + (list_index_ < n ? tops[static_cast<std::size_t>(list_index_)] : 0.0f);
-        if (row_y - list_scroll_.target < 184.0f)
-            list_scroll_.target = std::max(0.0f, row_y - 184.0f);
-        if (row_y - list_scroll_.target > 900.0f)
-            list_scroll_.target = row_y - 900.0f;
+        // Keep the focused row inside the card, with room above it for its category heading.
+        if (list_index_ < n)
+        {
+            const float row_y = list_tops(all)[static_cast<std::size_t>(list_index_)];
+            if (row_y - list_scroll_.target < 34.0f)
+                list_scroll_.target = std::max(0.0f, row_y - 34.0f);
+            if (row_y + 54.0f - list_scroll_.target > list_view(call))
+                list_scroll_.target = row_y + 54.0f - list_view(call);
+        }
         list_scroll_.update(dt, 16.0f);
         return true;
     }
@@ -918,7 +958,9 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
             if (all[static_cast<std::size_t>(i)]->id == channel_id_)
                 list_index_ = i;
         const std::vector<float> tops = list_tops(all);
-        list_scroll_.snap(tops.empty() ? 0.0f : std::max(0.0f, tops[static_cast<std::size_t>(list_index_)] - 380.0f));
+        list_scroll_.snap(tops.empty() ? 0.0f
+                                       : std::max(0.0f, tops[static_cast<std::size_t>(list_index_)] -
+                                                            list_view(s.voice.active()) * 0.5f));
         mode_ = Mode::channels;
         feedback.play(hui::audio::Cue::modal_open);
         return true;
@@ -1621,54 +1663,127 @@ void Chat::draw(const discord::Snapshot &s, DrawList &list) const
 void Chat::draw_channel_list(const discord::Snapshot &s, DrawList &list) const
 {
     list.rounded_rect({0, 0, 1920, 1080}, 0.0f, Color::rgb(0x0d0e12, 0.55f));
-    const Rect panel{0, 0, 640, 1080};
-    list.shadow(panel, 0.0f, 40.0f, Color::rgb(0, 0.5f));
-    list.rounded_rect(panel, 0.0f, kRaised);
+    const discord::Voice &v = s.voice;
+    const bool call = v.active();
+    const Rect card = channel_card(call);
+    list.shadow(card, 24.0f, 40.0f, Color::rgb(0, 0.5f));
+    list.rounded_rect(card, 24.0f, kRaised);
+
+    // The server: its icon and name.
     const discord::Guild *g = discord::find_guild(s, guild_id_);
-    ui::text(list, ink_.fonts.display, fit(ink_.fonts.display, g ? g->name : std::string(), 40.0f, 540.0f), kMargin,
-             86.0f, 40.0f, kText);
-    // A rule under the title; the list scrolls beneath it with room to spare.
-    list.rounded_rect({kMargin, 116.0f, 640.0f - 2 * kMargin, 2.0f}, 1.0f, kLine);
-    list.push_clip({0, 124.0f, 640, 876.0f});
+    const std::string name = g ? g->name : std::string();
+    art_circle(list, ink_, g ? g->art : 0, name.substr(0, 1), card.x + 64.0f, card.y + 66.0f, 36.0f,
+               g ? g->icon_url : std::string());
+    ui::text(list, ink_.fonts.display, fit(ink_.fonts.display, name, 34.0f, card.w - 140.0f), card.x + 118.0f,
+             card.y + 78.0f, 34.0f, kText);
+
+    // The channels: the focused one tinted with a coral edge, the open one in white.
+    list.push_clip({card.x, card.y + kListRows - 8.0f, card.w, card.h - kListRows});
     const std::vector<const discord::Channel *> all = chips(s);
     const std::vector<float> tops = list_tops(all);
     std::string category = "\x01"; // none drawn yet
     for (int i = 0; i < static_cast<int>(all.size()); ++i)
     {
         const discord::Channel &c = *all[static_cast<std::size_t>(i)];
-        const float y = 150.0f + tops[static_cast<std::size_t>(i)] - list_scroll_.value;
+        const float y = card.y + kListRows + tops[static_cast<std::size_t>(i)] - list_scroll_.value;
         if (c.category != category)
         {
             category = c.category;
             if (!category.empty())
-                ui::text(list, ink_.fonts.semibold, fit(ink_.fonts.semibold, category, 19.0f, 520.0f), kMargin,
-                         y - 6.0f, 19.0f, kFaint);
+                ui::text(list, ink_.fonts.semibold, fit(ink_.fonts.semibold, category, 19.0f, card.w - 60.0f),
+                         card.x + 30.0f, y - 6.0f, 19.0f, kFaint);
         }
-        if (y > 1080.0f || y + 54.0f < 100.0f)
+        if (y > card.y + card.h || y + 54.0f < card.y)
             continue;
-        const Rect r{kMargin - 12.0f, y + 2.0f, 640.0f - 2 * kMargin + 24.0f, 46.0f};
+        const Rect r{card.x + 12.0f, y + 2.0f, card.w - 24.0f, 48.0f};
         const bool on = c.id == channel_id_;
         const bool hot = i == list_index_;
-        if (on)
-            list.rounded_rect(r, 12.0f, kRaisedHigh);
-        const Color ink = c.has_unread || c.unread > 0 || on ? kText : kDim;
-        ui::text(list, ink_.fonts.semibold, "#", r.x + 14.0f, r.cy() + 9.0f, 25.0f, kFaint);
-        ui::text(list, c.has_unread ? ink_.fonts.semibold : ink_.fonts.regular,
-                 fit(ink_.fonts.regular, c.name, 24.0f, r.w - 130.0f), r.x + 42.0f, r.cy() + 8.0f, 24.0f, ink);
-        if (c.unread > 0)
-            count_badge(list, ink_, c.unread, r.x + r.w - 12.0f, r.cy(), 30.0f);
-        else if (c.has_unread)
-            list.circle(r.x + r.w - 22.0f, r.cy(), 6.0f, kText);
         if (hot)
-            focus_outline(list, r, 12.0f, 1.0f);
+        {
+            list.rounded_rect(r, 12.0f, kCoral.with_alpha(0.16f));
+            list.rounded_rect({r.x, r.y, 5.0f, r.h}, 2.5f, kCoral);
+        }
+        const bool lit = on || hot || c.has_unread || c.unread > 0;
+        ui::text(list, ink_.fonts.semibold, "#", r.x + 22.0f, r.cy() + 9.0f, 26.0f, hot ? kText : kFaint);
+        ui::text(list, on || hot || c.has_unread ? ink_.fonts.semibold : ink_.fonts.regular,
+                 fit(ink_.fonts.regular, c.name, 24.0f, r.w - 130.0f), r.x + 54.0f, r.cy() + 8.0f, 24.0f,
+                 lit ? kText : kDim);
+        if (c.unread > 0)
+            count_badge(list, ink_, c.unread, r.x + r.w - 14.0f, r.cy(), 30.0f);
+        else if (c.has_unread)
+            list.circle(r.x + r.w - 24.0f, r.cy(), 6.0f, kText);
     }
     list.pop_clip();
-    const ui::Hint hints[] = {{ui::Button::cross, "Open"}, {ui::Button::circle, "Close"}};
+
+    if (call) // the call's dock: who is in it, and Mute, Deafen, Leave
+    {
+        const Rect d = dock_card();
+        const int n = static_cast<int>(all.size());
+        list.shadow(d, 24.0f, 40.0f, Color::rgb(0, 0.5f));
+        list.rounded_rect(d, 24.0f, kRaised);
+        speaking_bars(list, d.x + 42.0f, d.y + 46.0f, 26.0f, kCoral);
+        const std::string title = v.state != discord::VoiceState::connected ? voice_status(v)
+                                  : v.guild_id.empty() ? "Call with " + v.room_name
+                                                       : v.room_name + " · " + std::to_string(v.member_count);
+        ui::text(list, ink_.fonts.semibold, fit(ink_.fonts.semibold, title, 25.0f, d.w - 100.0f), d.x + 72.0f,
+                 d.y + 55.0f, 25.0f, kText);
+        const auto seats = s.seats.find(v.channel_id);
+        if (seats != s.seats.end())
+        {
+            const std::size_t people = seats->second.size(), shown = std::min<std::size_t>(people, 4);
+            for (std::size_t i = 0; i < shown; ++i)
+            {
+                const float cx = d.x + 62.0f + 82.0f * static_cast<float>(i), cy = d.y + 126.0f;
+                if (const discord::User *u = discord::find_user(s, seats->second[i].user_id))
+                {
+                    discord::User face = *u;
+                    face.voice_room.clear();
+                    avatar(list, ink_, face, cx, cy, 34.0f, false);
+                }
+                else
+                    list.circle(cx, cy, 34.0f, kRaisedHigh);
+                if (seats->second[i].speaking)
+                    list.ring(cx, cy, 37.0f, 3.0f, kCoral);
+            }
+            if (people > shown)
+            {
+                const float cx = d.x + 62.0f + 82.0f * 4.0f;
+                list.circle(cx, d.y + 126.0f, 34.0f, kRaisedHigh);
+                ui::text(list, ink_.fonts.semibold, "+" + std::to_string(people - shown), cx, d.y + 134.0f, 22.0f,
+                         kText, gfx::Align::center);
+            }
+        }
+        for (int b = 0; b < kDockButtons; ++b)
+        {
+            const float cx = d.x + 75.0f + 150.0f * static_cast<float>(b), cy = d.y + 226.0f;
+            const bool lit = b == 0 ? v.muted : b == 1 ? v.deafened : false;
+            list.circle(cx, cy, 36.0f, b == 2 ? kDnd : lit ? kCoral : kRaisedHigh);
+            if (b == 0 && v.muted)
+                mic_off(list, cx, cy, 34.0f, kText);
+            else if (b == 0)
+                mic(list, cx, cy, 34.0f, kText);
+            else if (b == 1)
+                headphones(list, cx, cy, 34.0f, kText, v.deafened);
+            else
+                hang_up(list, cx, cy, 32.0f, kText);
+            const char *label = b == 0 ? (v.muted ? "Unmute" : "Mute") : b == 1 ? (v.deafened ? "Undeafen" : "Deafen")
+                                                                                 : "Leave";
+            ui::text(list, ink_.fonts.semibold, label, cx, cy + 70.0f, 21.0f, kText, gfx::Align::center);
+            if (list_index_ == n + b)
+                focus_outline(list, {cx - 42.0f, cy - 42.0f, 84.0f, 84.0f}, 42.0f, 1.0f);
+        }
+    }
+
+    ui::Hint hints[3] = {{ui::Button::cross, list_index_ < static_cast<int>(all.size()) ? "Open" : "Select"},
+                         {ui::Button::circle, "Close"}};
+    int count = 2;
+    if (call)
+        hints[count++] = {ui::Button::square, "Voice room"};
     ui::HintLayout layout;
     layout.size = 30.0f;
     layout.text_size = 22.0f;
     layout.cy = kHintsBaseline;
-    ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints, 2, 640.0f - kMargin, true, layout);
+    ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints, count, kListX + 8.0f, false, layout); // under the card
 }
 
 } // namespace screens
