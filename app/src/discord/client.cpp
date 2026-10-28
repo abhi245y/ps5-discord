@@ -980,9 +980,12 @@ void Client::fetch_images()
             // A sticker: its frames, as one sheet.
             FrameSheet frames;
             const bool still = image.url.find("?still") != std::string::npos; // a picker preview: one small frame
+            const std::int64_t started = now_ms();
             if (lottie ? render_lottie(reply.body, still ? 96 : kStickerPixels, frames, still ? 1 : 48)
                        : decode_gif(reply.body, frames))
             {
+                hui::sys::log("[CLIENT] sticker %s: %d frames in %lld ms", image.url.c_str(), frames.frames,
+                              static_cast<long long>(now_ms() - started));
                 image.w = frames.w, image.h = frames.h;
                 image.frames = frames.frames, image.columns = frames.columns, image.fps = frames.fps;
                 image.rgba = std::move(frames.rgba);

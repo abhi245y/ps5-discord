@@ -99,7 +99,7 @@ inline std::string sticker_url(const Sticker &s)
         return "https://cdn.discordapp.com/stickers/" + s.id + ".json";
     return "https://media.discordapp.net/stickers/" + s.id + (s.format == 4 ? ".gif" : ".png") + "?size=160";
 }
-inline constexpr int kStickerPixels = 160; // how large a Lottie sticker is rendered
+inline constexpr int kStickerPixels = 128; // how large a Lottie sticker is rendered (drawn at 160)
 
 // A server's own emoji, for the picker. Without Nitro only the server's own (and none
 // animated) can be sent there.

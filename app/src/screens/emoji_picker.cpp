@@ -94,7 +94,8 @@ void EmojiPicker::close()
 {
     if (ink_.art.forget)
         for (const std::string &url : previews_)
-            ink_.art.forget(url);
+            if (url.find("?still") != std::string::npos) // its own; a PNG one may show in the chat too
+                ink_.art.forget(url);
     previews_.clear();
 }
 

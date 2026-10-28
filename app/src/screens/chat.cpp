@@ -283,7 +283,14 @@ void Chat::open(const discord::Snapshot &s, const std::string &guild_id, const s
                 std::vector<discord::Request> &requests)
 {
     if (channel_id != channel_id_)
+    {
         keys_.clear(); // a draft belongs to its channel
+        // The last channel's animated stickers (a few MB each) go; they render again if it opens.
+        if (!channel_id_.empty() && ink_.art.forget)
+            for (const discord::Message &m : messages(s))
+                for (const discord::Sticker &st : m.stickers)
+                    ink_.art.forget(discord::sticker_url(st));
+    }
     guild_id_ = guild_id;
     channel_id_ = channel_id;
     mode_ = Mode::browse;
