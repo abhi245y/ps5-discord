@@ -24,8 +24,23 @@ All notable changes to this project are documented here. The format follows
 - A Discord sign-in per console user: the core runs the account of the user on screen and
   switches when another user comes on screen.
 - Chat: View image in a message's menu shows its pictures full screen.
+- Emoji in colour, as Discord draws them (Twemoji, baked in; skin tones and newer ones from
+  the network), in messages, reactions, the keyboard and the message bar. A message of
+  emoji alone shows them large.
+- Emoji picker (L3 in a chat, R1 or the Emoji key in the keyboard): recently used, the
+  servers' own emoji and Unicode's groups; emoji are added to the text and the picker stays
+  open for more. Without Nitro, other servers' emoji sit at the bottom, marked as needing it.
+- Reactions: React opens the picker (server emoji too); a message's menu lists each of its
+  reactions to add or remove.
+- Stickers: shown in messages (Discord's animated Lottie ones through ThorVG, GIF and PNG
+  ones too) and sent from the picker's Stickers tab (Square), Discord's packs and the
+  servers' own.
 
 ### Changed
+- Chat: what you write waits in the message bar; the keyboard's R2 is Done, R2 in the chat
+  sends it. Triangle edits it again; a reply shows above the bar meanwhile. The quick replies
+  are gone, and the bar's plus (it did nothing) is an emoji face for L3.
+- Pictures (avatars, emoji, stickers) download four at a time.
 - The core keeps running when the app is closed with the PS button (for notifications and
   calls); Quit (Circle on Home) stops it.
 - License: ps5-discord's own code is now AGPL-3.0-or-later (was GPL-3.0-or-later), so
@@ -33,6 +48,9 @@ All notable changes to this project are documented here. The format follows
   GPL-3.0-or-later. The status page links to the source.
 
 ### Fixed
+- Quit waits for Go Live to give the USB controller back before the core exits (up to 30 s,
+  was 10 s), and Go Live stopped while Remote Play is connecting no longer takes it.
+- Editing a message with server emoji showed them as raw <:name:id>.
 - Chat: a DM bubble's reply quote, reactions and "(edited)" ran past the bubble and off the
   screen.
 - Voice: our voice reached others with seconds of delay after pauses (the RTP clock stood
