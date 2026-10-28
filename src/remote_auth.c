@@ -19,6 +19,7 @@
 #endif
 
 #include "http.h"
+#include "gateway.h"
 #include "log.h"
 #include "status.h"
 #include "ws.h"
@@ -179,7 +180,7 @@ int remote_auth_login(char *out, size_t cap)
     int interval = 0, acked = 1;
     char ticket[512] = "";
     for (;;) {
-        if (browser_auth_pending())
+        if (browser_auth_pending() || gateway_switching())
             break;
         int64_t now = now_ms(), wake = next_beat && next_beat < deadline ? next_beat : deadline;
         if (now >= deadline) {

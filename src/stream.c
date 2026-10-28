@@ -36,9 +36,6 @@
 #define PT_H264 101
 #define PT_H264_RTX 102
 #define RTP_MTU 1200     // largest RTP payload
-#define WIDTH 1280       // broadcast.c asks Remote Play for 720p30
-#define HEIGHT 720
-#define FPS 30
 // The playout-delay header extension the reference clients put on video: with it Discord's
 // stream server drops every video packet (2026-10-28, error 2012 on viewers).
 #define VIDEO_EXT 0
@@ -401,12 +398,14 @@ static int video_attributes(conn *c, int on)
         cJSON_AddTrueToObject(s, "active");
         cJSON_AddNumberToObject(s, "quality", 100);
         cJSON_AddNumberToObject(s, "rtx_ssrc", c->rtx_ssrc);
-        cJSON_AddNumberToObject(s, "max_bitrate", 10000000);
-        cJSON_AddNumberToObject(s, "max_framerate", FPS);
+        int w, h, fps;
+        bc_profile(&w, &h, &fps);
+        cJSON_AddNumberToObject(s, "max_bitrate", h >= 1080 ? 20000000 : 10000000);
+        cJSON_AddNumberToObject(s, "max_framerate", fps);
         cJSON *r = cJSON_AddObjectToObject(s, "max_resolution");
         cJSON_AddStringToObject(r, "type", "fixed");
-        cJSON_AddNumberToObject(r, "width", WIDTH);
-        cJSON_AddNumberToObject(r, "height", HEIGHT);
+        cJSON_AddNumberToObject(r, "width", w);
+        cJSON_AddNumberToObject(r, "height", h);
         cJSON_AddItemToArray(streams, s);
     }
     return send_text(c, m);

@@ -69,6 +69,10 @@ std::string status_line(const discord::User &user);
 void row_label(DrawList &list, const Ink &ink, float baseline, const std::string &text, const std::string &count,
                bool count_hot = false);
 
+// Our own mic as a bar: the level of the last grain (square root, so quiet speech shows).
+// Empty while muted.
+void mic_meter(DrawList &list, float x, float cy, float w, float level, bool muted);
+
 // A crossed-out microphone centred on (cx, cy), s across.
 void mic_off(DrawList &list, float cx, float cy, float s, Color c);
 
@@ -82,6 +86,10 @@ std::string compact(int n);
 
 // Controller glyphs for hint rows: each face button ringed in its own colour.
 hui::ui::GlyphStyle hint_glyphs();
+
+// A yes-or-no question over a dimmed screen: Cross does it (yes is its label), Circle cancels.
+void confirm_card(DrawList &list, const Ink &ink, const std::string &title, const std::string &text,
+                  const char *yes);
 
 // Up to 99, then "99+".
 std::string count_text(int count);

@@ -81,6 +81,20 @@ constexpr double kPressSeconds = 0.35;
 
 extern "C" int sceSystemServiceParamGetInt(int id, int *value);
 
+// SceSystemServiceStatus: whether the app is the one on screen. On the home screen (the
+// app minimised) it runs on in the background; under the PS menu it is overlaid.
+struct SystemStatus
+{
+    std::int32_t event_count;
+    bool ui_overlaid;
+    bool in_background;
+    bool cpu_mode7_normal;
+    bool streaming;
+    bool out_of_vr_area;
+    std::uint8_t reserved[125];
+};
+extern "C" int sceSystemServiceGetStatus(SystemStatus *status);
+
 // The console's offset from UTC (Settings > Date and Time), in minutes:
 // system parameter 4 is the zone's offset, 5 is summer time (as spot5).
 int console_utc_minutes()
@@ -448,6 +462,19 @@ int main()
 
         if (!tour) // the tour runs on the sample account
         {
+            // In front or not: the core shows the PS5's alert instead of our banner when not.
+            if (frames % 30 == 0)
+            {
+                SystemStatus status{};
+                if (sceSystemServiceGetStatus(&status) == 0)
+                {
+                    const bool front = !status.in_background && !status.ui_overlaid;
+                    if (front != client.front())
+                        sys::log("[HUI] in front %d (background %d, overlaid %d)", front, status.in_background,
+                                 status.ui_overlaid);
+                    client.set_front(front);
+                }
+            }
             client.take(snapshot);
             // The mic is open while connected and neither muted nor deafened (deafen mutes too,
             // as in Discord); playback while not deafened.
@@ -592,10 +619,10 @@ int main()
         if (frames % 20 == 0)
         {
             poll_request();
-            if (quit_requested || collect_wait > kCollectSeconds)
+            if (quit_requested || client.quit_wanted() || collect_wait > kCollectSeconds)
             {
                 sys::log("[HUI] closing: %s",
-                         quit_requested ? "quit requested" : "tour evidence window over");
+                         quit_requested || client.quit_wanted() ? "quit requested" : "tour evidence window over");
                 voice_audio.stop();
                 pad.close();
                 sys::quit();

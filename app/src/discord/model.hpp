@@ -192,6 +192,18 @@ enum class VoiceState : std::uint8_t
 
 // The account's own voice connection: state and self mute from /api/voice,
 // names and member count worked out from the chat tree.
+// A console user and their Remote Play pairing for Go Live.
+struct RemotePlayUser
+{
+    std::string id; // the console's user id, hex
+    std::string name;
+    bool account = false;   // has a PSN account id (Remote Play needs one)
+    bool paired = false;
+    bool on_screen = false; // the user signed in on screen
+    std::string console;    // the paired console's name
+    std::int64_t since = 0; // when it was paired, unix seconds
+};
+
 struct Voice
 {
     VoiceState state = VoiceState::idle;
@@ -212,6 +224,14 @@ struct Voice
     bool output_tv = true;        // the pick while the app is on screen: TV, or the controller
     std::string broadcast;        // Go Live: "off", "starting", "live", "error"
     std::string broadcast_error;  // why it stopped, when it did
+    bool paired = false;          // Go Live's Remote Play pairing with the console exists
+    std::string pair_state;       // "idle", "pairing", "paired", "need_pin", "error"
+    std::string pair_error;
+    std::string pair_console;     // the paired console's name, the console user, and when (unix s)
+    std::string pair_user;
+    std::int64_t pair_since = 0;
+    std::vector<RemotePlayUser> rp_users;
+    std::string rp_use; // the user Go Live runs as, "" when nobody is paired
 
     bool active() const
     {
@@ -249,15 +269,50 @@ enum class Connection : std::uint8_t
     reconnecting,
 };
 
-// A message worth interrupting for: a DM, or a mention, that arrived live.
+// A live message worth a banner, as the core judged it (Discord's mutes and levels,
+// then Prefs): a DM, a mention, or a server message.
 struct Notice
 {
     std::uint64_t seq = 0; // grows with each notice; 0 = none yet
     std::string guild_id;  // empty for a DM
     std::string channel_id;
-    std::string title;     // "Abhi2nd" or "Abhi2nd in #general"
+    std::string title;     // who wrote: "Abhi2nd"
+    std::string place;     // "Raid Night · #general"; empty for a DM
     std::string text;
     User author;
+    int kind = 0;          // 1 a server message, 2 a mention of you, 3 a DM
+    bool for_me = false;   // a DM or a mention of you
+    bool quiet = false;    // in the quiet hours: no sound
+};
+
+// The settings kept by the core (its /api/voice "prefs"), so they outlast the app.
+struct Prefs
+{
+    int golive_quality = 0; // 0 720p30, 1 720p60, 2 1080p30, 3 1080p60
+    int mic_gain = 5;       // 0..10, 5 = as captured
+    bool notify_dm = true;
+    int notify_server = 1;     // 0 off, 1 as set in Discord, 2 every message
+    bool notify_system = true; // PS5 alerts while the app is not on screen
+    bool notify_live = false;  // ... also while Go Live is on
+    int quiet_hours = 0;       // 0 off, else a preset (screens/settings.cpp kQuiet)
+
+    void set(const std::string &key, int value) // a set_pref request, applied here
+    {
+        if (key == "golive_quality")
+            golive_quality = value;
+        else if (key == "mic_gain")
+            mic_gain = value;
+        else if (key == "notify_dm")
+            notify_dm = value != 0;
+        else if (key == "notify_server")
+            notify_server = value;
+        else if (key == "notify_system")
+            notify_system = value != 0;
+        else if (key == "notify_live")
+            notify_live = value != 0;
+        else if (key == "quiet_hours")
+            quiet_hours = value;
+    }
 };
 
 struct Snapshot
@@ -285,7 +340,9 @@ struct Snapshot
     std::set<std::string> load_failed; // history that did not load (network, core); retried on open
     std::set<std::string> history_start; // channels loaded back to their first message
     std::map<std::string, std::string> dm_by_user; // one-to-one DM channel by the other person's id
-    Notice notice; // the latest live DM or mention
+    std::vector<Notice> notices; // the latest few, oldest first
+    std::string sign_out_error;  // the last sign out failed, and why
+    Prefs prefs;
     Voice voice;
     std::map<std::string, std::vector<VoiceSeat>> seats; // by channel id: rooms and DM calls
     std::vector<Call> calls;

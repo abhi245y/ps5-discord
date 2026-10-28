@@ -65,6 +65,11 @@ class Client
     std::vector<KeyPress> take_keys();
     // Development: raises a notice as if a DM had arrived (the toast's path, from the PC).
     void test_notice(const std::string &text);
+    // The app is the one on screen (not minimised to the home screen, not under the PS
+    // menu). The core shows the PS5's own alert while it is not.
+    void set_front(bool front);
+    bool front() const;
+    bool quit_wanted() const { return quit_; }
 
   private:
     void run();
@@ -95,10 +100,12 @@ class Client
     std::deque<std::string> image_queue_; // guarded by mutex_
     std::vector<Image> images_;           // guarded by mutex_
     std::vector<KeyPress> keys_;          // guarded by mutex_
-    long events_next_ = -1; // -1: skip the backlog on first contact
+    std::atomic<long> events_next_{-1}; // -1: skip the backlog on first contact
     std::atomic<std::int64_t> last_chat_ms_{0}; // the events thread zeroes it to ask for a refresh
     std::int64_t last_mentions_ms_ = 0;
     std::int64_t last_voice_ms_ = 0; // a voice command zeroes it: the state comes back at once
+    std::uint64_t notice_seq_ = 0; // Notice::seq, under mutex_
+    std::atomic<bool> quit_{false}; // a quit request went through: the app closes
     std::string browser_error_; // client thread only; retained across state polls
     bool prefetched_ = false; // recent conversations' history asked for once after sign-in
     std::atomic<bool> ready_{false}; // read by the image thread too

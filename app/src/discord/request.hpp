@@ -23,6 +23,9 @@ struct Request
         prefetch,     // load history ahead of an open, without marking it read
         edit,         // replace message_id's content (the account's own message)
         remove,       // delete message_id (the account's own message)
+        remoteplay_pair, // pair Go Live's Remote Play for console user user_id ("" on screen): content = the PIN or ""
+        remoteplay_unpair, // forget user_id's pairing
+        remoteplay_use, // Go Live runs as console user user_id
         voice_join,   // join a server voice channel: guild_id, channel_id
         voice_call,   // join a DM's call, ringing the other side: channel_id
         voice_answer, // join a DM's call that rings us: channel_id
@@ -31,6 +34,9 @@ struct Request
         voice_set,    // self mute and deafen: mute, deaf
         voice_output, // the call's audio while the app is on screen: tv, or the USB controller
         voice_broadcast, // Go Live on or off: on
+        set_pref,     // a console-side setting (Prefs): content = its key, value
+        sign_out,     // end the session with Discord and forget it on the console
+        quit,         // stop the core (no alerts or calls) and close the app
     };
     Kind kind = Kind::open_channel;
     std::string guild_id; // empty for a DM
@@ -45,6 +51,7 @@ struct Request
     bool deaf = false;    // voice_set
     bool tv = false;      // voice_output
     bool on = false;      // voice_broadcast
+    int value = 0;        // set_pref
 };
 
 } // namespace discord

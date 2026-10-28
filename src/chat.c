@@ -1,4 +1,7 @@
 #include "chat.h"
+#include "log.h"
+#include "notify.h"
+#include "prefs.h"
 
 #include <pthread.h>
 #include <limits.h>
@@ -26,6 +29,15 @@ void chat_set_token(const char *t)
 {
     pthread_mutex_lock(&lock);
     snprintf(token, sizeof token, "%s", t);
+    pthread_mutex_unlock(&lock);
+}
+
+void chat_reset(void)
+{
+    pthread_mutex_lock(&lock);
+    cJSON_Delete(tree);
+    tree = NULL;
+    token[0] = 0;
     pthread_mutex_unlock(&lock);
 }
 
@@ -133,6 +145,8 @@ static void set_voice(cJSON *state)
 static cJSON *find_channel(const char *id)
 {
     cJSON *g, *c;
+    if (!id)
+        return NULL;
     cJSON_ArrayForEach(g, cJSON_GetObjectItem(tree, "guilds"))
         cJSON_ArrayForEach(c, cJSON_GetObjectItem(g, "channels"))
             if (str(c, "id") && strcmp(str(c, "id"), id) == 0)
@@ -308,6 +322,7 @@ static cJSON *guild_tree(cJSON *g, const char *me, cJSON *my_roles)
     copy(og, props ? props : g, "banner");
     copy(og, props ? props : g, "splash");
     copy(og, g, "member_count");
+    copy(og, props ? props : g, "default_message_notifications"); // 0 all messages, 1 mentions
     cJSON_AddArrayToObject(og, "channels");
     cJSON_AddArrayToObject(og, "rooms");
     // Role names by id, so <@&id> in a message reads as the role.
@@ -356,6 +371,8 @@ static void guild_changed(cJSON *d, int created)
             my_roles = cJSON_GetObjectItem(m, "roles");
     cJSON_AddItemToArray(guilds, guild_tree(d, me, my_roles));
 }
+
+static void put_notify(cJSON *e);
 
 static void load_ready(cJSON *d)
 {
@@ -406,6 +423,13 @@ static void load_ready(cJSON *d)
         if (id)
             cJSON_AddItemToArray(friends, cJSON_CreateString(id));
     }
+
+    // Discord's own notification settings: an object with entries (or, older, a bare list).
+    cJSON_AddObjectToObject(t, "notify");
+    cJSON *ugs = cJSON_GetObjectItem(d, "user_guild_settings");
+    cJSON *entries = cJSON_IsArray(ugs) ? ugs : cJSON_GetObjectItem(ugs, "entries");
+    cJSON_ArrayForEach(c, entries)
+        put_notify(c);
 
     cJSON_ArrayForEach(c, cJSON_GetObjectItem(cJSON_GetObjectItem(d, "read_state"), "entries"))
     {
@@ -479,6 +503,10 @@ static void push_event(const char *type, cJSON *d)
         copy(e, d, "referenced_message");
         copy(e, d, "type");
         copy(e, d, "sticker_items");
+        if (cJSON_GetObjectItem(d, "notify")) { // MESSAGE_CREATE: worth a banner (message_created)
+            copy(e, d, "notify");
+            copy(e, d, "quiet");
+        }
         copy(e, d, "reactions");
         copy(e, d, "message_snapshots");
         cJSON *embeds = cJSON_AddArrayToObject(e, "embeds"), *em; // titles only: embeds can be large
@@ -498,6 +526,17 @@ static void push_event(const char *type, cJSON *d)
 
 // CALL_CREATE / CALL_UPDATE / CALL_DELETE. The calls entry holds who is ringing; the
 // event tells the app to look (the app's ring screen does not wait for a tree refresh).
+static void ring_alert(cJSON *d);
+
+static int has_ringing(cJSON *call, const char *me)
+{
+    cJSON *r;
+    cJSON_ArrayForEach(r, cJSON_GetObjectItem(call, "ringing"))
+        if (me && cJSON_IsString(r) && strcmp(r->valuestring, me) == 0)
+            return 1;
+    return 0;
+}
+
 static void call_changed(cJSON *d, int gone)
 {
     const char *cid = str(d, "channel_id");
@@ -509,6 +548,10 @@ static void call_changed(cJSON *d, int gone)
     cJSON *old = cJSON_GetObjectItem(calls, cid);
     if (old && !gone && strcmp(str(old, "message_id") ? str(old, "message_id") : "", str(d, "message_id") ? str(d, "message_id") : "") == 0)
         snprintf(caller, sizeof caller, "%s", str(old, "caller") ? str(old, "caller") : "");
+    const char *me = str(cJSON_GetObjectItem(tree, "me"), "id");
+    int was_ringing = old && has_ringing(old, me);
+    if (!gone && !was_ringing && has_ringing(d, me))
+        ring_alert(d);
     cJSON_DeleteItemFromObject(calls, cid);
     if (!gone) {
         cJSON *c = cJSON_AddObjectToObject(calls, cid), *r, *vs;
@@ -526,6 +569,193 @@ static void call_changed(cJSON *d, int gone)
     cJSON_AddStringToObject(e, "channel", cid);
     store_event(e);
     cJSON_Delete(e);
+}
+
+// ---- notifications ----------------------------------------------------------------
+// Discord's own settings decide first (mutes, each server's "All messages / Only
+// mentions / Nothing", @everyone and role mentions), then the app's (prefs.h).
+
+static void (*alert_sink)(const char *context, const char *text, const char *icon, int urgent);
+// Composed under the lock, sent after it (gateway thread only).
+static char alert_title[160], alert_body[200], alert_icon[160];
+static int alert_urgent;
+
+void chat_set_alert(void (*sink)(const char *context, const char *text, const char *icon, int urgent))
+{
+    alert_sink = sink;
+}
+
+// One user_guild_settings entry, by guild id ("@me" for DMs). Lock held.
+static void put_notify(cJSON *e)
+{
+    cJSON *all = cJSON_GetObjectItem(tree, "notify");
+    const char *key = str(e, "guild_id") ? str(e, "guild_id") : "@me";
+    cJSON *o = cJSON_CreateObject();
+    copy(o, e, "muted");
+    copy(o, e, "mute_config");
+    copy(o, e, "message_notifications");
+    copy(o, e, "suppress_everyone");
+    copy(o, e, "suppress_roles");
+    copy(o, e, "channel_overrides");
+    cJSON_DeleteItemFromObject(all, key);
+    cJSON_AddItemToObject(all, key, o);
+}
+
+// Muted, and the mute has not run out ("until 8 AM" ends; "until I turn it back on" does not).
+static int muted_now(cJSON *o)
+{
+    if (!cJSON_IsTrue(cJSON_GetObjectItem(o, "muted")))
+        return 0;
+    const char *end = str(cJSON_GetObjectItem(o, "mute_config"), "end_time");
+    struct tm tm = {0};
+    if (!end || sscanf(end, "%d-%d-%dT%d:%d:%d", &tm.tm_year, &tm.tm_mon, &tm.tm_mday, &tm.tm_hour, &tm.tm_min,
+                       &tm.tm_sec) != 6)
+        return 1;
+    tm.tm_year -= 1900;
+    tm.tm_mon -= 1;
+    return timegm(&tm) > time(NULL);
+}
+
+static cJSON *override_of(cJSON *entry, const char *channel)
+{
+    cJSON *o;
+    cJSON_ArrayForEach(o, cJSON_GetObjectItem(entry, "channel_overrides"))
+        if (channel && str(o, "channel_id") && strcmp(str(o, "channel_id"), channel) == 0)
+            return o;
+    return NULL;
+}
+
+static int has_id(cJSON *list, const char *id)
+{
+    cJSON *x;
+    cJSON_ArrayForEach(x, list)
+        if (id && cJSON_GetStringValue(x) && strcmp(cJSON_GetStringValue(x), id) == 0)
+            return 1;
+    return 0;
+}
+
+// What a new message is worth: 0 nothing, 1 a server message, 2 a mention, 3 a DM.
+// ponytail: a thread's parent channel is not looked up, so a muted channel's threads still alert.
+static int notify_kind(cJSON *d, const char *me)
+{
+    int type = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(d, "type"));
+    if (type != 0 && type != 19) // plain messages and replies; not joins, pins, calls
+        return 0;
+    const char *channel = str(d, "channel_id"), *guild = str(d, "guild_id");
+    cJSON *notify = cJSON_GetObjectItem(tree, "notify");
+    if (!guild)
+        return muted_now(override_of(cJSON_GetObjectItem(notify, "@me"), channel)) || !prefs_get("notify_dm") ? 0 : 3;
+    cJSON *e = cJSON_GetObjectItem(notify, guild), *g = guild_of(guild), *c = find_channel(channel);
+    cJSON *chain[3] = {override_of(e, channel), override_of(e, c ? str(c, "parent_id") : NULL), e};
+    int level = 3; // 3: as the next one up says
+    for (int i = 0; i < 3; i++) {
+        if (muted_now(chain[i]))
+            return 0;
+        cJSON *n = cJSON_GetObjectItem(chain[i], "message_notifications");
+        if (level == 3 && cJSON_IsNumber(n))
+            level = n->valueint;
+    }
+    if (level == 3) {
+        cJSON *n = cJSON_GetObjectItem(g, "default_message_notifications");
+        level = cJSON_IsNumber(n) ? n->valueint : 1;
+    }
+    cJSON *m;
+    int mention = 0;
+    cJSON_ArrayForEach(m, cJSON_GetObjectItem(d, "mentions"))
+        if (me && str(m, "id") && strcmp(str(m, "id"), me) == 0)
+            mention = 1;
+    if (cJSON_IsTrue(cJSON_GetObjectItem(d, "mention_everyone")) && !cJSON_IsTrue(cJSON_GetObjectItem(e, "suppress_everyone")))
+        mention = 1;
+    if (!cJSON_IsTrue(cJSON_GetObjectItem(e, "suppress_roles")))
+        cJSON_ArrayForEach(m, cJSON_GetObjectItem(d, "mention_roles"))
+            if (has_id(cJSON_GetObjectItem(g, "_my_roles"), cJSON_GetStringValue(m)))
+                mention = 1;
+    if (mention)
+        return level != 2 && prefs_get("notify_dm") ? 2 : 0;
+    int server = prefs_get("notify_server"); // 0 off, 1 as set in Discord, 2 every message
+    return server == 2 || (server == 1 && level == 0) ? 1 : 0;
+}
+
+// Discord's markup as text: <@id> as @name, <@&id> as @role, <#id> as #channel, <:name:id> as :name:.
+static void plain_text(const char *in, cJSON *guild, char *out, size_t cap)
+{
+    size_t n = 0;
+    while (in && *in && n + 1 < cap) {
+        const char *end = *in == '<' ? strchr(in, '>') : NULL;
+        char tok[96], name[128] = "";
+        if (end && end - in - 1 < (long)sizeof tok) {
+            memcpy(tok, in + 1, (size_t)(end - in - 1));
+            tok[end - in - 1] = 0;
+            const char *u = NULL;
+            if (tok[0] == '@' && tok[1] == '&')
+                u = cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetObjectItem(guild, "roles"), tok + 2));
+            else if (tok[0] == '@') {
+                cJSON *who = cJSON_GetObjectItem(cJSON_GetObjectItem(tree, "users"), tok + (tok[1] == '!' ? 2 : 1));
+                u = str(who, "global_name") ? str(who, "global_name") : str(who, "username");
+            } else if (tok[0] == '#')
+                u = str(find_channel(tok + 1), "name");
+            if (u)
+                snprintf(name, sizeof name, "%c%s", tok[0], u);
+            else if (tok[0] == ':' || (tok[0] == 'a' && tok[1] == ':')) {
+                const char *s = strchr(tok, ':') + 1, *t = strchr(s, ':');
+                if (t)
+                    snprintf(name, sizeof name, ":%.*s:", (int)(t - s), s);
+            }
+        }
+        if (name[0]) {
+            int w = snprintf(out + n, cap - n, "%s", name);
+            n = w < 0 ? n : n + (size_t)w < cap ? n + (size_t)w : cap - 1;
+            in = end + 1;
+        } else
+            out[n++] = *in++;
+    }
+    out[n] = 0;
+}
+
+// The PS5 alert: who and where, what, and the sender's avatar.
+static void alert_text(cJSON *d)
+{
+    cJSON *author = cJSON_GetObjectItem(d, "author"), *g = guild_of(str(d, "guild_id"));
+    const char *who = str(cJSON_GetObjectItem(d, "member"), "nick");
+    if (!who)
+        who = str(author, "global_name") ? str(author, "global_name") : str(author, "username");
+    plain_text(str(d, "content"), g, alert_body, sizeof alert_body);
+    if (!alert_body[0])
+        snprintf(alert_body, sizeof alert_body, "%s",
+                 cJSON_GetArraySize(cJSON_GetObjectItem(d, "sticker_items")) > 0 ? "sent a sticker"
+                                                                                : "sent an attachment");
+    cJSON *c = find_channel(str(d, "channel_id"));
+    if (g)
+        snprintf(alert_title, sizeof alert_title, "%s · %s #%s", who ? who : "Someone",
+                 str(g, "name") ? str(g, "name") : "a server", str(c, "name") ? str(c, "name") : "");
+    else
+        snprintf(alert_title, sizeof alert_title, "%s", who ? who : "Someone");
+    if (str(author, "id") && str(author, "avatar"))
+        snprintf(alert_icon, sizeof alert_icon, "https://cdn.discordapp.com/avatars/%s/%s.png?size=128",
+                 str(author, "id"), str(author, "avatar"));
+    else
+        snprintf(alert_icon, sizeof alert_icon, "https://cdn.discordapp.com/embed/avatars/0.png");
+}
+
+// A DM call starts ringing us: "Incoming call", who, their avatar; at once, quiet hours or not.
+static void ring_alert(cJSON *d)
+{
+    if (!alert_sink)
+        return;
+    cJSON *dm = find_channel(str(d, "channel_id"));
+    cJSON *ids = cJSON_GetObjectItem(dm, "recipient_ids");
+    cJSON *who = cJSON_GetObjectItem(cJSON_GetObjectItem(tree, "users"), cJSON_GetStringValue(cJSON_GetArrayItem(ids, 0)));
+    const char *name = str(dm, "name");
+    if (!name || !*name)
+        name = str(who, "global_name") ? str(who, "global_name") : str(who, "username");
+    snprintf(alert_title, sizeof alert_title, "Incoming call");
+    snprintf(alert_body, sizeof alert_body, "%s is calling", name ? name : "Someone");
+    if (cJSON_GetArraySize(ids) == 1 && str(who, "id") && str(who, "avatar"))
+        snprintf(alert_icon, sizeof alert_icon, "https://cdn.discordapp.com/avatars/%s/%s.png?size=128", str(who, "id"),
+                 str(who, "avatar"));
+    else
+        snprintf(alert_icon, sizeof alert_icon, "https://cdn.discordapp.com/embed/avatars/0.png");
+    alert_urgent = 1;
 }
 
 static void message_created(cJSON *d)
@@ -563,6 +793,12 @@ static void message_created(cJSON *d)
             break;
         }
     }
+    // For the app's banner (notify, quiet) and, sent after the lock, the PS5 alert.
+    const int kind = notify_kind(d, me), quiet = kind && notify_quiet_now();
+    cJSON_AddNumberToObject(d, "notify", kind);
+    cJSON_AddBoolToObject(d, "quiet", quiet);
+    if (kind && !quiet && alert_sink)
+        alert_text(d);
 }
 
 void chat_dispatch(const char *type, cJSON *d)
@@ -631,7 +867,14 @@ void chat_dispatch(const char *type, cJSON *d)
             message_created(d);
         push_event(type, d);
     }
+    else if (strcmp(type, "USER_GUILD_SETTINGS_UPDATE") == 0)
+        put_notify(d);
     pthread_mutex_unlock(&lock);
+    if (alert_title[0]) {
+        alert_sink(alert_title, alert_body, alert_icon, alert_urgent);
+        alert_title[0] = 0;
+        alert_urgent = 0;
+    }
 }
 
 int chat_me_id(char *out, size_t cap)

@@ -5,19 +5,25 @@
 // so the user is never left without a controller. Afterwards the user presses PS to
 // reconnect it to the console.
 //
-// Remote Play: vendored chiaki-ng (third_party/README.md), paired with the console
-// itself (remoteplay.bin = ChiakiRegisteredHost). USB: tools/ds5-usb-bridge/ds5_usb.c.
+// Remote Play: vendored chiaki-ng (third_party/README.md), paired with the console itself
+// per console user (rp_pair.c). Going live as the user on screen takes the USB controller
+// over; as another console user it leaves the controller alone. USB:
+// tools/ds5-usb-bridge/ds5_usb.c.
 #include "broadcast.h"
 
 #include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "log.h"
+#include "notify.h"
+#include "prefs.h"
+#include "rp_pair.h"
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static char state[16] = "off", error[160];
-static char pair_file[256];
 static const bc_sink *volatile sink;
 
 static void set_state(const char *s, const char *why)
@@ -39,14 +45,22 @@ const char *bc_error(void)
     return error;
 }
 
-void bc_init(const char *data_dir)
-{
-    snprintf(pair_file, sizeof pair_file, "%s/remoteplay.bin", data_dir);
-}
-
 void bc_set_sink(const bc_sink *s)
 {
     sink = s;
+}
+
+// The prefs' golive_quality picks one; a broadcast keeps the one it started with.
+static const struct {
+    int w, h, fps;
+} profiles[] = {{1280, 720, 30}, {1280, 720, 60}, {1920, 1080, 30}, {1920, 1080, 60}};
+static volatile int profile;
+
+void bc_profile(int *w, int *h, int *fps)
+{
+    *w = profiles[profile].w;
+    *h = profiles[profile].h;
+    *fps = profiles[profile].fps;
 }
 
 #ifndef __PROSPERO__
@@ -63,9 +77,12 @@ void bc_stop(void)
 void bc_request_keyframe(void)
 {
 }
+
 #else
 
 #include <dlfcn.h>
+#include <stdlib.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <chiaki/regist.h>
@@ -235,36 +252,16 @@ static void *usb_main(void *arg)
 
 // ---- the session -------------------------------------------------------------------
 
-static uint64_t account_id(void)
-{
-    int (*fg)(int32_t *) = NULL;
-    int (*acct)(int32_t, uint64_t *) = NULL;
-    void *lib = dlopen("libSceUserService.sprx", RTLD_LAZY);
-    if (lib) {
-        fg = (int (*)(int32_t *))dlsym(lib, "sceUserServiceGetForegroundUser");
-        acct = (int (*)(int32_t, uint64_t *))dlsym(lib, "sceUserServiceGetNpAccountId");
-    }
-    int32_t user = -1;
-    uint64_t id = 0;
-    if (fg && acct && fg(&user) == 0)
-        acct(user, &id);
-    return id;
-}
-
 static const char *run(void)
 {
     ChiakiRegisteredHost host;
-    FILE *f = fopen(pair_file, "rb");
-    size_t got = f ? fread(&host, sizeof host, 1, f) : 0;
-    if (f)
-        fclose(f);
-    if (got != 1)
+    uint64_t id = 0;
+    int mine = 0; // Go Live as the user on screen: the USB controller plays through the session
+    if (rp_load(&host, sizeof host, &id, &mine) != 0)
         return "Remote Play is not paired with this console.";
 
-    static int lib_ready;
-    if (!lib_ready && chiaki_lib_init() != CHIAKI_ERR_SUCCESS)
+    if (!rp_chiaki_ready())
         return "Remote Play could not start.";
-    lib_ready = 1;
 
     static ChiakiLog log;
     chiaki_log_init(&log, CHIAKI_LOG_ERROR | CHIAKI_LOG_WARNING, rp_log, NULL);
@@ -274,13 +271,15 @@ static const char *run(void)
     info.host = "127.0.0.1";
     memcpy(info.regist_key, host.rp_regist_key, sizeof info.regist_key);
     memcpy(info.morning, host.rp_key, sizeof info.morning);
-    // ponytail: 720p30 to start; a quality setting comes with the viewers' feedback.
-    chiaki_connect_video_profile_preset(&info.video_profile, CHIAKI_VIDEO_RESOLUTION_PRESET_720p,
-                                        CHIAKI_VIDEO_FPS_PRESET_30);
+    // Remote Play's presets stop at 1080p; Discord's viewers need H.264.
+    chiaki_connect_video_profile_preset(&info.video_profile,
+                                        profiles[profile].h == 1080 ? CHIAKI_VIDEO_RESOLUTION_PRESET_1080p
+                                                                    : CHIAKI_VIDEO_RESOLUTION_PRESET_720p,
+                                        profiles[profile].fps == 60 ? CHIAKI_VIDEO_FPS_PRESET_60
+                                                                    : CHIAKI_VIDEO_FPS_PRESET_30);
     info.video_profile.codec = CHIAKI_CODEC_H264;
     info.packet_loss_max = 0.05;
     info.enable_idr_on_fec_failure = true;
-    uint64_t id = account_id();
     for (int i = 0; i < 8; i++)
         info.psn_account_id[i] = (uint8_t)(id >> (8 * i));
 
@@ -303,19 +302,22 @@ static const char *run(void)
     pthread_t usb;
     int usb_running = 0;
     if (!why && connected) {
-        LOG("broadcast: Remote Play connected, taking the controller");
-        vau_ext_set(1);
-        usb_running = pthread_create(&usb, NULL, usb_main, NULL) == 0;
+        if (mine) {
+            LOG("broadcast: Remote Play connected, taking the controller");
+            vau_ext_set(1);
+            usb_running = pthread_create(&usb, NULL, usb_main, NULL) == 0;
+        } else // another console user's session: the controller stays the user's own
+            LOG("broadcast: Remote Play connected as another console user; the controller stays yours");
         live = 1;
         set_state("live", "");
         unsigned tick = 0;
-        while (want && !quit && !ds5_done && voice_wanted()) {
+        while (want && !quit && !(usb_running && ds5_done) && voice_wanted()) {
             usleep(200000);
             if (++tick % 25 == 0)
                 LOG("broadcast: %u video frames (%u keyframes), %u audio frames", frames, keyframes, audio_frames);
         }
         live = 0;
-        if (ds5_done && want && !quit)
+        if (usb_running && ds5_done && want && !quit)
             why = "Plug the controller in by USB to broadcast.";
         else if (quit && want)
             why = "Remote Play ended.";
@@ -337,6 +339,8 @@ static void *worker(void *arg)
     const char *why = run();
     LOG("broadcast: off%s%s", why ? ": " : "", why ? why : "");
     set_state(why ? "error" : "off", why ? why : "");
+    if (why)
+        app_alert("Go Live stopped", why, NULL, 1); // the game is in front: say so there
     want = 0;
     running = 0;
     return NULL;
@@ -348,16 +352,15 @@ int bc_start(void)
         set_state("error", "Join a call first.");
         return -1;
     }
-    FILE *f = fopen(pair_file, "rb"); // access() refuses payloads on the console
-    if (!f) {
+    if (rp_used() < 0) {
         set_state("error", "Remote Play is not paired with this console.");
         return -1;
     }
-    fclose(f);
     want = 1;
     if (running)
         return 0;
     running = 1;
+    profile = prefs_get("golive_quality");
     set_state("starting", "");
     pthread_t t;
     pthread_attr_t attr;

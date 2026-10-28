@@ -145,6 +145,8 @@ void start_core()
                   elf.size());
 }
 
+std::atomic<bool> g_front{true}; // Client::set_front; every request tells the core
+
 Reply http(int port, const char *method, const std::string &path, const std::string &body = {})
 {
     Reply reply;
@@ -166,8 +168,8 @@ Reply http(int port, const char *method, const std::string &path, const std::str
     char head[512];
     const int n = std::snprintf(head, sizeof head,
                                 "%s %s HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
-                                "X-Discord-Native: 1\r\nContent-Length: %zu\r\n\r\n",
-                                method, path.c_str(), body.size());
+                                "X-Discord-Native: 1\r\nX-App-Front: %d\r\nContent-Length: %zu\r\n\r\n",
+                                method, path.c_str(), g_front ? 1 : 0, body.size());
     std::string request(head, static_cast<std::size_t>(n));
     request += body;
     for (std::size_t sent = 0; sent < request.size();)
@@ -847,16 +849,30 @@ void Client::publish()
     ++version_;
 }
 
+void Client::set_front(bool front)
+{
+    g_front = front;
+}
+
+bool Client::front() const
+{
+    return g_front;
+}
+
 void Client::test_notice(const std::string &text)
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    Notice &n = snapshot_.notice;
-    ++n.seq;
-    n.guild_id.clear();
+    Notice n;
+    n.seq = ++notice_seq_;
     n.channel_id = "test";
     n.author = snapshot_.me;
     n.title = snapshot_.me.name + " (test)";
     n.text = text;
+    n.kind = 3;
+    n.for_me = true;
+    snapshot_.notices.push_back(std::move(n));
+    if (snapshot_.notices.size() > 8)
+        snapshot_.notices.erase(snapshot_.notices.begin());
     publish();
 }
 
@@ -1009,6 +1025,13 @@ void Client::poll_state()
     }
     const std::string s = text(state, "state");
     const Connection before = snapshot_.connection;
+    // Signed in before, signing in now: another console user's turn, or signed out. The
+    // last account's servers, chats and DMs go.
+    if (before == Connection::ready && (s == "login" || s == "scanned" || s == "browser" || s == "starting"))
+    {
+        snapshot_ = Snapshot{};
+        events_next_ = -1;
+    }
     if (s == "ready")
         snapshot_.connection = Connection::ready;
     else if (s == "login" || s == "scanned" || s == "browser")
@@ -1099,6 +1122,32 @@ void Client::poll_voice()
         {
             voice.broadcast = text(v["broadcast"], "state");
             voice.broadcast_error = text(v["broadcast"], "error");
+            voice.paired = v["broadcast"].value("paired", false);
+            voice.pair_state = text(v["broadcast"], "pair_state");
+            voice.pair_error = text(v["broadcast"], "pair_error");
+            voice.pair_console = text(v["broadcast"], "pair_console");
+            voice.pair_user = text(v["broadcast"], "pair_user");
+            voice.pair_since = static_cast<std::int64_t>(v["broadcast"].value("pair_since", 0.0));
+            voice.rp_use = text(v["broadcast"], "use");
+            if (v["broadcast"].contains("users") && v["broadcast"]["users"].is_array())
+                for (const json &u : v["broadcast"]["users"])
+                    if (u.is_object())
+                        voice.rp_users.push_back({text(u, "id"), text(u, "name"), u.value("account", false),
+                                                  u.value("paired", false), u.value("on_screen", false),
+                                                  text(u, "console"),
+                                                  static_cast<std::int64_t>(u.value("since", 0.0))});
+        }
+        if (v.contains("prefs") && v["prefs"].is_object())
+        {
+            const json &p = v["prefs"];
+            Prefs &prefs = snapshot_.prefs;
+            prefs.golive_quality = std::clamp(static_cast<int>(p.value("golive_quality", 0.0)), 0, 3);
+            prefs.mic_gain = std::clamp(static_cast<int>(p.value("mic_gain", 5.0)), 0, 10);
+            prefs.notify_dm = p.value("notify_dm", 1.0) != 0.0;
+            prefs.notify_server = std::clamp(static_cast<int>(p.value("notify_server", 1.0)), 0, 2);
+            prefs.notify_system = p.value("notify_system", 1.0) != 0.0;
+            prefs.notify_live = p.value("notify_live", 0.0) != 0.0;
+            prefs.quiet_hours = std::clamp(static_cast<int>(p.value("quiet_hours", 0.0)), 0, 4);
         }
         if (v.contains("speaking") && v["speaking"].is_array())
             for (const json &id : v["speaking"])
@@ -1123,7 +1172,7 @@ bool Client::poll_events()
 {
     const std::string wait = events_next_ < 0 ? "0" : "6"; // under the 8 s socket timeout
     const Reply reply =
-        http(port_, "GET", "/api/events?since=" + std::to_string(std::max(0L, events_next_)) + "&wait=" + wait);
+        http(port_, "GET", "/api/events?since=" + std::to_string(std::max(0L, events_next_.load())) + "&wait=" + wait);
     if (reply.status != 200)
         return false;
     const json e = json::parse(reply.body, nullptr, false);
@@ -1157,23 +1206,35 @@ bool Client::poll_events()
         }
         if (type == "MESSAGE_CREATE")
         {
-            // A DM or a mention from someone else becomes a notice, open channel or not.
+            // The core says what a message is worth (Discord's mutes and levels, then the
+            // settings): a notice, open channel or not. Not while the app is out of sight
+            // (the PS5's alert shows it), nor one older than a few seconds (a backlog).
             const Message m = message_from(ev, snapshot_.me.id);
             const std::string guild = text(ev, "guild_id");
-            if (m.author_id != snapshot_.me.id && !m.author_id.empty() && (guild.empty() || m.mentions_me))
+            const int kind = static_cast<int>(ev.value("notify", 0.0));
+            if (kind > 0 && g_front && (m.time_ms == 0 || now_ms() - m.time_ms < 15000)) // else the PS5 alert
             {
-                Notice &n = snapshot_.notice;
-                ++n.seq;
+                Notice n;
+                n.seq = ++notice_seq_;
                 n.guild_id = guild;
                 n.channel_id = channel;
+                n.kind = kind;
+                n.for_me = kind >= 2;
+                n.quiet = ev.value("quiet", false);
                 n.author = ev.contains("author") && ev["author"].is_object() ? user_from(ev["author"]) : User{};
                 n.title = n.author.name;
-                if (!guild.empty())
-                    for (const Guild &g : snapshot_.guilds)
+                for (const Guild &g : snapshot_.guilds)
+                    if (g.id == guild)
+                    {
+                        n.place = g.name;
                         for (const Channel &c : g.channels)
                             if (c.id == channel)
-                                n.title += " in #" + c.name;
+                                n.place += " · #" + c.name;
+                    }
                 n.text = m.content.empty() && !m.attachments.empty() ? "sent an attachment" : plain_text(m);
+                snapshot_.notices.push_back(std::move(n));
+                if (snapshot_.notices.size() > 8)
+                    snapshot_.notices.erase(snapshot_.notices.begin());
             }
         }
         if (snapshot_.messages.find(channel) == snapshot_.messages.end())
@@ -1458,6 +1519,56 @@ void Client::handle(const Request &request)
         if (reply.status != 202)
             hui::sys::log("[CLIENT] %s answered %d", path, reply.status);
         last_voice_ms_ = 0; // the new state comes on the next poll
+        break;
+    }
+    case Request::Kind::remoteplay_pair:
+    case Request::Kind::remoteplay_unpair:
+    case Request::Kind::remoteplay_use: {
+        const char *path = request.kind == Request::Kind::remoteplay_pair     ? "/api/remoteplay/pair"
+                           : request.kind == Request::Kind::remoteplay_unpair ? "/api/remoteplay/unpair"
+                                                                              : "/api/remoteplay/use";
+        json body = {{"user", request.user_id}};
+        if (request.kind == Request::Kind::remoteplay_pair)
+            body["pin"] = request.content;
+        const Reply reply = http(port_, "POST", path, body.dump());
+        if (reply.status != 202)
+            hui::sys::log("[CLIENT] %s answered %d", path, reply.status);
+        last_voice_ms_ = 0; // the pairing state comes on the next poll
+        break;
+    }
+    case Request::Kind::set_pref: {
+        {
+            std::lock_guard<std::mutex> lock(mutex_); // shown at once, not at the next poll
+            snapshot_.prefs.set(request.content, request.value);
+            publish();
+        }
+        const Reply reply = http(port_, "POST", "/api/prefs", json{{request.content, request.value}}.dump());
+        if (reply.status != 202)
+            hui::sys::log("[CLIENT] /api/prefs answered %d", reply.status);
+        last_voice_ms_ = 0;
+        break;
+    }
+    case Request::Kind::quit: // the core stops (Go Live and the call first), then the app closes
+        hui::sys::log("[CLIENT] /api/quit answered %d", http(port_, "POST", "/api/quit").status);
+        quit_ = true;
+        break;
+    case Request::Kind::sign_out: {
+        // The core ends the session with Discord, forgets it and quits; poll_state starts
+        // it again, at the QR code.
+        const Reply reply = http(port_, "POST", "/api/signout");
+        hui::sys::log("[CLIENT] /api/signout answered %d", reply.status);
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (reply.status != 200)
+        {
+            snapshot_.sign_out_error = "Could not reach Discord to sign out. You are still signed in; try again.";
+            publish();
+            break;
+        }
+        snapshot_ = Snapshot{};
+        snapshot_.status_message = "Signing out...";
+        ready_ = false;
+        events_next_ = -1; // the new core counts its events from the start
+        publish();
         break;
     }
     case Request::Kind::open_dm: {
