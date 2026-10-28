@@ -468,18 +468,6 @@ void EmojiPicker::draw(DrawList &list) const
     // The footer: the focused one large, its name, and why not when it cannot be sent.
     const Rect foot{kPanel.x, kPanel.y + kPanel.h - kFootH, kPanel.w, kFootH};
     list.rounded_rect({foot.x + 24.0f, foot.y, foot.w - 48.0f, 2.0f}, 1.0f, kLine);
-    const Item &it = focused();
-    if (!it.text.empty() || !it.id.empty())
-    {
-        draw_item(list, it, {foot.x + 40.0f, foot.cy() - 30.0f, 60.0f, 60.0f});
-        std::string name = it.id.empty() || it.format ? it.name : ":" + it.name + ":";
-        if (name.empty() && discord::emoji_index(it.text) >= 0) // a recent one: Unicode's name
-            name = discord::kEmojiTable[discord::emoji_index(it.text)].name;
-        ui::text(list, ink_.fonts.semibold, fit(ink_.fonts.semibold, name, 28.0f, 420.0f), foot.x + 124.0f,
-                 foot.cy() + (it.usable ? 10.0f : -6.0f), 28.0f, kText);
-        if (!it.usable)
-            ui::text(list, ink_.fonts.regular, it.why, foot.x + 124.0f, foot.cy() + 28.0f, 22.0f, kDnd);
-    }
     ui::Hint hints[4] = {{ui::Button::l1, "Category", ui::Button::r1}};
     int count = 1;
     if (stickers_allowed_)
@@ -490,6 +478,23 @@ void EmojiPicker::draw(DrawList &list) const
     layout.size = 32.0f;
     layout.text_size = 22.0f;
     layout.cy = foot.cy();
+    layout.item_gap = 30.0f;
+    // The name and the why get what the hints leave; a long name in a smaller size.
+    const float room = foot.w - 40.0f - ui::measure_hints(ink_.fonts, hints, count, layout) - 124.0f - 24.0f;
+    const Item &it = focused();
+    if (!it.text.empty() || !it.id.empty())
+    {
+        draw_item(list, it, {foot.x + 40.0f, foot.cy() - 30.0f, 60.0f, 60.0f});
+        std::string name = it.id.empty() || it.format ? it.name : ":" + it.name + ":";
+        if (name.empty() && discord::emoji_index(it.text) >= 0) // a recent one: Unicode's name
+            name = discord::kEmojiTable[discord::emoji_index(it.text)].name;
+        const float size = ink_.fonts.semibold.measure(name, 28.0f) <= room ? 28.0f : 22.0f;
+        ui::text(list, ink_.fonts.semibold, fit(ink_.fonts.semibold, name, size, room), foot.x + 124.0f,
+                 foot.cy() + (it.usable ? 10.0f : -6.0f), size, kText);
+        if (!it.usable)
+            ui::text(list, ink_.fonts.regular, fit(ink_.fonts.regular, it.why, 22.0f, room), foot.x + 124.0f,
+                     foot.cy() + 28.0f, 22.0f, kDnd);
+    }
     ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints, count, foot.x + foot.w - 40.0f, true, layout);
 }
 
