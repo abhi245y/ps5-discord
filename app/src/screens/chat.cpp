@@ -77,35 +77,6 @@ constexpr std::int64_t kGroupMs = 7 * 60 * 1000;
 constexpr float kReactEmoji = 28.0f;
 // A Unicode one is Twemoji's colour picture (the font's emoji are one colour,
 // and draw flags and keycaps as boxed letters).
-std::string emoji_url(const discord::Reaction &r)
-{
-    if (!r.emoji_id.empty())
-        return "https://cdn.discordapp.com/emojis/" + r.emoji_id + ".png?size=48";
-    // Twemoji names files by code points in hex; FE0F is left out unless a ZWJ joins the sequence.
-    std::vector<std::uint32_t> points;
-    for (std::size_t i = 0; i < r.emoji.size();)
-    {
-        const unsigned char c = static_cast<unsigned char>(r.emoji[i]);
-        const int n = c < 0x80 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
-        std::uint32_t cp = n == 1 ? c : c & (0x3F >> (n - 1));
-        for (int k = 1; k < n && i + k < r.emoji.size(); ++k)
-            cp = (cp << 6) | (static_cast<unsigned char>(r.emoji[i + k]) & 0x3F);
-        points.push_back(cp);
-        i += n;
-    }
-    const bool zwj = std::find(points.begin(), points.end(), 0x200Du) != points.end();
-    std::string name;
-    for (const std::uint32_t cp : points)
-    {
-        if (cp == 0xFE0F && !zwj)
-            continue;
-        char hex[12];
-        std::snprintf(hex, sizeof hex, "%s%x", name.empty() ? "" : "-", cp);
-        name += hex;
-    }
-    return name.empty() ? std::string() : "https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.1.0/assets/72x72/" + name + ".png";
-}
-
 const char *const kQuickReplies[] = {"On my way", "gg", "brb", "5 min", "\xF0\x9F\x91\x8D"};
 constexpr int kQuickCount = 5;
 
@@ -340,7 +311,7 @@ float Chat::draw_line(DrawList &list, const discord::Message &m, const std::stri
     // mark took when the line was wrapped.
     const Color ink = Color::rgb(0xdfe2e8);
     const float slot = ink_.fonts.regular.measure(discord::kEmojiMark, kTextSize);
-    const float size = kTextSize * 1.15f;
+    const float size = slot * 0.96f; // in its slot, so emoji side by side do not touch
     float cx = x;
     std::size_t from = 0;
     while (true)
@@ -351,22 +322,10 @@ float Chat::draw_line(DrawList &list, const discord::Message &m, const std::stri
             cx += ui::text(list, ink_.fonts.regular, run, cx, baseline, kTextSize, ink);
         if (at == std::string::npos)
             break;
-        const std::string url = emoji < m.emojis.size()
-                                    ? "https://cdn.discordapp.com/emojis/" + m.emojis[emoji].id + ".png?size=48"
-                                    : std::string();
-        ++emoji;
-        const hui::app::ArtSet::Remote pic = ink_.art.remote && !url.empty() ? ink_.art.remote(url) : hui::app::ArtSet::Remote{};
         const Rect box{cx + (slot - size) * 0.5f, baseline - kTextSize * 0.82f - (size - kTextSize) * 0.5f, size, size};
-        if (pic.texture)
-        {
-            const float aspect = pic.h > 0 ? static_cast<float>(pic.w) / pic.h : 1.0f;
-            const float iw = aspect >= 1.0f ? size : size * aspect;
-            const float ih = aspect >= 1.0f ? size / aspect : size;
-            list.image(pic.texture, {box.x + (size - iw) * 0.5f, box.y + (size - ih) * 0.5f, iw, ih}, gfx::kFullUv,
-                       Color::rgb(0xffffff), 4.0f);
-        }
-        else
-            list.rounded_rect(box, 6.0f, kRaisedHigh); // loading
+        if (emoji < m.emojis.size())
+            emoji_picture(list, ink_, m.emojis[emoji].name, m.emojis[emoji].id, box);
+        ++emoji;
         cx += slot;
         from = at + 3;
     }
@@ -403,8 +362,7 @@ int Chat::reaction_lines(const discord::Message &m, float width) const
 
 float Chat::reaction_width(const discord::Reaction &r) const
 {
-    const float ew = r.emoji_id.empty() ? std::max(kReactEmoji, ink_.fonts.regular.measure(r.emoji, 24.0f)) : kReactEmoji;
-    return ew + ink_.fonts.semibold.measure(std::to_string(r.count), 22.0f) + 46.0f;
+    return kReactEmoji + ink_.fonts.semibold.measure(std::to_string(r.count), 22.0f) + 46.0f; // the picture, its count
 }
 
 float Chat::pill_extra(const discord::Snapshot &s) const
@@ -1193,20 +1151,9 @@ void Chat::draw_message(const discord::Snapshot &s, DrawList &list, const Row &r
             if (reaction.me)
                 list.bordered_rect(chip, kReactH * 0.5f, Color::rgb(0, 0.0f), 2.0f, kCoral);
             const float ew = cw - ink_.fonts.semibold.measure(count, 22.0f) - 46.0f;
-            const hui::app::ArtSet::Remote pic = ink_.art.remote ? ink_.art.remote(emoji_url(reaction)) : hui::app::ArtSet::Remote{};
-            if (pic.texture)
-            {
-                // Fit the picture's aspect in the emoji square.
-                const float aspect = pic.h > 0 ? static_cast<float>(pic.w) / pic.h : 1.0f;
-                const float iw = aspect >= 1.0f ? kReactEmoji : kReactEmoji * aspect;
-                const float ih = aspect >= 1.0f ? kReactEmoji / aspect : kReactEmoji;
-                list.image(pic.texture, {chip.x + 16.0f + (ew - iw) * 0.5f, chip.cy() - ih * 0.5f, iw, ih},
-                           gfx::kFullUv, Color::rgb(0xffffff), 4.0f);
-            }
-            else if (!reaction.emoji_id.empty()) // loading: a quiet square, not the :name:
-                list.rounded_rect({chip.x + 16.0f, chip.cy() - kReactEmoji * 0.5f, kReactEmoji, kReactEmoji}, 6.0f, kRaised);
-            else
-                ui::text(list, ink_.fonts.regular, reaction.emoji, chip.x + 16.0f, chip.cy() + 9.0f, 24.0f, kText);
+            emoji_picture(list, ink_, reaction.emoji, reaction.emoji_id,
+                          {chip.x + 16.0f + (ew - kReactEmoji) * 0.5f, chip.cy() - kReactEmoji * 0.5f, kReactEmoji,
+                           kReactEmoji});
             ui::text(list, ink_.fonts.semibold, count, chip.x + 26.0f + ew, chip.cy() + 8.0f, 22.0f,
                      reaction.me ? kCoral : kDim);
             rx += cw + 10.0f;
@@ -1343,7 +1290,7 @@ void Chat::draw_actions(const discord::Snapshot &s, DrawList &list, const Rect &
     {
         const Rect cell{panel.x + 20.0f + i * 92.0f, ry, 80.0f, 80.0f};
         list.rounded_rect(cell, 18.0f, kRaisedHigh);
-        ui::text(list, ink_.fonts.regular, kReactions[i], cell.cx(), cell.cy() + 14.0f, 40.0f, kText, gfx::Align::center);
+        emoji_picture(list, ink_, kReactions[i], std::string(), {cell.cx() - 24.0f, cell.cy() - 24.0f, 48.0f, 48.0f});
         if (action_ == kActionCount + i)
             focus_outline(list, cell, 18.0f, 1.0f);
     }

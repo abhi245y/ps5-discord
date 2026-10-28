@@ -63,6 +63,9 @@ struct ArtSet
 {
     std::vector<std::uint32_t> avatars; // square scenes behind an initial
     std::vector<std::uint32_t> scenes;  // wide scenes for rooms and servers
+    // The baked Unicode emoji (assets/art/emoji.png, discord/emoji.hpp), one cell each.
+    std::uint32_t emoji = 0;
+    int emoji_w = 0, emoji_h = 0;
     // Discord images (avatars, server icons) by URL: the texture once it has
     // arrived, 0 meanwhile (asking for it starts the download). Unset on the host.
     struct Remote

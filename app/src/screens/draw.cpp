@@ -12,6 +12,7 @@
 #include <cctype>
 #include <cstdio>
 
+#include "discord/emoji.hpp"
 #include "screens/style.hpp"
 
 namespace screens
@@ -414,6 +415,31 @@ void mic_meter(DrawList &list, float x, float cy, float w, float level, bool mut
     if (!muted && level > 0.0f)
         list.rounded_rect({x, cy - kH * 0.5f, std::max(kH, w * std::sqrt(std::min(1.0f, level))), kH}, kH * 0.5f,
                           kOnline);
+}
+
+void emoji_picture(DrawList &list, const Ink &ink, const std::string &text, const std::string &id, const Rect &r)
+{
+    const int at = id.empty() ? discord::emoji_index(text) : -1;
+    if (at >= 0 && ink.art.emoji && ink.art.emoji_w > 0)
+    {
+        const float cw = static_cast<float>(discord::kEmojiCell) / ink.art.emoji_w;
+        const float ch = static_cast<float>(discord::kEmojiCell) / ink.art.emoji_h;
+        const Rect uv{(at % discord::kEmojiColumns) * cw, (at / discord::kEmojiColumns) * ch, cw, ch};
+        list.image(ink.art.emoji, r, uv, Color::rgb(0xffffff), 0.0f);
+        return;
+    }
+    const std::string url = !id.empty() ? "https://cdn.discordapp.com/emojis/" + id + ".png?size=48"
+                                        : discord::twemoji_url(text);
+    const hui::app::ArtSet::Remote pic = ink.art.remote && !url.empty() ? ink.art.remote(url) : hui::app::ArtSet::Remote{};
+    if (!pic.texture)
+    {
+        list.rounded_rect(r, 6.0f, style::kRaisedHigh); // loading
+        return;
+    }
+    const float aspect = pic.h > 0 ? static_cast<float>(pic.w) / pic.h : 1.0f;
+    const float iw = aspect >= 1.0f ? r.w : r.w * aspect, ih = aspect >= 1.0f ? r.h / aspect : r.h;
+    list.image(pic.texture, {r.x + (r.w - iw) * 0.5f, r.y + (r.h - ih) * 0.5f, iw, ih}, gfx::kFullUv,
+               Color::rgb(0xffffff), 4.0f);
 }
 
 void confirm_card(DrawList &list, const Ink &ink, const std::string &title, const std::string &text,

@@ -8,6 +8,7 @@
 #pragma clang diagnostic ignored "-Wmissing-field-initializers"
 
 #include "discord/sample.hpp"
+#include "discord/emoji.hpp"
 
 #include <algorithm>
 
@@ -203,7 +204,7 @@ Snapshot sample_snapshot()
         msg("d1", "dm-theo", "me", "I'll be there! Finishing dinner in a bit.", kNow - 54 * kMinute),
         msg("d2", "dm-theo", "theo", "We can try the new route on the left side. Looks super chill.", kNow - 50 * kMinute),
         msg("d3", "dm-theo", "me", "Looks amazing! Count me in.", kNow - 49 * kMinute),
-        msg("d4", "dm-theo", "theo", "bring snacks", kNow - 42 * kMinute),
+        msg("d4", "dm-theo", "theo", "bring snacks 🍕🍿 and good vibes 😎👍🏽", kNow - 42 * kMinute),
         // The cases that once spilled out of a bubble: a short reply to a long message, a
         // short message with many reactions, a word longer than the bubble, an edit.
         msg("d5", "dm-theo", "me", "ok!", kNow - 41 * kMinute),
@@ -217,6 +218,20 @@ Snapshot sample_snapshot()
         dm[5].reply_text = "We can try the new route on the left side. Looks super chill.";
         dm[5].reactions = {{"🔥", "", 3, true}, {"😂", "", 2}, {"👍", "", 5}, {"🎮", "", 1}, {"🍕", "", 2}};
         dm[7].edited = true;
+        for (Message &m : dm) // Unicode emoji become marks, as the client makes them
+        {
+            std::string out;
+            for (std::size_t i = 0; i < m.content.size();)
+                if (const std::size_t n = emoji_length(m.content, i))
+                {
+                    m.emojis.push_back({std::string(), m.content.substr(i, n)});
+                    out += kEmojiMark;
+                    i += n;
+                }
+                else
+                    out += m.content[i++];
+            m.content = out;
+        }
     }
     return s;
 }

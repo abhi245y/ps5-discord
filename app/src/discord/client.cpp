@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 #include "discord/client.hpp"
+#include "discord/emoji.hpp"
 #include "third_party/stb/stb_image.h"
 
 #include <arpa/inet.h>
@@ -246,6 +247,14 @@ std::string readable(const std::string &content, const json &m, std::vector<Emoj
     out.reserve(content.size());
     for (std::size_t i = 0; i < content.size();)
     {
+        // A Unicode emoji: a mark too, drawn in colour from the baked set or Twemoji.
+        if (const std::size_t n = emojis ? emoji_length(content, i) : 0)
+        {
+            emojis->push_back({std::string(), content.substr(i, n)});
+            out += kEmojiMark;
+            i += n;
+            continue;
+        }
         const std::size_t close = content[i] == '<' ? content.find('>', i) : std::string::npos;
         if (close == std::string::npos || close - i > 96)
         {

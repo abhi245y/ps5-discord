@@ -87,6 +87,10 @@ std::string compact(int n);
 // Controller glyphs for hint rows: each face button ringed in its own colour.
 hui::ui::GlyphStyle hint_glyphs();
 
+// An emoji in r: a server's (id) from Discord, a Unicode one (text) from the baked
+// atlas or else Twemoji over the network; a quiet square while it loads.
+void emoji_picture(DrawList &list, const Ink &ink, const std::string &text, const std::string &id, const Rect &r);
+
 // A yes-or-no question over a dimmed screen: Cross does it (yes is its label), Circle cancels.
 void confirm_card(DrawList &list, const Ink &ink, const std::string &title, const std::string &text,
                   const char *yes);
