@@ -63,14 +63,22 @@ struct ArtSet
 {
     std::vector<std::uint32_t> avatars; // square scenes behind an initial
     std::vector<std::uint32_t> scenes;  // wide scenes for rooms and servers
+    // The baked Unicode emoji (assets/art/emoji.png, discord/emoji.hpp), one cell each.
+    std::uint32_t emoji = 0;
+    int emoji_w = 0, emoji_h = 0;
     // Discord images (avatars, server icons) by URL: the texture once it has
     // arrived, 0 meanwhile (asking for it starts the download). Unset on the host.
     struct Remote
     {
         std::uint32_t texture = 0;
         int w = 0, h = 0;
+        int frames = 1, columns = 1; // an animated sticker's sheet of frames
+        float fps = 0.0f;
     };
     std::function<Remote(const std::string &)> remote;
+    // Frees a big picture once it is out of sight (the full-screen viewer's); asking
+    // for it again downloads it again. Unset on the host.
+    std::function<void(const std::string &)> forget;
     // The system keyboard (console only; unset on the host). open() shows it
     // with a title; poll() answers 0 while it is up (or none), 1 with the
     // typed text in out, 2 when it was cancelled.

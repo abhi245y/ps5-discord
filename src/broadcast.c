@@ -74,6 +74,11 @@ void bc_stop(void)
 {
 }
 
+int bc_holds_controller(void)
+{
+    return 0;
+}
+
 void bc_request_keyframe(void)
 {
 }
@@ -93,7 +98,7 @@ void bc_request_keyframe(void)
 #include "voice_audio.h"
 
 static ChiakiSession session;
-static volatile int want, running, connected, quit, ds5_done, live;
+static volatile int want, running, connected, quit, ds5_done, live, holding;
 static unsigned frames, audio_frames, keyframes;
 
 static void rp_log(ChiakiLogLevel level, const char *msg, void *user)
@@ -302,10 +307,12 @@ static const char *run(void)
     pthread_t usb;
     int usb_running = 0;
     if (!why && connected) {
-        if (mine) {
+        if (mine && want) { // not when Go Live was stopped (or the core quit) meanwhile
             LOG("broadcast: Remote Play connected, taking the controller");
             vau_ext_set(1);
+            holding = 1;
             usb_running = pthread_create(&usb, NULL, usb_main, NULL) == 0;
+            holding = usb_running;
         } else // another console user's session: the controller stays the user's own
             LOG("broadcast: Remote Play connected as another console user; the controller stays yours");
         live = 1;
@@ -325,6 +332,7 @@ static const char *run(void)
     if (usb_running) {
         ds5_usb_request_stop();
         pthread_join(usb, NULL);
+        holding = 0;
     }
     vau_ext_set(0);
     chiaki_session_stop(&session);
@@ -377,5 +385,10 @@ int bc_start(void)
 void bc_stop(void)
 {
     want = 0;
+}
+
+int bc_holds_controller(void)
+{
+    return holding;
 }
 #endif

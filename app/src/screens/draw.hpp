@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "app/concept.hpp"
 #include "discord/model.hpp"
@@ -86,6 +87,20 @@ std::string compact(int n);
 
 // Controller glyphs for hint rows: each face button ringed in its own colour.
 hui::ui::GlyphStyle hint_glyphs();
+
+// An emoji in r: a server's (id) from Discord, a Unicode one (text) from the baked
+// atlas or else Twemoji over the network; a quiet square while it loads.
+void emoji_picture(DrawList &list, const Ink &ink, const std::string &text, const std::string &id, const Rect &r);
+
+// A line holding kEmojiMark slots, each drawn as the next of emojis (from next on);
+// returns the width.
+float draw_marked(DrawList &list, const Ink &ink, const hui::ui::FontRef &font, const std::string &line, float x,
+                  float baseline, float size, Color color, const std::vector<discord::Emoji> &emojis,
+                  std::size_t &next);
+
+// A sticker in r, playing when it is animated; its name on a quiet card while it loads
+// (or where it cannot be shown).
+void sticker_picture(DrawList &list, const Ink &ink, const discord::Sticker &sticker, const Rect &r);
 
 // A yes-or-no question over a dimmed screen: Cross does it (yes is its label), Circle cancels.
 void confirm_card(DrawList &list, const Ink &ink, const std::string &title, const std::string &text,

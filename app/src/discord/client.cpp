@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 #include "discord/client.hpp"
+#include "discord/emoji.hpp"
+#include "discord/stickers.hpp"
 #include "third_party/stb/stb_image.h"
 
 #include <arpa/inet.h>
@@ -246,6 +248,14 @@ std::string readable(const std::string &content, const json &m, std::vector<Emoj
     out.reserve(content.size());
     for (std::size_t i = 0; i < content.size();)
     {
+        // A Unicode emoji: a mark too, drawn in colour from the baked set or Twemoji.
+        if (const std::size_t n = emojis ? emoji_length(content, i) : 0)
+        {
+            emojis->push_back({std::string(), content.substr(i, n)});
+            out += kEmojiMark;
+            i += n;
+            continue;
+        }
         const std::size_t close = content[i] == '<' ? content.find('>', i) : std::string::npos;
         if (close == std::string::npos || close - i > 96)
         {
@@ -378,9 +388,13 @@ Message message_from(const json &m, const std::string &me_id)
         out.content = "changed the name or icon.";
     else if (type == 18)
         out.content = "started a thread.";
-    if (out.content.empty() && m.contains("sticker_items") && m["sticker_items"].is_array() &&
-        !m["sticker_items"].empty())
-        out.content = "[Sticker: " + text(m["sticker_items"][0], "name") + "]";
+    if (m.contains("sticker_items") && m["sticker_items"].is_array())
+        for (const json &st : m["sticker_items"])
+            if (st.is_object() && !text(st, "id").empty())
+                out.stickers.push_back({text(st, "id"), text(st, "name"),
+                                        st.contains("format_type") && st["format_type"].is_number()
+                                            ? static_cast<int>(st["format_type"].get<double>())
+                                            : 1});
     if (out.content.empty() && m.contains("embeds") && m["embeds"].is_array() && !m["embeds"].empty())
     {
         const std::string title = text(m["embeds"][0], "title");
@@ -394,7 +408,8 @@ Message message_from(const json &m, const std::string &me_id)
         const std::string text_of = readable(text(original, "content"), original);
         out.content = "\xE2\x86\xAA Forwarded" + (text_of.empty() ? std::string() : ": " + text_of);
     }
-    if (out.content.empty() && out.attachments.empty() && !(m.contains("attachments") && !m["attachments"].empty()))
+    if (out.content.empty() && out.attachments.empty() && out.stickers.empty() &&
+        !(m.contains("attachments") && !m["attachments"].empty()))
         out.content = type != 0 ? "[Discord notice]" : "[A message this app cannot show yet]";
     if (m.contains("author") && m["author"].is_object())
     {
@@ -522,6 +537,7 @@ void apply_tree(Snapshot &s, const json &t)
     const json &me = t.contains("me") ? t["me"] : json::object();
     s.me = user_from(me);
     s.me.presence = Presence::online;
+    s.nitro = me.contains("premium_type") && me["premium_type"].is_number() && me["premium_type"].get<double>() > 0;
     const json &presence = t.contains("presence") ? t["presence"] : json::object();
     const json &voice = t.contains("voice") ? t["voice"] : json::object();
     const json &reads = t.contains("reads") ? t["reads"] : json::object();
@@ -562,6 +578,23 @@ void apply_tree(Snapshot &s, const json &t)
                 guild.banner_url = "https://cdn.discordapp.com/splashes/" + guild.id + "/" + splash + ".png?size=640";
             guild.art = art_for(guild.id, kSceneArt);
             guild.members = static_cast<int>(g.value("member_count", 0.0));
+            if (g.contains("emojis") && g["emojis"].is_array())
+                for (const json &e : g["emojis"])
+                    if (e.is_object() && !text(e, "id").empty())
+                        guild.emojis.push_back({text(e, "id"), text(e, "name"),
+                                                e.contains("animated") && e["animated"].is_boolean() && e["animated"].get<bool>(),
+                                                !(e.contains("available") && e["available"].is_boolean()) ||
+                                                    e["available"].get<bool>()}); // null: the core had none
+            if (g.contains("stickers") && g["stickers"].is_array())
+                for (const json &st : g["stickers"])
+                    if (st.is_object() && !text(st, "id").empty())
+                        guild.stickers.push_back(
+                            {text(st, "id"), text(st, "name"),
+                             st.contains("format_type") && st["format_type"].is_number()
+                                 ? static_cast<int>(st["format_type"].get<double>())
+                                 : 1,
+                             !(st.contains("available") && st["available"].is_boolean()) ||
+                                 st["available"].get<bool>()});
             {
                 std::lock_guard<std::mutex> lock(g_names_mutex);
                 if (g.contains("roles") && g["roles"].is_object())
@@ -773,8 +806,8 @@ Client::~Client()
     stop_ = true;
     if (started_)
         pthread_join(thread_, nullptr);
-    if (image_started_)
-        pthread_join(image_thread_, nullptr);
+    for (int i = 0; i < images_started_; ++i)
+        pthread_join(image_threads_[i], nullptr);
     if (events_started_)
         pthread_join(events_thread_, nullptr);
 }
@@ -801,15 +834,16 @@ void Client::start()
                               return nullptr;
                           },
                           this) == 0;
-    image_started_ = pthread_create(
-                         &image_thread_, &attr,
-                         [](void *self) -> void * {
-                             static_cast<Client *>(self)->run_images();
-                             return nullptr;
-                         },
-                         this) == 0;
+    for (pthread_t &t : image_threads_)
+        images_started_ += pthread_create(
+                               &t, &attr,
+                               [](void *self) -> void * {
+                                   static_cast<Client *>(self)->run_images();
+                                   return nullptr;
+                               },
+                               this) == 0;
     pthread_attr_destroy(&attr);
-    if (!started_ || !image_started_ || !events_started_)
+    if (!started_ || !images_started_ || !events_started_)
         hui::sys::log("[CLIENT] could not start its threads");
 }
 
@@ -829,7 +863,9 @@ void Client::submit(const Request &incoming)
         m.nonce = request.nonce;
         m.channel_id = request.channel_id;
         m.author_id = snapshot_.me.id;
-        m.content = request.content;
+        m.content = readable(request.content, json::object(), &m.emojis); // drawn as the echo will be
+        if (!request.sticker_id.empty())
+            m.stickers.push_back({request.sticker_id, request.sticker_name, request.sticker_format});
         m.time_ms = now_ms();
         m.pending = true;
         std::vector<Message> &ms = edit_messages(snapshot_, request.channel_id);
@@ -938,7 +974,25 @@ void Client::fetch_images()
             }
         }
         const Reply reply = http(port_, "GET", "/api/image?url=" + query);
-        if (reply.status == 200)
+        const bool lottie = image.url.find("/stickers/") != std::string::npos && image.url.find(".json") != std::string::npos;
+        const bool gif = image.url.find("/stickers/") != std::string::npos && image.url.find(".gif") != std::string::npos;
+        if (reply.status == 200 && (lottie || gif))
+        {
+            // A sticker: its frames, as one sheet.
+            FrameSheet frames;
+            const bool still = image.url.find("?still") != std::string::npos; // a picker preview: one small frame
+            const std::int64_t started = now_ms();
+            if (lottie ? render_lottie(reply.body, still ? 96 : kStickerPixels, frames, still ? 1 : 48)
+                       : decode_gif(reply.body, frames))
+            {
+                hui::sys::log("[CLIENT] sticker %s: %d frames in %lld ms", image.url.c_str(), frames.frames,
+                              static_cast<long long>(now_ms() - started));
+                image.w = frames.w, image.h = frames.h;
+                image.frames = frames.frames, image.columns = frames.columns, image.fps = frames.fps;
+                image.rgba = std::move(frames.rgba);
+            }
+        }
+        else if (reply.status == 200)
         {
             int n = 0;
             if (std::uint8_t *px = stbi_load_from_memory(reinterpret_cast<const std::uint8_t *>(reply.body.data()),
@@ -1245,7 +1299,10 @@ bool Client::poll_events()
                             if (c.id == channel)
                                 n.place += " · #" + c.name;
                     }
-                n.text = m.content.empty() && !m.attachments.empty() ? "sent an attachment" : plain_text(m);
+                n.text = !m.content.empty()       ? plain_text(m)
+                         : !m.stickers.empty()    ? "sent a sticker: " + m.stickers.front().name
+                         : !m.attachments.empty() ? "sent an attachment"
+                                                  : plain_text(m);
                 snapshot_.notices.push_back(std::move(n));
                 if (snapshot_.notices.size() > 8)
                     snapshot_.notices.erase(snapshot_.notices.begin());
@@ -1386,6 +1443,26 @@ void Client::handle(const Request &request)
         poll_state();
         break;
     }
+    case Request::Kind::load_sticker_packs: {
+        const Reply reply = http(port_, "GET", "/api/sticker-packs");
+        const json r = json::parse(reply.body, nullptr, false);
+        std::vector<StickerPack> packs;
+        if (reply.status == 200 && !r.is_discarded() && r.contains("packs") && r["packs"].is_array())
+            for (const json &p : r["packs"])
+            {
+                StickerPack pack{text(p, "id"), text(p, "name"), {}};
+                if (p.contains("stickers") && p["stickers"].is_array())
+                    for (const json &st : p["stickers"])
+                        pack.stickers.push_back({text(st, "id"), text(st, "name"),
+                                                 static_cast<int>(st.value("format_type", 1.0))});
+                if (!pack.stickers.empty())
+                    packs.push_back(std::move(pack));
+            }
+        std::lock_guard<std::mutex> lock(mutex_);
+        snapshot_.sticker_packs = std::move(packs);
+        publish();
+        break;
+    }
     case Request::Kind::open_channel:
     case Request::Kind::prefetch:
     case Request::Kind::load_older: {
@@ -1451,6 +1528,8 @@ void Client::handle(const Request &request)
         json body{{"channel", request.channel_id}, {"content", request.content}, {"nonce", request.nonce}};
         if (!request.reply_to.empty())
             body["reply_to"] = request.reply_to;
+        if (!request.sticker_id.empty())
+            body["sticker"] = request.sticker_id;
         const Reply reply = http(port_, "POST", "/api/send", body.dump());
         const json r = json::parse(reply.body, nullptr, false);
         const int discord_status = r.is_discarded() ? 0 : static_cast<int>(r.value("status", 0.0));
@@ -1470,7 +1549,8 @@ void Client::handle(const Request &request)
         break;
     }
     case Request::Kind::react: {
-        json body{{"channel", request.channel_id}, {"message", request.message_id}, {"emoji", request.emoji}};
+        json body{{"channel", request.channel_id}, {"message", request.message_id}, {"emoji", request.emoji},
+                  {"remove", request.remove}};
         const Reply reply = http(port_, "POST", "/api/react", body.dump());
         if (reply.status != 200)
             hui::sys::log("[CLIENT] react failed (%d)", reply.status);

@@ -34,6 +34,8 @@ struct Image
     int w = 0;
     int h = 0;
     std::vector<std::uint8_t> rgba;
+    int frames = 1, columns = 1; // an animated sticker: a sheet of frames (discord/stickers.hpp)
+    float fps = 0.0f;
 };
 
 // A key from the console's keyboard, as the core read it (USB HID usage code,
@@ -86,11 +88,13 @@ class Client
 
     const int port_;
     pthread_t thread_{};
-    pthread_t image_thread_{}; // downloads images apart from polling, so neither waits
+    // Download images apart from polling, so neither waits; several, as each picture is
+    // a TLS fetch of its own in the core (a picker full of server emoji).
+    pthread_t image_threads_[4]{};
     pthread_t events_thread_{}; // holds a long poll open: messages arrive as they are sent
     bool events_started_ = false;
     bool started_ = false;
-    bool image_started_ = false;
+    int images_started_ = 0;
     std::atomic<bool> stop_{false};
     std::mutex mutex_;
     Snapshot snapshot_;    // guarded by mutex_

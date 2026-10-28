@@ -4,6 +4,7 @@
 #include "screens/draw.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <string>
 #include <cstdint>
@@ -12,6 +13,7 @@
 #include <cctype>
 #include <cstdio>
 
+#include "discord/emoji.hpp"
 #include "screens/style.hpp"
 
 namespace screens
@@ -414,6 +416,87 @@ void mic_meter(DrawList &list, float x, float cy, float w, float level, bool mut
     if (!muted && level > 0.0f)
         list.rounded_rect({x, cy - kH * 0.5f, std::max(kH, w * std::sqrt(std::min(1.0f, level))), kH}, kH * 0.5f,
                           kOnline);
+}
+
+void emoji_picture(DrawList &list, const Ink &ink, const std::string &text, const std::string &id, const Rect &r)
+{
+    const int at = id.empty() ? discord::emoji_index(text) : -1;
+    if (at >= 0 && ink.art.emoji && ink.art.emoji_w > 0)
+    {
+        const float cw = static_cast<float>(discord::kEmojiCell) / ink.art.emoji_w;
+        const float ch = static_cast<float>(discord::kEmojiCell) / ink.art.emoji_h;
+        const Rect uv{(at % discord::kEmojiColumns) * cw, (at / discord::kEmojiColumns) * ch, cw, ch};
+        list.image(ink.art.emoji, r, uv, Color::rgb(0xffffff), 0.0f);
+        return;
+    }
+    const std::string url = !id.empty() ? "https://cdn.discordapp.com/emojis/" + id + ".png?size=48"
+                                        : discord::twemoji_url(text);
+    const hui::app::ArtSet::Remote pic = ink.art.remote && !url.empty() ? ink.art.remote(url) : hui::app::ArtSet::Remote{};
+    if (!pic.texture)
+    {
+        list.rounded_rect(r, 6.0f, style::kRaisedHigh); // loading
+        return;
+    }
+    const float aspect = pic.h > 0 ? static_cast<float>(pic.w) / pic.h : 1.0f;
+    const float iw = aspect >= 1.0f ? r.w : r.w * aspect, ih = aspect >= 1.0f ? r.h / aspect : r.h;
+    list.image(pic.texture, {r.x + (r.w - iw) * 0.5f, r.y + (r.h - ih) * 0.5f, iw, ih}, gfx::kFullUv,
+               Color::rgb(0xffffff), 4.0f);
+}
+
+float draw_marked(DrawList &list, const Ink &ink, const hui::ui::FontRef &font, const std::string &line, float x,
+                  float baseline, float size, Color color, const std::vector<discord::Emoji> &emojis,
+                  std::size_t &next)
+{
+    // Text runs between the marks; each emoji is its picture in the slot the mark takes.
+    namespace ui = hui::ui;
+    const float slot = font.measure(discord::kEmojiMark, size);
+    const float pic = slot * 0.96f; // in its slot, so emoji side by side do not touch
+    float cx = x;
+    std::size_t from = 0;
+    while (true)
+    {
+        const std::size_t at = line.find(discord::kEmojiMark, from);
+        const std::string run = line.substr(from, at == std::string::npos ? std::string::npos : at - from);
+        if (!run.empty())
+            cx += ui::text(list, font, run, cx, baseline, size, color);
+        if (at == std::string::npos)
+            break;
+        const Rect box{cx + (slot - pic) * 0.5f, baseline - size * 0.82f - (pic - size) * 0.5f, pic, pic};
+        if (next < emojis.size())
+            emoji_picture(list, ink, emojis[next].name, emojis[next].id, box);
+        ++next;
+        cx += slot;
+        from = at + 3;
+    }
+    return cx - x;
+}
+
+void sticker_picture(DrawList &list, const Ink &ink, const discord::Sticker &sticker, const Rect &r)
+{
+    namespace ui = hui::ui;
+    const hui::app::ArtSet::Remote pic =
+        ink.art.remote ? ink.art.remote(discord::sticker_url(sticker)) : hui::app::ArtSet::Remote{};
+    if (!pic.texture || pic.w <= 0 || pic.h <= 0)
+    {
+        list.rounded_rect(r, 18.0f, style::kRaisedHigh);
+        ui::paragraph(list, ink.fonts.semibold, sticker.name, r.cx(), r.cy() + 8.0f, 22.0f, r.w - 28.0f, 28.0f,
+                      style::kDim, 2, hui::gfx::Align::center);
+        return;
+    }
+    // The frame for now, from the sheet (one frame for a still).
+    const int rows = (pic.frames + pic.columns - 1) / pic.columns;
+    int frame = 0;
+    if (pic.frames > 1 && pic.fps > 0.0f)
+    {
+        const double t = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        frame = static_cast<int>(t * pic.fps) % pic.frames;
+    }
+    const float cw = 1.0f / static_cast<float>(pic.columns), ch = 1.0f / static_cast<float>(rows);
+    const Rect uv{(frame % pic.columns) * cw, (frame / pic.columns) * ch, cw, ch};
+    const float fw = static_cast<float>(pic.w) / pic.columns, fh = static_cast<float>(pic.h) / rows;
+    const float scale = std::min(r.w / fw, r.h / fh);
+    list.image(pic.texture, {r.cx() - fw * scale * 0.5f, r.cy() - fh * scale * 0.5f, fw * scale, fh * scale}, uv,
+               Color::rgb(0xffffff), 0.0f);
 }
 
 void confirm_card(DrawList &list, const Ink &ink, const std::string &title, const std::string &text,

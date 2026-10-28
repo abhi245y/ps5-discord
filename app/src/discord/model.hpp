@@ -75,6 +75,42 @@ struct Channel
     std::int64_t last_ms = 0; // when its newest message was sent
 };
 
+// A sticker sent in a message. format: 1 PNG, 2 APNG, 3 Lottie, 4 GIF.
+struct Sticker
+{
+    std::string id;
+    std::string name;
+    int format = 1;
+    bool available = true; // a server's: false when it lost the boost level it needs
+};
+
+struct StickerPack // one of Discord's own (GET /sticker-packs)
+{
+    std::string id;
+    std::string name;
+    std::vector<Sticker> stickers;
+};
+
+// Where its picture comes from: Lottie as JSON (drawn by ThorVG), GIF animated, the
+// rest as a still from the media proxy.
+inline std::string sticker_url(const Sticker &s)
+{
+    if (s.format == 3)
+        return "https://cdn.discordapp.com/stickers/" + s.id + ".json";
+    return "https://media.discordapp.net/stickers/" + s.id + (s.format == 4 ? ".gif" : ".png") + "?size=160";
+}
+inline constexpr int kStickerPixels = 128; // how large a Lottie sticker is rendered (drawn at 160)
+
+// A server's own emoji, for the picker. Without Nitro only the server's own (and none
+// animated) can be sent there.
+struct GuildEmoji
+{
+    std::string id;
+    std::string name;
+    bool animated = false;
+    bool available = true; // false: the server lost the boost level it needs
+};
+
 struct Guild
 {
     std::string id;
@@ -87,6 +123,8 @@ struct Guild
     int online = 0;
     int members = 0;
     int unread = 0;
+    std::vector<GuildEmoji> emojis;
+    std::vector<Sticker> stickers;
 };
 
 struct Conversation // a row in Recent conversations
@@ -123,6 +161,7 @@ struct Attachment
     ArtIndex art = 0; // stand-in thumbnail while the image loads (and in samples)
 };
 
+
 struct Reaction
 {
     std::string emoji; // the Unicode emoji, or ":name:" for a server's own
@@ -131,8 +170,9 @@ struct Reaction
     bool me = false; // this account reacted
 };
 
-// A server emoji in a message's text. The text holds kEmojiMark (an em space,
-// about an emoji wide) where each one goes, in order.
+// An emoji in a message's text, a server's (id) or a Unicode one (no id, name is the
+// emoji itself). The text holds kEmojiMark (an em space, about an emoji wide) where each
+// one goes, in order.
 // ponytail: an em space someone typed reads as an emoji slot; nobody types one.
 inline constexpr const char *kEmojiMark = "\xE2\x80\x83";
 struct Emoji
@@ -160,10 +200,11 @@ struct Message
     std::vector<Attachment> attachments;
     std::vector<Reaction> reactions;
     std::vector<Emoji> emojis; // server emoji in content, in order
+    std::vector<Sticker> stickers;
 };
 
 // The text with each server emoji as :name: (previews, toasts), or as Discord's
-// <:name:id> markup (raw: to edit the message).
+// <:name:id> markup (raw: to edit the message); Unicode emoji as themselves.
 inline std::string plain_text(const Message &m, bool raw = false)
 {
     std::string out = m.content;
@@ -173,7 +214,9 @@ inline std::string plain_text(const Message &m, bool raw = false)
         at = out.find(kEmojiMark, at);
         if (at == std::string::npos)
             break;
-        const std::string shown = raw ? "<:" + e.name + ":" + e.id + ">" : ":" + e.name + ":";
+        const std::string shown = e.id.empty() ? e.name // a Unicode emoji is itself
+                                  : raw        ? "<:" + e.name + ":" + e.id + ">"
+                                               : ":" + e.name + ":";
         out.replace(at, 3, shown);
         at += shown.size();
     }
@@ -341,6 +384,8 @@ struct Snapshot
     std::set<std::string> load_failed; // history that did not load (network, core); retried on open
     std::set<std::string> history_start; // channels loaded back to their first message
     std::map<std::string, std::string> dm_by_user; // one-to-one DM channel by the other person's id
+    bool nitro = false;          // the account has Nitro: any server's emoji, animated too
+    std::vector<StickerPack> sticker_packs; // Discord's own, once asked for
     std::vector<Notice> notices; // the latest few, oldest first
     std::string sign_out_error;  // the last sign out failed, and why
     Prefs prefs;

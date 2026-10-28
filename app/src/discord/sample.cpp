@@ -8,6 +8,7 @@
 #pragma clang diagnostic ignored "-Wmissing-field-initializers"
 
 #include "discord/sample.hpp"
+#include "discord/emoji.hpp"
 
 #include <algorithm>
 
@@ -203,13 +204,14 @@ Snapshot sample_snapshot()
         msg("d1", "dm-theo", "me", "I'll be there! Finishing dinner in a bit.", kNow - 54 * kMinute),
         msg("d2", "dm-theo", "theo", "We can try the new route on the left side. Looks super chill.", kNow - 50 * kMinute),
         msg("d3", "dm-theo", "me", "Looks amazing! Count me in.", kNow - 49 * kMinute),
-        msg("d4", "dm-theo", "theo", "bring snacks", kNow - 42 * kMinute),
+        msg("d4", "dm-theo", "theo", "bring snacks 🍕🍿 and good vibes 😎👍🏽", kNow - 42 * kMinute),
         // The cases that once spilled out of a bubble: a short reply to a long message, a
         // short message with many reactions, a word longer than the bubble, an edit.
         msg("d5", "dm-theo", "me", "ok!", kNow - 41 * kMinute),
         msg("d6", "dm-theo", "theo", "https://clips.example.com/watch/ThisIsAVeryLongClipIdentifierWithoutAnySpaces_8f3a91c2d7e4",
             kNow - 40 * kMinute),
         msg("d7", "dm-theo", "me", "same, see you at nine", kNow - 39 * kMinute),
+        msg("d8", "dm-theo", "theo", "", kNow - 38 * kMinute),
     });
     {
         std::vector<Message> &dm = *s.messages["dm-theo"];
@@ -217,6 +219,21 @@ Snapshot sample_snapshot()
         dm[5].reply_text = "We can try the new route on the left side. Looks super chill.";
         dm[5].reactions = {{"🔥", "", 3, true}, {"😂", "", 2}, {"👍", "", 5}, {"🎮", "", 1}, {"🍕", "", 2}};
         dm[7].edited = true;
+        dm[8].stickers = {{"749054660769218631", "Wave", 3}}; // Wumpus waving (Lottie)
+        for (Message &m : dm) // Unicode emoji become marks, as the client makes them
+        {
+            std::string out;
+            for (std::size_t i = 0; i < m.content.size();)
+                if (const std::size_t n = emoji_length(m.content, i))
+                {
+                    m.emojis.push_back({std::string(), m.content.substr(i, n)});
+                    out += kEmojiMark;
+                    i += n;
+                }
+                else
+                    out += m.content[i++];
+            m.content = out;
+        }
     }
     return s;
 }
@@ -353,6 +370,13 @@ void apply_sample(Snapshot &s, const Request &r)
                 s.voice.pair_console = u.console, s.voice.pair_user = u.name, s.voice.pair_since = u.since;
         return;
     }
+    if (r.kind == Request::Kind::load_sticker_packs) // a pack like Discord's own (only Wave's id is real)
+    {
+        s.sticker_packs = {{"847199849233514549", "Wumpus Beyond",
+                            {{"749054660769218631", "Wave", 3}, {"749043879713701898", "Hi", 3},
+                             {"751606065447305216", "Wumpus Nom", 3}, {"816087792291282944", "Party", 3}}}};
+        return;
+    }
     if (r.kind != Request::Kind::send)
         return; // history is all loaded already
     std::vector<Message> &list = edit_messages(s, r.channel_id);
@@ -360,7 +384,9 @@ void apply_sample(Snapshot &s, const Request &r)
     m.id = "sent-" + std::to_string(list.size());
     m.channel_id = r.channel_id;
     m.author_id = s.me.id;
-    m.content = r.content;
+    m.content = mark_emoji(r.content, m.emojis);
+    if (!r.sticker_id.empty())
+        m.stickers.push_back({r.sticker_id, r.sticker_name, r.sticker_format});
     m.time_ms = s.now_ms;
     for (const Message &original : list)
         if (original.id == r.reply_to)

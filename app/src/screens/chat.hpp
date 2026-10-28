@@ -10,6 +10,7 @@
 #include "core/tween.hpp"
 #include "discord/request.hpp"
 #include "screens/draw.hpp"
+#include "screens/emoji_picker.hpp"
 #include "screens/keyboard.hpp"
 
 namespace screens
@@ -55,12 +56,12 @@ class Chat
     {
         browse,  // moving between messages
         actions, // the action menu of the focused message is open
-        compose, // the composer with quick replies is open
         typing,  // the system keyboard is up over the app
         keys,    // the app's own keyboard is up
         channels, // the server's channel list is open (Options)
         profile,  // the DM person's card is open (Options in a DM)
         image,    // the focused message's pictures, full screen
+        emoji,    // the emoji picker: to react, or into the keyboard's text
     };
 
     const std::vector<discord::Message> &messages(const discord::Snapshot &snapshot) const;
@@ -94,6 +95,18 @@ class Chat
 
     const Ink &ink_;
     Keyboard keys_; // the app's own keyboard, when the system one is not there
+    EmojiPicker picker_;
+    // What a pick does: react to the focused message, or go into the text (the app
+    // keyboard's, or the message bar's from L3).
+    enum class PickFor
+    {
+        react,
+        keys,
+        draft,
+    };
+    PickFor pick_for_ = PickFor::react;
+    void open_picker(const discord::Snapshot &s, PickFor pick_for, std::vector<discord::Request> &requests);
+
     int list_index_ = 0;        // focused row of the channel list
     hui::tween::Spring list_scroll_;
     void draw_channel_list(const discord::Snapshot &s, DrawList &list) const;
@@ -109,7 +122,6 @@ class Chat
     std::string older_asked_for_; // the oldest id an older page was requested above
     int action_ = 0;  // focused entry in the action menu (actions, then reactions)
     int image_at_ = 0; // the picture shown full screen, among the message's
-    int quick_ = 0;   // focused quick reply in compose mode
     std::string reply_to_; // message id the composer answers
     hui::tween::Spring scroll_; // pixels the list is pushed down (history above revealed)
     hui::tween::Spring menu_show_;

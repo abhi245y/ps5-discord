@@ -26,6 +26,7 @@
 #include "platform/ps5/display_egl.hpp"
 #include "platform/ps5/ime.hpp"
 #include "platform/ps5/usb_keyboard.hpp"
+#include "screens/emoji_picker.hpp"
 #include "platform/ps5/voice_audio.hpp"
 #include "platform/ps5/pad.hpp"
 #include "platform/ps5/system.hpp"
@@ -229,6 +230,7 @@ int main()
     using namespace hui;
     sys::log("[HUI] entry");
     sys::log("[HUI] storage dir=%d", save::ensure_directory(kDataRoot) ? 1 : 0);
+    screens::EmojiPicker::set_store(std::string(kDataRoot) + "/emoji-recent.txt");
 
     // The display opens at the saved resolution (1080p if that fails).
     const Settings saved = app::Shell::load_settings(kDataRoot);
@@ -269,7 +271,8 @@ int main()
     discord::Client client;
     const int utc_offset = console_utc_minutes();
     // Discord images: asked for while drawing, downloaded by the client, uploaded here.
-    // ponytail: textures are kept for the session; evict by use if memory ever matters.
+    // ponytail: small pictures are kept for the session; big ones are forgotten when their
+    // screen closes (art.forget). Evict by use if the small ones ever add up.
     std::unordered_map<std::string, app::ArtSet::Remote> remote_textures; // texture 0: on its way or failed
     art.remote = [&](const std::string &url) -> app::ArtSet::Remote {
         const auto found = remote_textures.find(url);
@@ -278,6 +281,13 @@ int main()
         remote_textures.emplace(url, app::ArtSet::Remote{});
         client.want_image(url);
         return {};
+    };
+    art.forget = [&](const std::string &url) {
+        const auto found = remote_textures.find(url);
+        if (found == remote_textures.end())
+            return;
+        renderer.batch().destroy_texture(found->second.texture);
+        remote_textures.erase(found); // one still on its way is dropped when it lands
     };
 
     ps5::Pad pad;
@@ -485,9 +495,9 @@ int main()
         }
         snapshot.utc_offset_minutes = utc_offset;
         for (const discord::Image &image : client.take_images())
-            if (image.w > 0)
-                remote_textures[image.url] = {renderer.batch().create_texture(image.w, image.h, image.rgba.data()),
-                                              image.w, image.h};
+            if (const auto wanted = remote_textures.find(image.url); wanted != remote_textures.end() && image.w > 0)
+                wanted->second = {renderer.batch().create_texture(image.w, image.h, image.rgba.data()), image.w,
+                                  image.h, image.frames, image.columns, image.fps};
         shell.update(input, dt);
         if (shell.take_settings_changed())
         {
