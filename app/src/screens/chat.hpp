@@ -60,6 +60,7 @@ class Chat
         keys,    // the app's own keyboard is up
         channels, // the server's channel list is open (Options)
         profile,  // the DM person's card is open (Options in a DM)
+        image,    // the focused message's pictures, full screen
     };
 
     const std::vector<discord::Message> &messages(const discord::Snapshot &snapshot) const;
@@ -89,6 +90,7 @@ class Chat
                       bool focused) const;
     void draw_composer(const discord::Snapshot &snapshot, DrawList &list) const;
     void draw_actions(const discord::Snapshot &snapshot, DrawList &list, const Rect &anchor) const;
+    void draw_image(const discord::Snapshot &snapshot, DrawList &list) const;
 
     const Ink &ink_;
     Keyboard keys_; // the app's own keyboard, when the system one is not there
@@ -106,6 +108,7 @@ class Chat
     float size_note_ = 0.0f;      // seconds the text-size note stays up
     std::string older_asked_for_; // the oldest id an older page was requested above
     int action_ = 0;  // focused entry in the action menu (actions, then reactions)
+    int image_at_ = 0; // the picture shown full screen, among the message's
     int quick_ = 0;   // focused quick reply in compose mode
     std::string reply_to_; // message id the composer answers
     hui::tween::Spring scroll_; // pixels the list is pushed down (history above revealed)
