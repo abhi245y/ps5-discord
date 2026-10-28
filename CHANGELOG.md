@@ -14,15 +14,26 @@ All notable changes to this project are documented here. The format follows
   plays the game through the session and is the call's headset meanwhile.
 - tools/ds5-usb-bridge: a payload runtime that owns a USB DualSense (buttons, mic, speaker,
   headphones, mute button).
+- Settings (Options on Home): sign out (ends the session with Discord too), quit, Go Live
+  pairing per console user without typing a PIN, Go Live quality (720p or 1080p, 30 or 60
+  fps), input volume, notification choices, interface sounds and motion.
+- Notifications: banners stack in the app; while it is not in front (home screen, a game,
+  the PS menu) the PS5's own notifications show messages, rings and Go Live stopping, with
+  the sender's avatar. Discord's own mutes and per-server levels are followed; quiet hours;
+  hidden during Go Live unless allowed.
+- A Discord sign-in per console user: the core runs the account of the user on screen and
+  switches when another user comes on screen.
+
+### Changed
+- The core keeps running when the app is closed with the PS button (for notifications and
+  calls); Quit (Circle on Home) stops it.
+- License: ps5-discord's own code is now AGPL-3.0-or-later (was GPL-3.0-or-later), so
+  Remote Play code from chiaki-ng can ship in it. Files from the ps5-homebrew-ui kit keep
+  GPL-3.0-or-later. The status page links to the source.
 
 ### Fixed
 - Voice: our voice reached others with seconds of delay after pauses (the RTP clock stood
   still while we were silent).
-
-### Changed
-- License: ps5-discord's own code is now AGPL-3.0-or-later (was GPL-3.0-or-later), so
-  Remote Play code from chiaki-ng can ship in it. Files from the ps5-homebrew-ui kit keep
-  GPL-3.0-or-later. The status page links to the source.
 
 ## [0.2.0-alpha.1] - 2026-10-20
 
