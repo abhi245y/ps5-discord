@@ -1149,7 +1149,7 @@ bool Client::poll_events()
 {
     const std::string wait = events_next_ < 0 ? "0" : "6"; // under the 8 s socket timeout
     const Reply reply =
-        http(port_, "GET", "/api/events?since=" + std::to_string(std::max(0L, events_next_)) + "&wait=" + wait);
+        http(port_, "GET", "/api/events?since=" + std::to_string(std::max(0L, events_next_.load())) + "&wait=" + wait);
     if (reply.status != 200)
         return false;
     const json e = json::parse(reply.body, nullptr, false);
@@ -1530,9 +1530,16 @@ void Client::handle(const Request &request)
         const Reply reply = http(port_, "POST", "/api/signout");
         hui::sys::log("[CLIENT] /api/signout answered %d", reply.status);
         std::lock_guard<std::mutex> lock(mutex_);
+        if (reply.status != 200)
+        {
+            snapshot_.sign_out_error = "Could not reach Discord to sign out. You are still signed in; try again.";
+            publish();
+            break;
+        }
         snapshot_ = Snapshot{};
         snapshot_.status_message = "Signing out...";
         ready_ = false;
+        events_next_ = -1; // the new core counts its events from the start
         publish();
         break;
     }

@@ -95,7 +95,7 @@ class Client
     std::deque<std::string> image_queue_; // guarded by mutex_
     std::vector<Image> images_;           // guarded by mutex_
     std::vector<KeyPress> keys_;          // guarded by mutex_
-    long events_next_ = -1; // -1: skip the backlog on first contact
+    std::atomic<long> events_next_{-1}; // -1: skip the backlog on first contact
     std::atomic<std::int64_t> last_chat_ms_{0}; // the events thread zeroes it to ask for a refresh
     std::int64_t last_mentions_ms_ = 0;
     std::int64_t last_voice_ms_ = 0; // a voice command zeroes it: the state comes back at once

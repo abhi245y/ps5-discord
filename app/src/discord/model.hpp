@@ -331,6 +331,7 @@ struct Snapshot
     std::set<std::string> history_start; // channels loaded back to their first message
     std::map<std::string, std::string> dm_by_user; // one-to-one DM channel by the other person's id
     std::vector<Notice> notices; // the latest few, oldest first
+    std::string sign_out_error;  // the last sign out failed, and why
     Prefs prefs;
     Voice voice;
     std::map<std::string, std::vector<VoiceSeat>> seats; // by channel id: rooms and DM calls

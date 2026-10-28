@@ -95,8 +95,9 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
     case 0:
         return {
             {Kind::value, "Signed in as", "Your Discord account on this console.", s.me.name},
-            {Kind::button, "Sign out", "Ends this session with Discord and forgets it here.", "Sign out", 0, false,
-             false, Act::sign_out},
+            {Kind::button, "Sign out",
+             s.sign_out_error.empty() ? "Ends this session with Discord and forgets it here." : s.sign_out_error,
+             "Sign out", 0, false, false, Act::sign_out},
         };
     case 1: {
         Row pair;
@@ -126,7 +127,7 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
         return {
             mic,
             pair,
-            {Kind::choice, "Go Live quality", "From the next Go Live on. Above 720p 30 may need Nitro.",
+            {Kind::choice, "Go Live quality", "From the next Go Live on. Above 720p · 30 fps may need Nitro.",
              kQualities[std::clamp(s.prefs.golive_quality, 0, kQualityCount - 1)], s.prefs.golive_quality, false,
              false, Act::quality},
         };

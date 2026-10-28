@@ -710,9 +710,13 @@ static void handle(int c, int local)
         api_prefs(c, body);
     } else if (post && strcmp(path, "/api/signout") == 0) {
         LOG("sign out requested");
-        reply(c, "200 OK", "application/json", "{\"ok\":true}", 11);
-        close(c);
-        core_sign_out();
+        if (core_sign_out() != 0) {
+            refuse(c, "502 Bad Gateway", "Could not reach Discord to sign out. Try again.");
+        } else {
+            reply(c, "200 OK", "application/json", "{\"ok\":true}", 11);
+            close(c);
+            core_signed_out();
+        }
     } else if (post && strcmp(path, "/api/edit") == 0) {
         api_change(c, body, 0);
     } else if (post && strcmp(path, "/api/delete") == 0) {

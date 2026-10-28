@@ -8,4 +8,5 @@
 
 // Serves forever on an already listening socket.
 void web_serve(int listen_fd);
-void core_sign_out(void); // main.c: does not return
+int core_sign_out(void);    // main.c: ends the session with Discord; 0 when it did
+void core_signed_out(void); // main.c: forgets it and quits

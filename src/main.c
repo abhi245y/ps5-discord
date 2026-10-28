@@ -83,18 +83,26 @@ static void login(char *token, size_t cap)
 }
 
 // POST /api/signout (web.c). Discord ends the session first, so the token is dead even
-// if a copy was taken; then the console forgets it and the core quits. The app starts it
-// again, at the QR code. Go Live stops first: it gives the USB controller back.
-void core_sign_out(void)
+// if a copy was taken; only then does the console forget it. -1 when Discord could not
+// be told: the session stays, so the sign-in is never left alive but unknown here.
+int core_sign_out(void)
+{
+    http_response r = http_post_json("/auth/logout", "{\"provider\":null,\"voip_provider\":null}", chat_token());
+    free(r.body);
+    LOG("sign out: Discord answered %d", r.status);
+    // 401: the token was dead already.
+    return (r.status >= 200 && r.status < 300) || r.status == 401 ? 0 : -1;
+}
+
+// After a sign out: Go Live gives the USB controller back, the call ends, the token goes
+// and the core quits. The app starts it again, at the QR code.
+void core_signed_out(void)
 {
     stream_stop();
     bc_stop();
     for (int i = 0; i < 100 && strcmp(bc_state(), "off") != 0 && strcmp(bc_state(), "error") != 0; i++)
         usleep(100000);
     voice_leave();
-    http_response r = http_post_json("/auth/logout", "{\"provider\":null,\"voip_provider\":null}", chat_token());
-    LOG("sign out: Discord answered %d", r.status);
-    free(r.body);
     remove(TOKEN_PATH);
     _exit(0);
 }

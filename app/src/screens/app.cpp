@@ -196,6 +196,8 @@ class DiscordApp final : public app::Concept
         if (context_.snapshot.connection != discord::Connection::ready)
         {
             const auto &s = context_.snapshot;
+            if (s.connection == discord::Connection::signing_in)
+                route_ = Route::home; // signed out: the next account starts at Home
             // Cross starts browser login, or reopens the browser during one; Square cancels it.
             const bool open = input.is_pressed(Action::confirm) && !s.login_scanned;
             const bool cancel = input.is_pressed(Action::west) && s.login_browser;
@@ -460,6 +462,8 @@ class DiscordApp final : public app::Concept
             if (banners_.size() > kBannerMax)
                 banners_.pop_back();
             // Server chatter chimes softly; a DM or a mention is the full chime.
+            // ponytail: one chime per message; a busy server with every message on is noisy,
+            // rate-limit the soft chime if that bites.
             feedback.play(hui::audio::Cue::notify, 1.0f, 0.0f, n.for_me ? 1.0f : 0.35f);
         }
         const float ease = context_.settings.reduced_motion ? 1.0f : std::min(1.0f, dt * 14.0f);
