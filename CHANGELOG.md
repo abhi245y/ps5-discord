@@ -53,6 +53,11 @@ All notable changes to this project are documented here. The format follows
   Remote Play code from chiaki-ng can ship in it. Files from the ps5-homebrew-ui kit keep
   GPL-3.0-or-later. The status page links to the source.
 
+### Security
+- The Discord sign-in is stored encrypted to the console (AES-256-GCM, key from the
+  console's OpenPSID, the file name authenticated): a copy of the file is no use elsewhere.
+  A sign-in saved in the clear by an older build is encrypted on first start.
+
 ### Fixed
 - Quit waits for Go Live to give the USB controller back before the core exits (up to 30 s,
   was 10 s), and Go Live stopped while Remote Play is connecting no longer takes it.

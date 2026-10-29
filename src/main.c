@@ -2,7 +2,6 @@
 // PoC: logs in by QR code (printed to klog), keeps the token in a file,
 // logs session state to klog.
 #include <arpa/inet.h>
-#include <ctype.h>
 #include <netinet/in.h>
 #include <pthread.h>
 #include <signal.h>
@@ -39,7 +38,7 @@ int sceKernelSetProcessName(const char *name);
 #else
 #define DATA_DIR "."
 #endif
-// ponytail: plaintext token on the console's data partition; encrypt at rest before release.
+// The session is kept encrypted to this console (browser_storage.c session_save).
 // One per console user (token-<user>): each signs in to their own Discord account, and the
 // core runs the account of the user on screen.
 static char token_name[32] = "token";
@@ -55,17 +54,10 @@ static void token_path(char *out, size_t cap)
 
 static int read_token(char *out, size_t cap)
 {
-    char path[64];
-    token_path(path, sizeof path);
-    FILE *f = fopen(path, "r");
-    if (!f)
-        return -1;
-    size_t n = fread(out, 1, cap - 1, f);
-    fclose(f);
-    while (n > 0 && isspace((unsigned char)out[n - 1]))
-        n--;
-    out[n] = 0;
-    return n > 0 ? 0 : -1;
+    const int r = session_load(DATA_DIR, token_name, out, cap);
+    if (r == 1 && session_save(DATA_DIR, token_name, out) == 0) // an older build's, in the clear
+        LOG("session: encrypted the saved sign-in");
+    return r >= 0 ? 0 : -1;
 }
 
 // 0 when signed in; -1 when another console user came on screen first.

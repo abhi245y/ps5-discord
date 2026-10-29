@@ -142,7 +142,8 @@ build/host/client-read-state-test: tests/client_read_state.cpp app/src/discord/r
 	@mkdir -p $(@D)
 	$(CXX) -std=c++17 -Wall -Wextra -Iapp/src -isystem app/.deps/src -o $@ $<
 
-build/host/browser-storage-test: tests/browser_storage.c src/browser_storage.c $(CJSON)/cJSON.c $(SQLITE)/sqlite3.c
+build/host/browser-storage-test: tests/browser_storage.c src/browser_storage.c $(CJSON)/cJSON.c $(SQLITE)/sqlite3.c \
+		$(patsubst %.c,build/host/%.o,$(wildcard $(MBED)/library/*.c))
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ $^ -lm
 build/host/selftest: tests/selftest.c src/ws.c src/tls.c src/zstream.c src/log.c src/status.c src/chat.c src/ratelimit.c \
