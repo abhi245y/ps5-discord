@@ -471,18 +471,20 @@ Message message_from(const json &m, const std::string &me_id)
             if (att.image)
             {
                 // A small preview from the media proxy, and a screen-sized copy at the
-                // picture's own aspect (at most 1760x860) for the full-screen view.
-                const std::string join = att.url.find('?') == std::string::npos ? "?" : "&";
+                // picture's own aspect (at most 1760x860) for the full-screen view. The proxy
+                // answers in WebP unless told otherwise, which stb_image cannot read: a PNG
+                // preview (sharp text in screenshots), a JPEG full-size copy (a tenth the bytes).
+                const std::string join = (att.url.find('?') == std::string::npos ? "?" : "&") + std::string("format=");
                 const double w = num(a, "width", 0.0), h = num(a, "height", 0.0);
                 if (w > 0 && h > 0)
                 {
                     const double scale = std::min({1.0, 1760.0 / w, 860.0 / h});
-                    att.full_url = att.url + join + "width=" + std::to_string(static_cast<int>(w * scale)) +
+                    att.full_url = att.url + join + "jpeg&width=" + std::to_string(static_cast<int>(w * scale)) +
                                    "&height=" + std::to_string(static_cast<int>(h * scale));
                 }
                 else
-                    att.full_url = att.url + join + "width=1760";
-                att.url += join + "width=440&height=248";
+                    att.full_url = att.url + join + "jpeg&width=1760";
+                att.url += join + "png&width=440&height=248";
             }
             const double size = num(a, "size", 0.0);
             char sz[32];
