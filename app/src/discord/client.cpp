@@ -1426,7 +1426,11 @@ bool Client::poll_events()
         snapshot_.load_failed.clear();
         last_chat_ms_ = 0;
         if (!open_.channel_id.empty())
-            queue_.push_back(open_);
+        {
+            Request reload = open_; // no read receipt: the chat may no longer be on screen
+            reload.kind = Request::Kind::prefetch;
+            queue_.push_back(reload);
+        }
         publish();
         return true;
     }
@@ -1497,11 +1501,12 @@ bool Client::poll_events()
         if (type == "MESSAGE_CREATE")
         {
             Message m = message_from(ev, snapshot_.me.id);
-            // Our own echo replaces its pending copy: by nonce, else by text.
+            // Our own echo replaces its pending copy: by nonce, else by text. By nonce also one
+            // marked failed after a minute without an answer: it went out late.
             const std::string nonce = text(ev, "nonce");
             auto pending = std::find_if(ms.begin(), ms.end(), [&](const Message &p) {
-                return p.pending && ((!nonce.empty() && p.nonce == nonce) ||
-                                     (p.author_id == m.author_id && p.content == m.content));
+                return ((p.pending || p.failed) && !nonce.empty() && p.nonce == nonce) ||
+                       (p.pending && p.author_id == m.author_id && p.content == m.content);
             });
             if (pending != ms.end())
                 *pending = m;

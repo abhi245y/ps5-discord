@@ -131,7 +131,9 @@ bool has_image(const discord::Message &m)
 std::vector<Action_> actions_for(const discord::Message &m, bool mine)
 {
     std::vector<Action_> a;
-    if (m.pending || m.failed) // not at Discord (yet): only taking it off the list makes sense
+    if (m.pending) // still on its way: deleting it here would not stop it
+        return a;
+    if (m.failed) // never reached Discord (or not in time): only taking it off the list makes sense
     {
         a.push_back({Act::remove, ui::Button::none, "Delete"});
         return a;

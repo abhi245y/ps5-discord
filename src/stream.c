@@ -32,7 +32,7 @@
 #include "ws.h"
 
 #define IDS 32
-#define MAX_USERS 64
+#define MAX_USERS 99 // a call's limit (voice.c)
 #define PT_OPUS 120
 #define PT_H264 101
 #define PT_H264_RTX 102
@@ -71,6 +71,9 @@ static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;  // the gateway side be
 static pthread_mutex_t mlock = PTHREAD_MUTEX_INITIALIZER; // conn's shared part, DAVE
 static char state[16] = "off", error[200];
 static int want, running, viewers;
+// This generation's STREAM_CREATE came. Until it does, a STREAM_DELETE for the same key is
+// the previous stream's (stopped and started again at once), not this one's.
+static int created;
 // Each stream_start is a generation: a connection ending after Go Live was stopped and
 // started again (same key) must not take the new stream down with it.
 static unsigned gen;
@@ -808,10 +811,12 @@ static int on_text(conn *c, const char *json)
     return r;
 }
 
-static int still_wanted(void)
+// A connection of an older generation (Go Live stopped and started again) is not wanted:
+// it must make way for the new one, which waits for it (connect_locked).
+static int still_wanted(const conn *c)
 {
     pthread_mutex_lock(&lock);
-    int w = want;
+    int w = want && c->gen == gen;
     pthread_mutex_unlock(&lock);
     return w && voice_wanted();
 }
@@ -824,7 +829,7 @@ static int serve(conn *c)
     c->hb_acked = 1;
     int64_t next_key = 0, next_log = mono_ms() + 5000;
     for (;;) {
-        if (!still_wanted())
+        if (!still_wanted(c))
             return 0;
         if (c->spent) {
             snprintf(c->err, sizeof c->err, "Go Live ran for too long in one go. Start it again.");
@@ -965,6 +970,7 @@ int stream_start(void)
     }
     want = 1;
     gen++;
+    created = 0;
     viewers = 0;
     rtc_server[0] = endpoint[0] = token[0] = 0; // the last stream's, if its connection still ends
     copy(guild, sizeof guild, g);
@@ -1014,6 +1020,7 @@ void stream_on_dispatch(const char *type, cJSON *d)
         return;
     }
     if (strcmp(type, "STREAM_CREATE") == 0) {
+        created = 1;
         copy(rtc_server, sizeof rtc_server, str(d, "rtc_server_id"));
         connect_locked();
     } else if (strcmp(type, "STREAM_SERVER_UPDATE") == 0) {
@@ -1023,6 +1030,8 @@ void stream_on_dispatch(const char *type, cJSON *d)
     } else if (strcmp(type, "STREAM_UPDATE") == 0) {
         viewers = cJSON_GetArraySize(cJSON_GetObjectItem(d, "viewer_ids"));
         LOG("stream: %d watching", viewers);
+    } else if (strcmp(type, "STREAM_DELETE") == 0 && !created) {
+        LOG("stream: the previous stream's end, ignored");
     } else if (strcmp(type, "STREAM_DELETE") == 0 && !cJSON_IsTrue(cJSON_GetObjectItem(d, "unavailable"))) {
         LOG("stream: Discord ended the stream (%s)", str(d, "reason") ? str(d, "reason") : "?");
         want = 0;

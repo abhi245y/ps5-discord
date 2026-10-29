@@ -114,6 +114,7 @@ static unsigned frames, audio_frames, keyframes;
 // threads must not both start a session on the one struct above.
 static pthread_mutex_t run_lock = PTHREAD_MUTEX_INITIALIZER;
 static int exiting; // the worker is past run(): a start now would find nothing to keep it
+static unsigned starts; // bc_start calls: one during run()'s teardown runs it again
 
 static void rp_log(ChiakiLogLevel level, const char *msg, void *user)
 {
@@ -387,10 +388,26 @@ static const char *run(void)
 static void *worker(void *arg)
 {
     (void)arg;
-    const char *why = run();
-    pthread_mutex_lock(&run_lock);
-    exiting = 1;
-    pthread_mutex_unlock(&run_lock);
+    const char *why;
+    for (;;) {
+        pthread_mutex_lock(&run_lock);
+        const unsigned seen = starts;
+        pthread_mutex_unlock(&run_lock);
+        why = run();
+        pthread_mutex_lock(&run_lock);
+        // Stopped, then started again while run() was handing everything back: it saw the
+        // stop, so it runs once more for the start (which was told yes).
+        const int again = !why && want && starts != seen && voice_wanted();
+        if (!again)
+            exiting = 1;
+        else
+            profile = prefs_get("golive_quality");
+        pthread_mutex_unlock(&run_lock);
+        if (!again)
+            break;
+        LOG("broadcast: started again while stopping");
+        set_state("starting", "");
+    }
     LOG("broadcast: off%s%s", why ? ": " : "", why ? why : "");
     set_state(why ? "error" : "off", why ? why : "");
     if (why) {
@@ -422,6 +439,7 @@ int bc_start(void)
         return -1;
     }
     want = 1;
+    starts++;
     if (running) {
         pthread_mutex_unlock(&run_lock);
         return 0;
