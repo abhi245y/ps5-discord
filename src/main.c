@@ -19,6 +19,7 @@
 #include "log.h"
 #include "remote_auth.h"
 #include "browser_auth.h"
+#include "build_config.h"
 #include "browser_storage.h"
 #include "status.h"
 #include "web.h"
@@ -230,7 +231,7 @@ int main(void)
         LOG("tls init failed");
         return 1;
     }
-    LOG("starting");
+    LOG("starting, version %s", CORE_VERSION);
     pthread_t watcher;
     if (pthread_create(&watcher, NULL, watch_user, NULL) == 0)
         pthread_detach(watcher);

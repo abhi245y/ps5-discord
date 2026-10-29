@@ -1094,6 +1094,7 @@ void Client::poll_state()
         publish();
         return;
     }
+    snapshot_.core_version = text(state, "version");
     const std::string s = text(state, "state");
     const Connection before = snapshot_.connection;
     // Signed in before, signing in now: another console user's turn, or signed out. The

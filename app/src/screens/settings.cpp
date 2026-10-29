@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <ctime>
 
+#include "core/save_file.hpp"
 #include "core/version.hpp"
 #include "screens/style.hpp"
 
@@ -187,7 +188,8 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
         };
     default:
         return {
-            {Kind::value, "Version", "The app and its core.", version.empty() ? "development" : version},
+            {Kind::value, "Version", "This app.", version.empty() ? "development" : version},
+            {Kind::value, "Core", "The part that keeps you connected.", s.core_version.empty() ? "not running" : s.core_version},
             {Kind::value, "License", "Free software: you may share and change it.", "AGPL-3.0"},
             {Kind::value, "Source", "Where the code lives.", "github.com/abhi245y/ps5-discord"},
             {Kind::value, "Emoji", "Twemoji graphics by Twitter and contributors.", "CC-BY 4.0"},
@@ -276,7 +278,21 @@ void slider(DrawList &list, const Ink &ink, float right, float cy, int level, in
 
 } // namespace
 
-SettingsScreen::SettingsScreen(const Ink &ink) : ink_(ink), version_(hui::read_content_version("/app0/sce_sys/param.json")) {}
+// The release the build wrote (tools/build.sh version.txt), else param.json's content version.
+static std::string app_version()
+{
+    std::string text;
+    if (hui::save::read_file("/app0/version.txt", &text, 64))
+    {
+        while (!text.empty() && (text.back() == '\n' || text.back() == ' '))
+            text.pop_back();
+        if (!text.empty())
+            return text;
+    }
+    return hui::read_content_version("/app0/sce_sys/param.json");
+}
+
+SettingsScreen::SettingsScreen(const Ink &ink) : ink_(ink), version_(app_version()) {}
 
 void SettingsScreen::open()
 {

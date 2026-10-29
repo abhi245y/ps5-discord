@@ -267,6 +267,10 @@ mkdir -p "$app/sce_sys" "$app/sce_module"
     --magic "$fself_magic"
 
 cp "$param" "$app/sce_sys/param.json"
+# The release this is (../VERSION), with -dev+g<commit> unless RELEASE=1, for the About page.
+version=$(cat "$root/../VERSION" 2>/dev/null || echo unknown)
+[[ -n ${RELEASE:-} ]] || version="$version-dev+g${GIT_COMMIT:-$(git -C "$root" rev-parse --short HEAD 2>/dev/null || echo unknown)}"
+printf '%s\n' "$version" > "$app/version.txt"
 # Says which build this is, for an app that reads it; a release has none.
 [[ -z ${BUILD_LABEL:-} ]] || printf '%s\n' "$BUILD_LABEL" > "$app/build-label.txt"
 for asset in icon0.png pic0.dds pic1.dds snd0.at9; do
