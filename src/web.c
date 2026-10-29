@@ -153,7 +153,26 @@ static void api_mentions(int c)
 }
 
 // Avatars, icons and attachments for the app, which speaks no TLS. Only
-// Discord's CDN hosts: the console must not become a general web proxy.
+// Discord's CDN hosts: the console must not become a general web proxy. The path to fetch
+// from host (written there), or NULL when the URL is not one of them.
+static const char *image_target(const char *url, char host[128])
+{
+    // Decoded CR, LF or space would end the CDN request line early and add headers.
+    const char *rest = strncmp(url, "https://", 8) == 0 && !strpbrk(url, "\r\n ") ? url + 8 : NULL;
+    size_t hlen = rest ? strcspn(rest, "/") : 0;
+    if (!rest || hlen == 0 || hlen >= 128)
+        return NULL;
+    memcpy(host, rest, hlen);
+    host[hlen] = 0;
+    int allowed = strcmp(host, "cdn.discordapp.com") == 0 || strcmp(host, "media.discordapp.net") == 0 ||
+                  (strncmp(host, "images-ext-", 11) == 0 && hlen > 26 &&
+                   strcmp(host + hlen - 15, ".discordapp.net") == 0) ||
+                  // Colour emoji pictures (Twemoji, as Discord draws them), that project only.
+                  (strcmp(host, "cdn.jsdelivr.net") == 0 &&
+                   strncmp(rest + hlen, "/gh/jdecked/twemoji@", 20) == 0 && !strstr(rest + hlen, ".."));
+    return allowed ? rest + hlen : NULL;
+}
+
 static void api_image(int c, const char *query)
 {
     char url[1024];
@@ -162,26 +181,13 @@ static void api_image(int c, const char *query)
         return;
     }
     url_decode(url);
-    // Decoded CR, LF or space would end the CDN request line early and add headers.
-    const char *rest = strncmp(url, "https://", 8) == 0 && !strpbrk(url, "\r\n ") ? url + 8 : NULL;
     char host[128];
-    size_t hlen = rest ? strcspn(rest, "/") : 0;
-    int allowed = 0;
-    if (rest && hlen > 0 && hlen < sizeof host) {
-        memcpy(host, rest, hlen);
-        host[hlen] = 0;
-        allowed = strcmp(host, "cdn.discordapp.com") == 0 || strcmp(host, "media.discordapp.net") == 0 ||
-                  (strncmp(host, "images-ext-", 11) == 0 && hlen > 26 &&
-                   strcmp(host + hlen - 15, ".discordapp.net") == 0) ||
-                  // Colour emoji pictures (Twemoji, as Discord draws them), that project only.
-                  (strcmp(host, "cdn.jsdelivr.net") == 0 &&
-                   strncmp(rest + hlen, "/gh/jdecked/twemoji@", 20) == 0 && !strstr(rest + hlen, ".."));
-    }
-    if (!allowed) {
+    const char *path = image_target(url, host);
+    if (!path) {
         reply(c, "403 Forbidden", "text/plain", "host", 4);
         return;
     }
-    http_response res = http_get(host, rest + hlen);
+    http_response res = http_get(host, path);
     if (res.status != 200 || !res.body)
         reply(c, "502 Bad Gateway", "text/plain", "fetch", 5);
     else

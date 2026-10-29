@@ -200,18 +200,21 @@ int session_load(const char *directory, const char *name, char *out, size_t cap)
     ssize_t n = read(fd, data, sizeof data);
     close(fd);
     int result = -1;
-    if (n > HEAD_LEN && memcmp(data, SESSION_MAGIC, MAGIC_LEN) == 0) {
+    const int sealed = n >= MAGIC_LEN && memcmp(data, SESSION_MAGIC, MAGIC_LEN) == 0; // cut short: not plain
+    if (sealed && n > HEAD_LEN) {
         const size_t len = (size_t)n - HEAD_LEN;
         if (len < cap && seal(0, name, data + MAGIC_LEN, data + MAGIC_LEN + NONCE_LEN, data + HEAD_LEN,
                               (unsigned char *)out, len) == 0) {
             out[len] = 0;
             result = 0;
         }
-    } else if (n > 0) { // written by an older build, in the clear: the caller saves it again
-        size_t len = (size_t)n;
+    } else if (!sealed && n > 0) { // written by an older build, in the clear: the caller saves it again
+        size_t len = (size_t)n, i = 0;
         while (len > 0 && (data[len - 1] == '\n' || data[len - 1] == '\r' || data[len - 1] == ' '))
             len--;
-        if (len > 0 && len < cap) {
+        while (i < len && data[i] > ' ' && data[i] < 0x7f) // a token is printable ASCII
+            i++;
+        if (len > 0 && len < cap && i == len) {
             memcpy(out, data, len);
             out[len] = 0;
             result = 1;

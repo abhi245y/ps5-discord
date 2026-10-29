@@ -189,3 +189,48 @@ size_t voice_bin_build(uint8_t *out, size_t cap, int op, const uint8_t *payload,
     memcpy(out + 1, payload, len);
     return len + 1;
 }
+
+const uint8_t *h264_next_nal(const uint8_t *b, size_t n, size_t *pos, size_t *len)
+{
+    size_t i = *pos;
+    while (i + 3 <= n && !(b[i] == 0 && b[i + 1] == 0 && b[i + 2] == 1))
+        i++;
+    if (i + 3 > n)
+        return NULL;
+    size_t start = i + 3, j = start;
+    while (j + 3 <= n && !(b[j] == 0 && b[j + 1] == 0 && (b[j + 2] == 1 || (b[j + 2] == 0 && j + 3 < n && b[j + 3] == 1))))
+        j++;
+    if (j + 3 > n)
+        j = n;
+    *pos = j;
+    *len = j - start;
+    return b + start;
+}
+
+void h264_packetize(const uint8_t *au, size_t n, size_t mtu,
+                    void (*emit)(void *user, const uint8_t *payload, size_t len, int marker), void *user)
+{
+    size_t pos = 0, len;
+    const uint8_t *nal = h264_next_nal(au, n, &pos, &len);
+    uint8_t frag[1500 + 2];
+    if (mtu > 1500)
+        mtu = 1500;
+    while (nal) {
+        size_t nlen = len;
+        const uint8_t *next = h264_next_nal(au, n, &pos, &len);
+        const int last_nal = next == NULL;
+        if (nlen <= mtu) {
+            emit(user, nal, nlen, last_nal);
+        } else {
+            frag[0] = (uint8_t)((nal[0] & 0xe0) | 28); // FU indicator: the NAL's NRI, type 28
+            for (size_t off = 1; off < nlen;) {
+                size_t chunk = nlen - off > mtu ? mtu : nlen - off;
+                frag[1] = (uint8_t)((off == 1 ? 0x80 : 0) | (off + chunk == nlen ? 0x40 : 0) | (nal[0] & 0x1f));
+                memcpy(frag + 2, nal + off, chunk);
+                off += chunk;
+                emit(user, frag, chunk + 2, last_nal && off == nlen);
+            }
+        }
+        nal = next;
+    }
+}

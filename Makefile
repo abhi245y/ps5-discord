@@ -161,9 +161,10 @@ build/host/%.o: %.c
 	@$(HOST_CC) $(if $(filter .deps/%,$<),-w) $(HOST_CFLAGS) $(if $(filter src/% tests/%,$<),-Werror) -MMD -MP -c $< -o $@
 
 test: build/host/selftest build/host/browser-storage-test build/host/client-read-state-test build/host/gif-frames-test \
-		build/host/ds5-usb-test $(HOST_DAVE_TEST)
+		build/host/ds5-usb-test build/host/web-test $(HOST_DAVE_TEST)
 	./build/host/selftest
 	./build/host/ds5-usb-test
+	./build/host/web-test
 	./build/host/browser-storage-test
 	./build/host/client-read-state-test
 	./build/host/gif-frames-test
@@ -193,12 +194,18 @@ build/host/browser-storage-test: tests/browser_storage.c src/browser_storage.c \
 		$(patsubst %.c,build/host/%.o,$(CJSON)/cJSON.c $(SQLITE)/sqlite3.c $(wildcard $(MBED)/library/*.c))
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ $^ -lm
+# web.c's helpers (tests/web.c includes it): every other module of the host core, not main.
+build/host/web-test: build/host/tests/web.o $(filter-out build/host/src/main.o build/host/src/web.o,$(HOST_OBJ))
+	@mkdir -p $(@D)
+	@echo "  LD    $@"
+	@$(HOST_CC) -o $@ $^ $(HOST_DAVE_LINK)
+build/host/tests/web.o: src/web.c | build/build_config.h
 # The bridge's checks (tools/ds5-usb-bridge: make test there adds sanitizers).
 build/host/ds5-usb-test: $(DS5)/test_usb.c $(DS5)/pcm_stream.c $(wildcard $(DS5)/*.h)
 	@mkdir -p $(@D)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -g -o $@ $(DS5)/test_usb.c $(DS5)/pcm_stream.c
 # From the same objects as the host build: our sources with -Werror, the libraries quiet.
-SELFTEST_SRC := tests/selftest.c src/ws.c src/tls.c src/zstream.c src/log.c src/status.c src/chat.c src/ratelimit.c \
+SELFTEST_SRC := tests/selftest.c src/ws.c src/tls.c src/zstream.c src/log.c src/status.c src/chat.c src/ratelimit.c src/http.c src/props.c \
 	src/voice.c src/voice_proto.c src/voice_audio.c src/prefs.c src/notify.c $(DS5)/pcm_stream.c $(OPUS_SRC) \
 	$(HOST_DAVE_SRC) $(CJSON)/cJSON.c $(QRGEN)/qrcodegen.c $(ZLIB_SRC) $(ZLIB)/deflate.c $(ZLIB)/trees.c \
 	$(wildcard $(MBED)/library/*.c) build/ca_bundle.c

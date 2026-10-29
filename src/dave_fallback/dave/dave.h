@@ -97,13 +97,14 @@ DAVE_EXPORT void daveCommitResultDestroy(DAVECommitResultHandle commitResult);
 DAVE_EXPORT void daveWelcomeResultDestroy(DAVEWelcomeResultHandle welcomeResult);
 
 // Media (0.5.0): the encryptor takes a ratchet from the session; the decryptor follows it per sender.
-typedef enum { DAVE_CODEC_UNKNOWN = 0, DAVE_CODEC_OPUS = 1 } DAVECodec;
+typedef enum { DAVE_CODEC_UNKNOWN = 0, DAVE_CODEC_OPUS = 1, DAVE_CODEC_H264 = 4 } DAVECodec;
 DAVE_EXPORT void daveEncryptorAssignSsrcToCodec(DAVEEncryptorHandle encryptor, uint32_t ssrc, DAVECodec codecType);
 DAVE_EXPORT size_t daveEncryptorGetMaxCiphertextByteSize(DAVEEncryptorHandle encryptor, DAVEMediaType mediaType,
                                                          size_t frameSize);
 DAVE_EXPORT DAVEEncryptorHandle daveEncryptorCreate(void);
 DAVE_EXPORT void daveEncryptorDestroy(DAVEEncryptorHandle encryptor);
 DAVE_EXPORT void daveEncryptorSetKeyRatchet(DAVEEncryptorHandle encryptor, DAVEKeyRatchetHandle keyRatchet);
+DAVE_EXPORT bool daveEncryptorHasKeyRatchet(DAVEEncryptorHandle encryptor);
 DAVE_EXPORT void daveEncryptorSetPassthroughMode(DAVEEncryptorHandle encryptor, bool passthroughMode);
 DAVE_EXPORT DAVEEncryptorResultCode daveEncryptorEncrypt(DAVEEncryptorHandle encryptor, DAVEMediaType mediaType,
                                                          uint32_t ssrc, const uint8_t *frame, size_t frameLength,

@@ -395,16 +395,13 @@ int gateway_run(const char *token)
         int code = run_connection(&g);
         if (code == GATEWAY_SWITCH)
             return code;
-        switch (code) {
-        case 4004: // authentication failed
-        case 4010: case 4011: case 4012: case 4013: case 4014:
+        const int action = gateway_close_action(code);
+        if (action == GATEWAY_STOP) {
             LOG("gateway: fatal close %d, stopping", code);
             return code;
-        case 4007: // invalid seq
-        case 4009: // session timed out
-            drop_session(&g);
-            break;
         }
+        if (action == GATEWAY_FRESH)
+            drop_session(&g);
         // Only a session Discord accepted resets the wait: a close after HELLO (rate limit,
         // invalid session) must not turn into an identify every second.
         if (g.ready)
@@ -420,6 +417,6 @@ int gateway_run(const char *token)
             usleep(200000);
         if (switching)
             return GATEWAY_SWITCH;
-        backoff = backoff < 15 ? backoff * 2 : 15; // short cap: back soon once the network is
+        backoff = gateway_next_wait(backoff);
     }
 }

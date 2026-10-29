@@ -61,6 +61,7 @@ void daveEncryptorDestroy(DAVEEncryptorHandle encryptor) { (void)encryptor; }
 void daveEncryptorSetKeyRatchet(DAVEEncryptorHandle encryptor, DAVEKeyRatchetHandle keyRatchet) {
     (void)encryptor; (void)keyRatchet;
 }
+bool daveEncryptorHasKeyRatchet(DAVEEncryptorHandle encryptor) { (void)encryptor; return false; }
 void daveEncryptorSetPassthroughMode(DAVEEncryptorHandle encryptor, bool passthroughMode) {
     (void)encryptor; (void)passthroughMode;
 }

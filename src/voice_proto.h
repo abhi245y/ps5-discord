@@ -45,3 +45,12 @@ typedef struct {
 int voice_bin_parse(const uint8_t *msg, size_t len, voice_bin *out);
 // Client frame [op][payload] into out; returns its length, 0 if cap is too small.
 size_t voice_bin_build(uint8_t *out, size_t cap, int op, const uint8_t *payload, size_t len);
+
+// H.264 for Go Live. The next NAL unit in Annex-B data from *pos: its start (after the
+// start code) and length, or NULL at the end.
+const uint8_t *h264_next_nal(const uint8_t *b, size_t n, size_t *pos, size_t *len);
+// RFC 6184 payloads of one access unit: a NAL up to mtu bytes whole, a larger one as FU-A
+// fragments (mtu + 2 bytes each). emit gets each payload and whether it ends the unit
+// (the RTP marker); the buffer is valid during the call only.
+void h264_packetize(const uint8_t *au, size_t n, size_t mtu,
+                    void (*emit)(void *user, const uint8_t *payload, size_t len, int marker), void *user);

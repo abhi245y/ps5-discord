@@ -211,50 +211,22 @@ static void send_rtp(conn *c, int pt, uint32_t ssrc, uint16_t seq, uint32_t ts, 
         c->dropped++;
 }
 
-// The next NAL unit in Annex-B data from *pos: returns its start (after the start code)
-// and length, or NULL at the end.
-static const uint8_t *next_nal(const uint8_t *b, size_t n, size_t *pos, size_t *len)
+struct video_out {
+    conn *c;
+    uint32_t ts;
+};
+
+static void emit_video(void *user, const uint8_t *payload, size_t len, int marker)
 {
-    size_t i = *pos;
-    while (i + 3 <= n && !(b[i] == 0 && b[i + 1] == 0 && b[i + 2] == 1))
-        i++;
-    if (i + 3 > n)
-        return NULL;
-    size_t start = i + 3, j = start;
-    while (j + 3 <= n && !(b[j] == 0 && b[j + 1] == 0 && (b[j + 2] == 1 || (b[j + 2] == 0 && j + 3 < n && b[j + 3] == 1))))
-        j++;
-    if (j + 3 > n)
-        j = n;
-    *pos = j;
-    *len = j - start;
-    return b + start;
+    struct video_out *v = user;
+    send_rtp(v->c, PT_H264, v->c->video_ssrc, v->c->seq_v++, v->ts, marker, VIDEO_EXT, payload, len);
 }
 
-// mlock held. RFC 6184: a NAL up to RTP_MTU goes whole, a larger one as FU-A fragments.
+// mlock held. RFC 6184 (h264_packetize): a NAL up to RTP_MTU whole, a larger one as FU-A.
 static void send_frame_rtp(conn *c, const uint8_t *f, size_t n, uint32_t ts)
 {
-    size_t pos = 0, len;
-    const uint8_t *nal, *next;
-    nal = next_nal(f, n, &pos, &len);
-    while (nal) {
-        size_t nlen = len;
-        next = next_nal(f, n, &pos, &len);
-        int last_nal = next == NULL;
-        if (nlen <= RTP_MTU) {
-            send_rtp(c, PT_H264, c->video_ssrc, c->seq_v++, ts, last_nal, VIDEO_EXT, nal, nlen);
-        } else {
-            uint8_t frag[RTP_MTU + 2];
-            frag[0] = (uint8_t)((nal[0] & 0xe0) | 28);
-            for (size_t off = 1; off < nlen;) {
-                size_t chunk = nlen - off > RTP_MTU ? RTP_MTU : nlen - off;
-                frag[1] = (uint8_t)((off == 1 ? 0x80 : 0) | (off + chunk == nlen ? 0x40 : 0) | (nal[0] & 0x1f));
-                memcpy(frag + 2, nal + off, chunk);
-                off += chunk;
-                send_rtp(c, PT_H264, c->video_ssrc, c->seq_v++, ts, last_nal && off == nlen, VIDEO_EXT, frag, chunk + 2);
-            }
-        }
-        nal = next;
-    }
+    struct video_out v = {c, ts};
+    h264_packetize(f, n, RTP_MTU, emit_video, &v);
 }
 
 static void on_video(const uint8_t *au, size_t n, int keyframe)
@@ -264,7 +236,7 @@ static void on_video(const uint8_t *au, size_t n, int keyframe)
     int has_slice = 0, has_idr = 0, has_ps = 0;
     size_t pos = 0, len, nals = 0, payload = 0;
     const uint8_t *nal;
-    while ((nal = next_nal(au, n, &pos, &len)) && len) {
+    while ((nal = h264_next_nal(au, n, &pos, &len)) && len) {
         int t = nal[0] & 0x1f;
         nals++;
         payload += len;
@@ -296,7 +268,7 @@ static void on_video(const uint8_t *au, size_t n, int keyframe)
         memcpy(frame, sps_pps, extra);
         m = extra;
         pos = 0;
-        while ((nal = next_nal(au, n, &pos, &len)) && len) {
+        while ((nal = h264_next_nal(au, n, &pos, &len)) && len) {
             if ((nal[0] & 0x1f) == 9)
                 continue;
             static const uint8_t sc[4] = {0, 0, 0, 1};
