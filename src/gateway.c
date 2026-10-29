@@ -274,6 +274,7 @@ static int run_connection(gateway *g)
             g->next_heartbeat += g->heartbeat_ms;
             continue;
         }
+        voice_tick();
         if (send_pending(g) != 0) {
             result = -1;
             break;

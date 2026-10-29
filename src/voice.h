@@ -13,6 +13,7 @@ typedef struct {
 
 void voice_set_self(const char *user_id);                      // READY
 void voice_retry(void); // Retry now: ends the wait before the next resume
+void voice_tick(void);  // the gateway thread, every second: a join that is never confirmed ends
 void voice_init(const char *data_dir); // where our last gateway session id is kept
 void voice_on_ready(cJSON *ready);      // READY: rejoin the wanted call or leave our own ghost
 void voice_join(const char *guild_id, const char *channel_id); // guild_id NULL for DM calls
