@@ -837,6 +837,7 @@ static int dm_listed(const char *id)
 
 void chat_dispatch(const char *type, cJSON *d)
 {
+    int changed = 1; // the tree changed (tree_version): not for typing, edits, reactions and the rest
     pthread_mutex_lock(&lock);
     if (strcmp(type, "READY") == 0)
     {
@@ -901,7 +902,8 @@ void chat_dispatch(const char *type, cJSON *d)
              (strcmp(type + 8, "CREATE") == 0 || strcmp(type + 8, "UPDATE") == 0 || strcmp(type + 8, "DELETE") == 0 ||
               strcmp(type + 8, "REACTION_ADD") == 0 || strcmp(type + 8, "REACTION_REMOVE") == 0))
     {
-        if (strcmp(type, "MESSAGE_CREATE") == 0)
+        changed = strcmp(type, "MESSAGE_CREATE") == 0; // a new last message, unread counts
+        if (changed)
             message_created(d);
         push_event(type, d);
     }
@@ -910,7 +912,9 @@ void chat_dispatch(const char *type, cJSON *d)
     else if ((strcmp(type, "GUILD_EMOJIS_UPDATE") == 0 || strcmp(type, "GUILD_STICKERS_UPDATE") == 0) &&
              guild_of(str(d, "guild_id")))
         put_emojis(guild_of(str(d, "guild_id")), d, type[6] == 'E' ? "emojis" : "stickers");
-    if (tree) // ponytail: any dispatch counts as a change; a needless one costs one full reply
+    else
+        changed = 0;
+    if (tree && changed)
         tree_version++;
     pthread_mutex_unlock(&lock);
     if (alert_title[0]) {

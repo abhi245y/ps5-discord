@@ -109,6 +109,11 @@ static void test_chat(void)
     chat_dispatch("VOICE_STATE_UPDATE", vs);
     cJSON_Delete(vs);
     assert(v0 > 0 && chat_tree_version() == v0 + 2); // each change moves the version (/api/chat?v=)
+    cJSON *typing = cJSON_Parse("{\"channel_id\":\"11\",\"guild_id\":\"10\",\"user_id\":\"2\"}");
+    chat_dispatch("TYPING_START", typing);    // nothing the tree holds: no new version
+    chat_dispatch("PRESENCE_UPDATE", typing); // a server member's status: not kept either
+    cJSON_Delete(typing);
+    assert(chat_tree_version() == v0 + 2);
     char *t = chat_tree_json();
     assert(!strstr(t, "passerby")); // pruned: not a friend, DM recipient or in voice
     char vs_text[48];
