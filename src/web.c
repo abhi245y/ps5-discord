@@ -623,8 +623,8 @@ static void api_dlsym(int c, const char *query)
 // The app polls every few seconds while it is on screen; a game in front suspends it
 // (or the PS button closes it), and then it is silent. Only the app sends the native
 // header. The core stays either way, for alerts and calls; the app's Quit stops it.
-static volatile time_t app_seen;
-static volatile int app_front = 1; // its last X-App-Front: 0 on the home screen or under the PS menu
+static _Atomic time_t app_seen;
+static _Atomic int app_front = 1; // its last X-App-Front: 0 on the home screen or under the PS menu
 
 int web_app_on_screen(void)
 {
