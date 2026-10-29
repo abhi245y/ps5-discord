@@ -289,38 +289,6 @@ static int complete_one(int fd, unsigned *slot)
     return 1;
 }
 
-// Powers the pad's port off and on, as unplugging it does. After a bus reset alone
-// (USB_DEVICEENUMERATE) the pad came back over Bluetooth on the next PS press, and from
-// then on each PS press during Go Live gave the console a second pad with no user ("Who's
-// using this controller?") until it was replugged. 0: the pad went away and power is back;
-// -1: not done, re-enumerate instead; -2: the port stayed off.
-static int replug(int fd)
-{
-    struct usb_device_info info;
-    if (ioctl(fd, USB_GET_DEVICEINFO, &info))
-        return -1;
-    char path[32];
-    snprintf(path, sizeof path, "/dev/ugen%u.%u", info.udi_bus, info.udi_hubaddr);
-    int hub = open(path, O_RDWR), port = info.udi_hubport;
-    if (hub < 0) {
-        log_line("replug: %s errno %d", path, errno);
-        return -1;
-    }
-    int rc = ioctl(hub, USB_SET_PORT_DISABLE, &port);
-    log_line("replug: port %d off rc %d errno %d", port, rc, rc ? errno : 0);
-    if (!rc) {
-        usleep(1500000); // the pad notices and moves to Bluetooth, as on a real unplug
-        // A hub without port power switching accepts the request and changes nothing.
-        int gone = ioctl(fd, USB_GET_DEVICEINFO, &info) != 0;
-        rc = ioctl(hub, USB_SET_PORT_ENABLE, &port);
-        log_line("replug: port %d on rc %d errno %d, pad %s", port, rc, rc ? errno : 0, gone ? "went away" : "stayed");
-        rc = rc ? -2 : gone ? 0 : -1;
-    } else
-        rc = -1;
-    close(hub);
-    return rc;
-}
-
 static int run_usb(void)
 {
     int fd = -1, result = 1, detached = 0, initialized = 0, hid = -1, detaching = 0;
@@ -544,19 +512,15 @@ cleanup:
         log_line("audio released; the console's controller audio returns on replug");
     } else if ((detached || detaching) && fd >= 0) {
         // Also when a detach failed: the pad may have been left detached by a crash before.
-        int rc = replug(fd);
-        if (rc == -2)
-            result = 2;
-        else if (rc == 0)
-            log_line("replugged");
-        for (int i = 0; i < 3 && rc == -1; i++) {
+        int rc = -1;
+        for (int i = 0; i < 3 && rc; i++) {
             int zero = 0;
             if (i)
                 usleep(200000);
-            rc = ioctl(fd, USB_DEVICEENUMERATE, &zero) ? -1 : 1;
-            log_line("re-enumerate rc %d errno %d", rc, rc < 0 ? errno : 0);
+            rc = ioctl(fd, USB_DEVICEENUMERATE, &zero);
+            log_line("re-enumerate rc %d errno %d", rc, rc ? errno : 0);
         }
-        if (rc == -1)
+        if (rc)
             result = 2; // says replug below
     }
     atomic_store(&rescue_fd, -1);
