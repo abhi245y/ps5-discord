@@ -64,4 +64,7 @@ void ds5_usb_default_config(ds5_usb_config *config);
 int ds5_usb_run(const ds5_usb_config *config, const ds5_usb_callbacks *callbacks,
                 void *user, ds5_usb_stats *stats);
 void ds5_usb_request_stop(void);
+// Async-signal-safe: while the system's drivers are detached from the controller, hand it
+// back (re-enumerate) at once, for a crash handler or a stuck stop. Does nothing otherwise.
+void ds5_usb_rescue(void);
 #endif

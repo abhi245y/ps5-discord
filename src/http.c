@@ -32,9 +32,8 @@ static http_response exchange(const char *host, const char *head, size_t head_le
     for (int r; buf; len += (size_t)r) {
         if (cap - len < 4096) {
             char *p = cap < HTTP_MAX_REPLY ? realloc(buf, cap *= 2) : NULL; // no reply grows the core without end
-            if (!p)
-                LOG("http: reply from %s over %d MiB or out of memory", host, HTTP_MAX_REPLY >> 20);
             if (!p) {
+                LOG("http: reply from %s over %d MiB or out of memory", host, HTTP_MAX_REPLY >> 20);
                 free(buf);
                 buf = NULL;
                 break;

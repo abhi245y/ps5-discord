@@ -125,6 +125,10 @@ static void end_calls(void)
 void core_quit(int forget_token)
 {
     end_calls();
+    // The leave and the stream's end go out on the gateway thread (within a second): let
+    // them, or the others see us in the call until Discord times us out.
+    for (int i = 0; i < 20 && (voice_request_pending() || stream_gateway_pending()); i++)
+        usleep(100000);
     if (forget_token) {
         char path[64];
         token_path(path, sizeof path);
@@ -200,8 +204,28 @@ static int claim_instance(void)
 
 static void *control_loop(void *arg)
 {
-    web_serve((int)(intptr_t)arg);
+    int fd = (int)(intptr_t)arg;
+    for (;;) {
+        web_serve(fd);
+        close(fd);
+        // Our port again, or the app cannot reach us and starts another core. Another one
+        // already has it: that is the app's core now, this one goes.
+        for (int i = 0; i < 50 && (fd = claim_instance()) < 0; i++)
+            usleep(100000);
+        if (fd < 0) {
+            LOG("control: another core has the port, quitting");
+            core_quit(0);
+        }
+        LOG("control: listening again");
+    }
     return NULL;
+}
+
+static void on_crash(int sig)
+{
+    bc_rescue_controller();
+    signal(sig, SIG_DFL);
+    raise(sig);
 }
 
 int main(void)
@@ -213,6 +237,9 @@ int main(void)
 #endif
     // A peer that hangs up mid-write (the app, a browser, Discord) must not kill the core.
     signal(SIGPIPE, SIG_IGN);
+    // A crash while Go Live holds the controller would leave it dead until a reboot.
+    for (int i = 0; i < 5; i++)
+        signal((int[]){SIGSEGV, SIGBUS, SIGABRT, SIGILL, SIGFPE}[i], on_crash);
     char token[256];
     int control = claim_instance();
     if (control < 0) {

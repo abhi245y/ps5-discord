@@ -623,8 +623,8 @@ static void api_dlsym(int c, const char *query)
 // The app polls every few seconds while it is on screen; a game in front suspends it
 // (or the PS button closes it), and then it is silent. Only the app sends the native
 // header. The core stays either way, for alerts and calls; the app's Quit stops it.
-static volatile time_t app_seen;
-static volatile int app_front = 1; // its last X-App-Front: 0 on the home screen or under the PS menu
+static _Atomic time_t app_seen;
+static _Atomic int app_front = 1; // its last X-App-Front: 0 on the home screen or under the PS menu
 
 int web_app_on_screen(void)
 {
@@ -768,6 +768,10 @@ static void handle(int c, int local)
         api_sticker_packs(c);
     } else if (post && strcmp(path, "/api/prefs") == 0) {
         api_prefs(c, body);
+    } else if (post && strcmp(path, "/api/reconnect") == 0) {
+        gateway_retry();
+        voice_retry();
+        reply(c, "202 Accepted", "application/json", "{}", 2);
     } else if (post && strcmp(path, "/api/signout") == 0) {
         LOG("sign out requested");
         if (core_sign_out() != 0) {
@@ -816,21 +820,27 @@ static void *serve_one(void *arg)
 
 // Each connection on its own thread, so a slow one (an image from the CDN, a
 // history page) does not hold up the app's polling. Capped: past the cap the
-// accept loop serves it itself, which also slows accepting down.
-#define MAX_CONNECTIONS 8
+// request gets 503 at once, so the accept loop (and /api/state) never waits on one.
+#define MAX_CONNECTIONS 16
 
 
 void web_serve(int fd)
 {
-    for (;;) {
+    for (int failures = 0;;) {
         struct sockaddr_in peer;
         socklen_t plen = sizeof peer;
         int c = accept(fd, (struct sockaddr *)&peer, &plen);
         if (c < 0) {
-            if (errno != EINTR && errno != ECONNABORTED)
-                usleep(100000); // out of descriptors (EMFILE): no busy loop while they come back
+            // One failure is a client that gave up, or no descriptors left for a moment
+            // (EMFILE). A run of them is a dead socket: the caller listens again.
+            if (++failures >= 20) {
+                LOG("control: accept keeps failing (errno %d), listening again", errno);
+                return;
+            }
+            usleep(100000);
             continue;
         }
+        failures = 0;
         int local = peer.sin_family == AF_INET && ntohl(peer.sin_addr.s_addr) >> 24 == 127;
         struct timeval tv = {.tv_sec = 5};
         setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
@@ -859,7 +869,7 @@ void web_serve(int fd)
         }
         pthread_attr_destroy(&attr);
         free(k);
-        handle(c, local);
+        reply(c, "503 Service Unavailable", "text/plain", "busy", 4);
         close(c);
     }
 }

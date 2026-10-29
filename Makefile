@@ -148,10 +148,11 @@ build/host/%.o: %.c
 	@mkdir -p $(@D)
 	@$(HOST_CC) $(if $(filter .deps/%,$<),-w) $(HOST_CFLAGS) -MMD -MP -c $< -o $@
 
-test: build/host/selftest build/host/browser-storage-test build/host/client-read-state-test $(HOST_DAVE_TEST)
+test: build/host/selftest build/host/browser-storage-test build/host/client-read-state-test build/host/gif-frames-test $(HOST_DAVE_TEST)
 	./build/host/selftest
 	./build/host/browser-storage-test
 	./build/host/client-read-state-test
+	./build/host/gif-frames-test
 	$(if $(HOST_DAVE_TEST),./build/host/dave-test)
 
 # The external sender is libdave's test helper (C++, tests/dave): it signs the group's proposals.
@@ -169,6 +170,10 @@ build/host/dave-test: tests/dave_session.c tests/dave/external_sender.cpp tests/
 build/host/client-read-state-test: tests/client_read_state.cpp app/src/discord/read_state.hpp
 	@mkdir -p $(@D)
 	$(CXX) -std=c++17 -Wall -Wextra -Iapp/src -isystem app/.deps/src -o $@ $<
+
+build/host/gif-frames-test: tests/gif_frames.cpp app/src/discord/gif.hpp
+	@mkdir -p $(@D)
+	$(CXX) -std=c++17 -Wall -Wextra -Iapp/src -o $@ $<
 
 build/host/browser-storage-test: tests/browser_storage.c src/browser_storage.c $(CJSON)/cJSON.c $(SQLITE)/sqlite3.c \
 		$(patsubst %.c,build/host/%.o,$(wildcard $(MBED)/library/*.c))

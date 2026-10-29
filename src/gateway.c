@@ -133,6 +133,7 @@ static void on_dispatch(gateway *g, const char *t, cJSON *d)
         status_state("ready");
         status_note(NULL);
         g->ready = 1;
+        status_attempt(0);
         LOG("gateway: READY as %s, %d guilds, %d DMs, resume via %s", name ? name : "?",
             cJSON_GetArraySize(cJSON_GetObjectItem(d, "guilds")),
             cJSON_GetArraySize(cJSON_GetObjectItem(d, "private_channels")), g->resume_url);
@@ -140,6 +141,7 @@ static void on_dispatch(gateway *g, const char *t, cJSON *d)
         status_state("ready");
         status_note(NULL);
         g->ready = 1;
+        status_attempt(0);
         LOG("gateway: RESUMED");
     } else if (strcmp(t, "VOICE_STATE_UPDATE") == 0) {
         LOG("gateway: VOICE_STATE_UPDATE %s mute=%d", cJSON_GetObjectItem(d, "guild_id") &&
@@ -215,6 +217,13 @@ static volatile int switching; // gateway_switch: another console user's account
 void gateway_switch(int on)
 {
     switching = on;
+}
+
+static _Atomic int retry_now;
+
+void gateway_retry(void)
+{
+    retry_now = 1;
 }
 
 int gateway_switching(void)
@@ -331,11 +340,22 @@ static int send_voice_state(gateway *g, const voice_op4 *v)
 // Called on the gateway thread between reads.
 static int send_pending(gateway *g)
 {
+    // Only once Discord took this connection (READY or RESUMED): anything sent before the
+    // resume is answered with 4003 and lost with the connection. It waits in its queue.
+    if (!g->ready)
+        return 0;
     voice_op4 v;
-    if (g->session_id[0] && voice_take_request(&v) && send_voice_state(g, &v) != 0)
-        return -1;
+    if (voice_take_request(&v)) {
+        if (v.leave_first) { // otherwise a join of the channel Discord has us in brings no reply
+            voice_op4 leave = {.mute = v.mute, .deaf = v.deaf};
+            if (send_voice_state(g, &leave) != 0)
+                return -1;
+        }
+        if (send_voice_state(g, &v) != 0)
+            return -1;
+    }
     cJSON *op;
-    while (g->session_id[0] && (op = stream_take_gateway()))
+    while ((op = stream_take_gateway()))
         if (send_json(g, op) != 0) // Go Live ops 18, 22, 19
             return -1;
     char guild[32];
@@ -343,7 +363,7 @@ static int send_pending(gateway *g)
     snprintf(guild, sizeof guild, "%s", pending_subscribe);
     pending_subscribe[0] = 0;
     pthread_mutex_unlock(&pending_lock);
-    if (!guild[0] || !g->session_id[0])
+    if (!guild[0])
         return 0;
     cJSON *sub = cJSON_CreateObject(), *subs = cJSON_AddObjectToObject(sub, "subscriptions");
     cJSON *opts = cJSON_AddObjectToObject(subs, guild);
@@ -361,15 +381,14 @@ static void note_unreachable(void)
     int dns_ok = getaddrinfo("gateway.discord.gg", "443", &hints, &ai) == 0;
     if (ai)
         freeaddrinfo(ai);
-    status_note(dns_ok ? "Can't reach Discord. Check the console's internet connection. Trying again."
-                       : "Can't reach Discord: the console can't look up its address. Check the console's "
-                         "internet connection and DNS (for example nanoDNS). Trying again.");
+    // Short: the app shows it on one line. No address at all is almost always no network.
+    status_note(dns_ok ? "Can't reach Discord." : "No internet connection.");
 }
 
 int gateway_run(const char *token)
 {
     gateway g = {.token = token, .seq = -1};
-    int backoff = 1;
+    int backoff = 1, attempt = 0;
     for (;;) {
         int code = run_connection(&g);
         if (code == GATEWAY_SWITCH)
@@ -387,13 +406,18 @@ int gateway_run(const char *token)
         // Only a session Discord accepted resets the wait: a close after HELLO (rate limit,
         // invalid session) must not turn into an identify every second.
         if (g.ready)
-            backoff = 1;
+            backoff = 1, attempt = 0;
         else if (!g.heartbeat_ms && backoff >= 2) // no HELLO a second time in a row: say why in the app
             note_unreachable();
         g.heartbeat_ms = 0;
         g.ready = 0;
         LOG("gateway: connection ended (%d), retry in %d s", code, backoff);
-        sleep((unsigned)backoff);
+        status_attempt(++attempt);
+        retry_now = 0;
+        for (int i = 0; i < backoff * 5 && !switching && !retry_now; i++) // another user, or Retry now: go now
+            usleep(200000);
+        if (switching)
+            return GATEWAY_SWITCH;
         backoff = backoff < 15 ? backoff * 2 : 15; // short cap: back soon once the network is
     }
 }

@@ -244,7 +244,28 @@ class DiscordApp final : public app::Concept
             dismissed_ring_.clear();
             cued_ring_.clear();
         }
-        if (context_.snapshot.connection != discord::Connection::ready)
+        const bool reconnecting = context_.snapshot.connection == discord::Connection::reconnecting;
+        if (reconnecting && route_ != Route::settings)
+        {
+            // The Reconnecting card: Left and Right pick Retry now or Settings.
+            if ((input.nav == Direction::left && reconnect_focus_ == 1) ||
+                (input.nav == Direction::right && reconnect_focus_ == 0))
+            {
+                reconnect_focus_ ^= 1;
+                feedback.play(hui::audio::Cue::focus);
+            }
+            if (input.is_pressed(Action::confirm) && reconnect_focus_ == 1)
+                open_settings(feedback);
+            else if (input.is_pressed(Action::confirm) && browser_cooldown_ == 0.0f)
+            {
+                discord::Request r;
+                r.kind = discord::Request::Kind::reconnect;
+                requests.push_back(r);
+                browser_cooldown_ = 3.0f;
+                feedback.play(hui::audio::Cue::select);
+            }
+        }
+        else if (context_.snapshot.connection != discord::Connection::ready && !reconnecting)
         {
             const auto &s = context_.snapshot;
             if (s.connection == discord::Connection::signing_in)
@@ -478,9 +499,10 @@ class DiscordApp final : public app::Concept
         // A short fade in on every screen change.
         frame.scene.rounded_rect({0, 0, 1920, 1080}, 0.0f, style::kGround);
         frame.scene.push_opacity(std::clamp(fade_.value, 0.0f, 1.0f));
+        const bool reconnecting = context_.snapshot.connection == discord::Connection::reconnecting;
         if (context_.snapshot.connection == discord::Connection::signing_in)
             draw_sign_in(frame.scene, ink_, context_.snapshot, time_);
-        else if (context_.snapshot.connection != discord::Connection::ready)
+        else if (context_.snapshot.connection != discord::Connection::ready && !reconnecting)
             draw_waiting(frame.scene, ink_, context_.snapshot, time_);
         else if (route_ == Route::home)
             home_.draw(context_.snapshot, frame.scene);
@@ -493,6 +515,8 @@ class DiscordApp final : public app::Concept
         else
             chat_.draw(context_.snapshot, frame.scene);
         frame.scene.pop_opacity();
+        if (reconnecting && route_ != Route::settings) // over the screen that was up, dimmed
+            draw_reconnecting(frame.scene, ink_, context_.snapshot, time_, reconnect_focus_);
         if (const discord::Call *ring = discord::ringing_call(context_.snapshot);
             ring && ring->channel_id != dismissed_ring_)
             draw_incoming(frame.scene, ink_, context_.snapshot, *ring);
@@ -547,6 +571,8 @@ class DiscordApp final : public app::Concept
     std::string joining_;          // the room or DM call being joined
     std::string join_error_;       // why it failed, shown until Circle
     bool leaving_ = false;
+    bool join_seen_ = false;       // the core showed this join under way (joining, connecting, securing)
+    int reconnect_focus_ = 0;      // the Reconnecting card: 0 Retry now, 1 Settings
     float voice_wait_ = 0.0f;      // seconds since the join or leave was asked for
     // Banners at the top right, newest on top: DMs and mentions, and every server message
     // when that is on (Settings › Notifications). A message from a channel already shown
@@ -670,6 +696,7 @@ class DiscordApp final : public app::Concept
         }
         joining_ = channel;
         join_error_.clear();
+        join_seen_ = false;
         leaving_ = false;
         voice_wait_ = 0.0f;
     }
@@ -695,9 +722,21 @@ class DiscordApp final : public app::Concept
             return false;
         const discord::Voice &v = context_.snapshot.voice;
         voice_wait_ += dt;
-        // The core's answer lands on the next voice poll: until then the old state shows.
+        // The core's answer lands on a later voice poll, which waits behind whatever the client
+        // is fetching (a DM's history): until the core shows this join under way, the state on
+        // screen is the old one and says nothing about it.
+        const bool under_way = v.state == discord::VoiceState::joining ||
+                               v.state == discord::VoiceState::connecting || v.state == discord::VoiceState::securing;
+        join_seen_ |= under_way;
         const bool settled = voice_wait_ > 1.5f;
-        if (!join_error_.empty())
+        if (!joining_.empty() && v.state == discord::VoiceState::connected && v.channel_id == joining_)
+        {
+            open_voice(joining_); // connected, even after a failure was shown: the call is up
+            joining_.clear();
+            join_error_.clear();
+            feedback.play(hui::audio::Cue::open);
+        }
+        else if (!join_error_.empty())
         {
             if (input.is_pressed(Action::back) || input.is_pressed(Action::confirm))
             {
@@ -708,19 +747,20 @@ class DiscordApp final : public app::Concept
         }
         else if (!joining_.empty())
         {
-            if (v.state == discord::VoiceState::connected && v.channel_id == joining_)
+            if (join_seen_ && v.state == discord::VoiceState::connected && v.channel_id != joining_)
             {
-                open_voice(joining_);
-                joining_.clear();
-                feedback.play(hui::audio::Cue::open);
+                // A switch Discord refused: the core stayed in the call we were in.
+                join_error_ = "Discord did not confirm that channel. You are still in " +
+                              room_title(context_.snapshot, v.channel_id) + ".";
+                feedback.play(hui::audio::Cue::error);
             }
-            else if (settled && (v.state == discord::VoiceState::error || v.state == discord::VoiceState::idle ||
-                                 voice_wait_ > 30.0f))
+            else if ((v.state == discord::VoiceState::error && (join_seen_ || voice_wait_ > 8.0f)) ||
+                     (v.state == discord::VoiceState::idle && join_seen_) || voice_wait_ > 30.0f)
             {
                 join_error_ = v.state == discord::VoiceState::error && !v.error.empty()
                                   ? v.error
                                   : "The call did not connect. Try again in a moment.";
-                if (v.active()) // timed out half-way: do not leave it hanging
+                if (v.active() && v.channel_id == joining_) // timed out half-way: do not leave it hanging
                 {
                     discord::Request r;
                     r.kind = discord::Request::Kind::voice_leave;

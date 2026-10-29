@@ -8,9 +8,11 @@ typedef struct {
     char guild[32];   // empty for DM calls
     char channel[32];
     int mute, deaf;
+    int leave_first; // Discord still lists us in a channel we have no connection to: leave, then join
 } voice_op4;
 
 void voice_set_self(const char *user_id);                      // READY
+void voice_retry(void); // Retry now: ends the wait before the next resume
 void voice_init(const char *data_dir); // where our last gateway session id is kept
 void voice_on_ready(cJSON *ready);      // READY: rejoin the wanted call or leave our own ghost
 void voice_join(const char *guild_id, const char *channel_id); // guild_id NULL for DM calls
@@ -24,6 +26,7 @@ int voice_current(char guild_id[32], char channel_id[32], char user_id[32], char
 int voice_set_flags(int mute, int deaf);
 // Gateway thread, between reads: 1 with *out when op 4 must be sent now.
 int voice_take_request(voice_op4 *out);
+int voice_request_pending(void); // an op 4 waits for the gateway thread
 // Gateway dispatch: VOICE_STATE_UPDATE and VOICE_SERVER_UPDATE. Other users are ignored.
 void voice_on_state(cJSON *d);
 void voice_on_server(cJSON *d);

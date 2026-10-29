@@ -1,7 +1,14 @@
 #include "tls.h"
 
+#include <errno.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <netinet/in.h>
 #include <poll.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <unistd.h>
 
 #include <pthread.h>
 
@@ -66,12 +73,56 @@ int tls_random(void *unused, unsigned char *out, size_t len)
     return locked_random(unused, out, len);
 }
 
+// No socket waits for ever: a peer that accepts and then stalls (or Wi-Fi that drops
+// mid-record) costs at most these, and the thread gets an error back.
+#define CONNECT_MS 10000
+#define IO_SECONDS 15
+
+// TCP connect with a deadline (mbedtls_net_connect blocks for the system's minute or more),
+// then blocking I/O with send and receive timeouts. 0 or an mbedTLS net error.
+static int connect_timed(mbedtls_net_context *net, const char *host, const char *port)
+{
+    struct addrinfo hints = {.ai_family = AF_UNSPEC, .ai_socktype = SOCK_STREAM, .ai_protocol = IPPROTO_TCP}, *list;
+    if (getaddrinfo(host, port, &hints, &list) != 0)
+        return MBEDTLS_ERR_NET_UNKNOWN_HOST;
+    int ret = MBEDTLS_ERR_NET_CONNECT_FAILED;
+    for (struct addrinfo *a = list; a; a = a->ai_next) {
+        int fd = socket(a->ai_family, a->ai_socktype, a->ai_protocol);
+        if (fd < 0) {
+            ret = MBEDTLS_ERR_NET_SOCKET_FAILED;
+            continue;
+        }
+        int flags = fcntl(fd, F_GETFL, 0);
+        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+        int ok = connect(fd, a->ai_addr, a->ai_addrlen) == 0;
+        if (!ok && errno == EINPROGRESS) {
+            struct pollfd p = {.fd = fd, .events = POLLOUT};
+            int err = 0;
+            socklen_t len = sizeof err;
+            ok = poll(&p, 1, CONNECT_MS) == 1 && getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len) == 0 && err == 0;
+        }
+        if (!ok) {
+            close(fd);
+            continue;
+        }
+        fcntl(fd, F_SETFL, flags); // blocking again: mbedTLS's recv then reports a timeout as an error
+        struct timeval tv = {.tv_sec = IO_SECONDS};
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+        net->fd = fd;
+        ret = 0;
+        break;
+    }
+    freeaddrinfo(list);
+    return ret;
+}
+
 int tls_connect(tls_conn *c, const char *host, const char *port)
 {
     int ret;
     mbedtls_net_init(&c->net);
     mbedtls_ssl_init(&c->ssl);
-    if ((ret = mbedtls_net_connect(&c->net, host, port, MBEDTLS_NET_PROTO_TCP)) != 0)
+    if ((ret = connect_timed(&c->net, host, port)) != 0)
         return log_err("connect", ret), ret;
     if ((ret = mbedtls_ssl_setup(&c->ssl, &conf)) != 0 ||
         (ret = mbedtls_ssl_set_hostname(&c->ssl, host)) != 0)

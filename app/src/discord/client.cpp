@@ -173,9 +173,32 @@ void start_core()
                   elf.size());
 }
 
+// The version the app and its bundled core were built as (tools/build.sh); "" on the host.
+const std::string &bundled_version()
+{
+    static const std::string version = [] {
+        std::string v;
+        if (FILE *f = std::fopen("/app0/version.txt", "rb"))
+        {
+            char buf[64];
+            v.assign(buf, std::fread(buf, 1, sizeof buf, f));
+            std::fclose(f);
+        }
+        while (!v.empty() && (v.back() == '\n' || v.back() == '\r' || v.back() == ' '))
+            v.pop_back();
+        return v;
+    }();
+    return version;
+}
+
 std::atomic<bool> g_front{true}; // Client::set_front; every request tells the core
 
-Reply http(int port, const char *method, const std::string &path, const std::string &body = {})
+// Replies are capped (16 MiB: pictures from strangers pass through the core); the chat tree,
+// which grows with the account, gets more room (kChatMax).
+constexpr std::size_t kReplyMax = 16u << 20, kChatMax = 256u << 20;
+
+Reply http(int port, const char *method, const std::string &path, const std::string &body = {},
+           std::size_t max = kReplyMax)
 {
     Reply reply;
     const int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -212,8 +235,8 @@ Reply http(int port, const char *method, const std::string &path, const std::str
     for (ssize_t r; (r = recv(fd, buf, sizeof buf, 0)) > 0;)
     {
         raw.append(buf, static_cast<std::size_t>(r));
-        if (raw.size() > (16u << 20)) // the core caps its own replies the same
-            return failed(reply, "recv (over 16 MiB)", fd);
+        if (raw.size() > max)
+            return failed(reply, max == kReplyMax ? "recv (over 16 MiB)" : "recv (over 256 MiB)", fd);
     }
     close(fd);
     const std::size_t split = raw.find("\r\n\r\n");
@@ -1101,15 +1124,26 @@ void Client::run()
 void Client::poll_state()
 {
     const Reply reply = http(port_, "GET", "/api/state");
-    std::lock_guard<std::mutex> lock(mutex_);
+    if (reply.status > 0 && reply.status != 200) // it is there, only busy or unhappy
+    {
+        hui::sys::log("[CLIENT] /api/state answered %d", reply.status);
+        return;
+    }
+    // One slow or lost reply is not a dead core: three in a row are. The ELF goes out
+    // without the lock, which the UI thread needs every frame.
+    state_failures_ = reply.status == 200 ? 0 : state_failures_ + 1;
+    core_seen_ |= reply.status == 200;
+    if (state_failures_ >= 3 || (!core_seen_ && reply.status != 200)) // at launch: no need to wait
+        start_core();
+    std::unique_lock<std::mutex> lock(mutex_);
     if (reply.status != 200)
     {
-        if (reply.status > 0)
-            hui::sys::log("[CLIENT] /api/state answered %d", reply.status);
-        else
-            start_core();
-        snapshot_.connection = Connection::starting;
-        snapshot_.status_message = "Starting the ps5-discord core...";
+        if (state_failures_ < 3 && snapshot_.connection != Connection::starting)
+            return;
+        // Before the first sign-in this is the launch; after it, a drop like any other.
+        snapshot_.connection = been_ready_ ? Connection::reconnecting : Connection::starting;
+        snapshot_.status_message =
+            been_ready_ ? "Restarting the ps5-discord core." : "Starting the ps5-discord core...";
         ready_ = false;
         publish();
         return;
@@ -1118,7 +1152,39 @@ void Client::poll_state()
     if (state.is_discarded())
         return;
     const int api = static_cast<int>(num(state, "api_version", 0.0));
-    if (api < kApiVersionMin || api > kApiVersionMax)
+    const bool api_ok = api >= kApiVersionMin && api <= kApiVersionMax;
+    // The core outlives the app, so after an update the old one is still running: stop it,
+    // and the bundled one starts once it is gone. Not in the middle of a call unless the old
+    // core cannot serve this app at all; once per launch, so a mismatched build cannot loop.
+    const std::string theirs = text(state, "version");
+    // The old one on its way out (Go Live gives the controller back first: up to 30 s).
+    if (replaced_core_ && theirs == replaced_version_ && now_ms() - replaced_ms_ < 60000)
+    {
+        core_seen_ = false;
+        snapshot_.connection = Connection::starting;
+        snapshot_.status_message = "Updating the ps5-discord core...";
+        ready_ = false;
+        publish();
+        return;
+    }
+    if (!replaced_core_ && !bundled_version().empty() && theirs != bundled_version() &&
+        (!api_ok || (voice_known_ && !snapshot_.voice.active())))
+    {
+        replaced_core_ = true;
+        replaced_version_ = theirs;
+        replaced_ms_ = now_ms();
+        core_seen_ = false; // its port going quiet is the cue to start ours at once
+        snapshot_.connection = Connection::starting;
+        snapshot_.status_message = "Updating the ps5-discord core...";
+        ready_ = false;
+        publish();
+        lock.unlock();
+        hui::sys::log("[CLIENT] the running core is %s, this app bundles %s: replacing it",
+                      theirs.empty() ? "an older one" : theirs.c_str(), bundled_version().c_str());
+        http(port_, "POST", "/api/quit");
+        return;
+    }
+    if (!api_ok)
     {
         snapshot_.connection = Connection::starting;
         snapshot_.status_message = "This app needs core API " + std::to_string(kApiVersionMin) + "-" +
@@ -1141,15 +1207,22 @@ void Client::poll_state()
     const Connection before = snapshot_.connection;
     // Signed in before, signing in now: another console user's turn, or signed out. The
     // last account's servers, chats and DMs go.
-    if (before == Connection::ready && (s == "login" || s == "scanned" || s == "browser" || s == "starting"))
+    const bool signing_in = s == "login" || s == "scanned" || s == "browser";
+    if ((before == Connection::ready && (signing_in || s == "starting")) ||
+        (before == Connection::reconnecting && signing_in))
     {
         snapshot_ = Snapshot{};
         events_next_ = -1;
+        prefetched_ = false;
+        last_voice_ms_ = 0;
+        been_ready_ = false;
     }
     if (s == "ready")
         snapshot_.connection = Connection::ready;
     else if (s == "login" || s == "scanned" || s == "browser")
         snapshot_.connection = Connection::signing_in;
+    else if (been_ready_ && (s == "connecting" || s == "starting"))
+        snapshot_.connection = Connection::reconnecting; // after the launch: every drop looks the same
     else if (s == "connecting" && before == Connection::ready)
         snapshot_.connection = Connection::reconnecting;
     else
@@ -1161,6 +1234,9 @@ void Client::poll_state()
     snapshot_.login_note = browser_error_.empty() ? text(state, "note") : browser_error_;
     snapshot_.login_qr_size = static_cast<int>(num(state, "qr_size", 0.0));
     snapshot_.status_message.clear();
+    snapshot_.reconnect_attempt = static_cast<int>(num(state, "attempt", 0.0));
+    if (snapshot_.connection == Connection::ready)
+        been_ready_ = true;
     const bool was_ready = ready_;
     ready_ = snapshot_.connection == Connection::ready;
     if (ready_ && !was_ready)
@@ -1172,7 +1248,7 @@ void refresh_mentions(Snapshot &s);
 
 void Client::poll_chat()
 {
-    const Reply reply = http(port_, "GET", "/api/chat");
+    const Reply reply = http(port_, "GET", "/api/chat", {}, kChatMax);
     last_chat_ms_ = now_ms();
     if (reply.status != 200)
         return;
@@ -1185,6 +1261,18 @@ void Client::poll_chat()
     Snapshot next;
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        // Another account than the one on screen (a console user switch the state polls
+        // missed while the core was away): nothing of the last one may stay.
+        const std::string me = tree.contains("me") ? text(tree["me"], "id") : std::string();
+        if (!snapshot_.me.id.empty() && me != snapshot_.me.id)
+        {
+            Snapshot fresh;
+            fresh.connection = snapshot_.connection;
+            snapshot_ = std::move(fresh);
+            prefetched_ = false;
+            events_next_ = -1;
+            last_voice_ms_ = 0;
+        }
         next = snapshot_;
     }
     apply_tree(next, tree);
@@ -1217,6 +1305,7 @@ void Client::poll_voice()
     last_voice_ms_ = now_ms();
     const json v = reply.status == 200 ? json::parse(reply.body, nullptr, false) : json::object();
     std::lock_guard<std::mutex> lock(mutex_);
+    voice_known_ |= reply.status == 200;
     Voice &voice = snapshot_.voice;
     voice = Voice{};
     if (v.is_object())
@@ -1691,6 +1780,9 @@ void Client::handle(const Request &request)
         last_voice_ms_ = 0;
         break;
     }
+    case Request::Kind::reconnect:
+        hui::sys::log("[CLIENT] /api/reconnect answered %d", http(port_, "POST", "/api/reconnect").status);
+        break;
     case Request::Kind::quit: // the core stops (Go Live and the call first), then the app closes
         hui::sys::log("[CLIENT] /api/quit answered %d", http(port_, "POST", "/api/quit").status);
         quit_ = true;

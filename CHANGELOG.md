@@ -70,6 +70,28 @@ All notable changes to this project are documented here. The format follows
   without end-to-end encryption for a moment).
 
 ### Fixed
+- Calls survive a network drop: a short one resumes, and the call's audio socket (which the
+  console aborts with the network) is replaced, so sound comes back both ways; a long one
+  rejoins the call once Discord is back. Losing the network no longer counts against the
+  voice server's retries (up to 10 minutes). A call Discord still lists after a drop can be
+  joined again.
+- Reconnecting: one card over the screen that was up (No internet connection, Can't reach
+  Discord, Restarting the core), the attempt, Retry now and Settings. The launch keeps its
+  own Starting / Connecting card.
+- The core reopens its control port when the console aborts it (Wi-Fi off): the app no
+  longer starts a second core beside a running one.
+- Nothing goes out on a new gateway connection before Discord resumes it (a call's rejoin
+  was lost with a 4003 close).
+- Network calls give up in time: 10 s to connect, 15 s for a stalled read or write; the
+  control API answers busy past 16 requests instead of stalling.
+- The app replaces a running core of another version after an update (not during a call);
+  it restarts the core only after three missed checks, and clears another account's data.
+- A channel switch Discord refuses keeps the current call; a failed call is not rejoined in a
+  loop; two quick Go Live presses start one session; the controller is handed back if the
+  core crashes or its USB stop hangs; Quit sends the leave before exiting.
+- A join started while a chat is loading no longer reports a failure.
+- GIF stickers are capped by frame count before decoding; a big account's chat list is
+  allowed up to 256 MiB (pictures stay at 16 MiB).
 - Pictures in messages showed their stand-in: Discord's media proxy sends WebP unless asked,
   and the app reads PNG and JPEG; it now asks for those.
 - A call opens its screen only once connected, with a spinner meanwhile (Circle cancels);

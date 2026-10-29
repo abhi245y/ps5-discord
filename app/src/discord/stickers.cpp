@@ -5,6 +5,7 @@
 // rendered at once on the image thread; stream frames if long stickers ever matter.
 
 #include "discord/stickers.hpp"
+#include "discord/gif.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -93,11 +94,16 @@ bool render_lottie(const std::string &json, int size, FrameSheet &out, int max_f
 bool decode_gif(const std::string &data, FrameSheet &out)
 {
     int *delays = nullptr, w = 0, h = 0, frames = 0, n = 0;
-    // stb decodes every frame at once: stickers are 320 px, so refuse big ones before that.
-    // ponytail: the frame count is known only after decoding; a cap needs stb's frame loop.
-    if (!stbi_info_from_memory(reinterpret_cast<const std::uint8_t *>(data.data()), static_cast<int>(data.size()), &w,
+    // stb decodes every frame at once, a full canvas each: stickers are 320 px and Discord
+    // caps them at 512 KB, so refuse big files, big pictures and many frames (32 Mpx in all,
+    // 128 MB decoded) before any of it is allocated.
+    if (data.size() > (2u << 20) ||
+        !stbi_info_from_memory(reinterpret_cast<const std::uint8_t *>(data.data()), static_cast<int>(data.size()), &w,
                                &h, &n) ||
         static_cast<long>(w) * h > 512 * 512)
+        return false;
+    const int count = gif_frames(data);
+    if (count < 1 || static_cast<long>(count) * w * h > 32l << 20)
         return false;
     std::uint8_t *px = stbi_load_gif_from_memory(reinterpret_cast<const std::uint8_t *>(data.data()),
                                                  static_cast<int>(data.size()), &delays, &w, &h, &frames, &n, 4);

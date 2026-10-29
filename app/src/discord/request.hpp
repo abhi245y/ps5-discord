@@ -38,6 +38,7 @@ struct Request
         set_pref,     // a console-side setting (Prefs): content = its key, value
         sign_out,     // end the session with Discord and forget it on the console
         quit,         // stop the core (no alerts or calls) and close the app
+        reconnect,    // Retry now: the core ends its wait before the next attempt
     };
     Kind kind = Kind::open_channel;
     std::string guild_id; // empty for a DM

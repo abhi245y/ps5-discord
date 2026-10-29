@@ -373,6 +373,7 @@ struct Snapshot
     bool login_browser = false; // browser login/import attempt is active
     std::string login_note;     // why the last sign-in failed, from the core
     std::int64_t now_ms = 0; // for "12m ago"
+    int reconnect_attempt = 0;  // the core's tries since the session dropped; 0 while it is up
     int utc_offset_minutes = 0; // the console's time zone, for clock times
     User me;
     std::vector<User> friends; // everyone the Home rows can show

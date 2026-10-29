@@ -126,4 +126,45 @@ void draw_waiting(DrawList &list, const Ink &ink, const discord::Snapshot &s, fl
                   gfx::Align::center);
 }
 
+void draw_reconnecting(DrawList &list, const Ink &ink, const discord::Snapshot &s, float time, int focus)
+{
+    list.rounded_rect({0, 0, 1920, 1080}, 0.0f, Color::rgb(0x0d0e12, 0.74f));
+    list.rounded_rect({0, 1000, 1920, 80}, 0.0f, Color::rgb(0x0f1015)); // the screen's own hints do nothing now
+    const Rect card{530.0f, 300.0f, 860.0f, 470.0f};
+    list.shadow(card, 28.0f, 50.0f, Color::rgb(0, 0.5f));
+    list.rounded_rect(card, 28.0f, kRaised);
+    spinner(list, card.cx(), card.y + 100.0f, 44.0f, time);
+    ui::text(list, ink.fonts.display, "Reconnecting…", card.cx(), card.y + 222.0f, 50.0f, kText, gfx::Align::center);
+    // One line of what is wrong, one quiet line of progress: nothing to read twice.
+    std::string line = !s.status_message.empty() ? s.status_message
+                       : !s.login_note.empty()   ? s.login_note
+                                                 : std::string("Connection to Discord lost.");
+    ui::text(list, ink.fonts.regular, fit(ink.fonts.regular, line, 28.0f, card.w - 100.0f), card.cx(),
+             card.y + 278.0f, 28.0f, kText, gfx::Align::center);
+    std::string muted = s.reconnect_attempt > 0 ? "Attempt " + std::to_string(s.reconnect_attempt) : std::string();
+    if (s.voice.active())
+        muted += (muted.empty() ? "" : " · ") + std::string("Your call will resume");
+    if (!muted.empty())
+        ui::text(list, ink.fonts.regular, fit(ink.fonts.regular, muted, 23.0f, card.w - 100.0f), card.cx(),
+                 card.y + 326.0f, 23.0f, kDim, gfx::Align::center);
+    // The focused button is the coral one (coral marks focus only).
+    const char *labels[] = {"Retry now", "Settings"};
+    for (int i = 0; i < 2; ++i)
+    {
+        const Rect b{card.cx() - 290.0f + i * 300.0f, card.y + 370.0f, 280.0f, 66.0f};
+        const bool on = i == focus;
+        list.rounded_rect(b, 33.0f, on ? kCoral : kRaisedHigh);
+        ui::text(list, ink.fonts.semibold, labels[i], b.cx(), b.cy() + 9.0f, 26.0f, on ? kOnCoral : kText,
+                 gfx::Align::center);
+        if (on)
+            focus_outline(list, b, 33.0f, 1.0f);
+    }
+    const ui::Hint hints[] = {{ui::Button::cross, "Select"}};
+    ui::HintLayout layout;
+    layout.size = 34.0f;
+    layout.text_size = 23.0f;
+    layout.cy = kHintsBaseline;
+    ui::draw_hints(list, ink.fonts, hint_glyphs(), hints, 1, 1920.0f - kMargin, true, layout);
+}
+
 } // namespace screens
