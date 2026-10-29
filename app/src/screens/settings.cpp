@@ -512,6 +512,14 @@ bool SettingsScreen::update(const discord::Snapshot &s, const hui::InputFrame &i
         return true;
     }
     auto set_pref = [&](const char *key, int value) {
+        // Only from 720p · 30 fps up: who has chosen more once knows.
+        if (std::string(key) == "golive_quality" && s.prefs.golive_quality == 0 && value > 0)
+        {
+            confirm_ = Confirm::quality;
+            quality_ = value;
+            feedback.play(hui::audio::Cue::modal_open);
+            return;
+        }
         discord::Request r;
         r.kind = discord::Request::Kind::set_pref;
         r.content = key;
@@ -520,7 +528,17 @@ bool SettingsScreen::update(const discord::Snapshot &s, const hui::InputFrame &i
     };
     if (confirm_ != Confirm::none)
     {
-        if (input.is_pressed(Action::confirm))
+        if (input.is_pressed(Action::confirm) && confirm_ == Confirm::quality)
+        {
+            discord::Request r;
+            r.kind = discord::Request::Kind::set_pref;
+            r.content = "golive_quality";
+            r.value = quality_;
+            requests.push_back(r);
+            confirm_ = Confirm::none;
+            feedback.play(hui::audio::Cue::select);
+        }
+        else if (input.is_pressed(Action::confirm))
         {
             discord::Request r;
             r.kind = confirm_ == Confirm::quit ? discord::Request::Kind::quit : discord::Request::Kind::sign_out;
@@ -774,6 +792,11 @@ void SettingsScreen::draw(const discord::Snapshot &s, const hui::Settings &app, 
                      "Sign out");
     else if (confirm_ == Confirm::quit)
         confirm_card(list, ink_, "Quit Discord?", kQuitText, "Quit");
+    else if (confirm_ == Confirm::quality)
+        confirm_card(list, ink_, std::string("Use ") + kQualities[std::clamp(quality_, 0, 3)] + "?",
+                     "Discord allows this only with Nitro or in a boosted server. Without them it may lag or fail "
+                     "for viewers, and Discord could act on your account. 720p · 30 fps is recommended.",
+                     "Use it");
 }
 
 void SettingsScreen::draw_pair(const discord::Snapshot &s, DrawList &list) const

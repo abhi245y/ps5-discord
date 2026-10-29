@@ -79,6 +79,8 @@ constexpr app::TourStep kTour[] = {
     {0.4f, action_bit(Action::back)},
     {0.4f, 0, Direction::down},
     {0.4f, 0, Direction::right},
+    {0.6f, 0, Direction::none, "settings-quality"},
+    {0.4f, action_bit(Action::confirm)},
     {0.6f, 0, Direction::none, "settings-paired"},
     {0.4f, action_bit(Action::back)},
     {0.4f, 0, Direction::down},

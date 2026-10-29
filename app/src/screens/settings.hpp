@@ -43,8 +43,10 @@ class SettingsScreen
         none,
         sign_out,
         quit,
+        quality, // Go Live above 720p · 30 fps: Nitro's
     };
     Confirm confirm_ = Confirm::none; // the question that is up
+    int quality_ = 0;                 // Confirm::quality: the one asked for
     // The pairing dialog: the console's users, one user's actions (use, pair again, remove),
     // the wait while the core pairs, and the PIN boxes if the console wants its PIN typed.
     enum class Pair
