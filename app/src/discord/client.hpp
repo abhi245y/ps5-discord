@@ -101,6 +101,7 @@ class Client
     std::uint64_t version_ = 0;
     std::uint64_t taken_ = 0;
     std::deque<Request> queue_;
+    Request open_; // the last open_channel: the chat on screen (guarded by mutex_)
     std::deque<std::string> image_queue_; // guarded by mutex_
     std::vector<Image> images_;           // guarded by mutex_
     std::vector<KeyPress> keys_;          // guarded by mutex_

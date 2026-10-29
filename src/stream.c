@@ -9,6 +9,7 @@
 // Everything in conn that both halves touch is guarded by mlock.
 // ponytail: no resume; a dropped stream connection ends the broadcast with an error.
 #include "stream.h"
+#include "json_num.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -576,7 +577,7 @@ static int on_session(conn *c, cJSON *d)
         return fatal(c, "Discord's stream server sent a bad key.");
     pthread_mutex_lock(&mlock);
     for (int i = 0; i < 32; i++)
-        c->key[i] = (uint8_t)cJSON_GetNumberValue(cJSON_GetArrayItem(k, i));
+        c->key[i] = (uint8_t)json_item_int(cJSON_GetArrayItem(k, i), 0);
     dave_start(c, (int)num(d, "dave_protocol_version"));
     c->enc = daveEncryptorCreate();
     if (c->enc) {

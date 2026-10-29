@@ -89,6 +89,12 @@ std::string text(const json &j, const char *key)
     return it != j.end() && it->is_string() ? it->get<std::string>() : std::string();
 }
 
+// Snowflakes as decimal strings: the longer one, or the larger at equal length, is newer.
+bool newer_id(const std::string &a, const std::string &b)
+{
+    return a.size() != b.size() ? a.size() > b.size() : a > b;
+}
+
 // value() throws on null or a wrong type, and the core writes null for absent keys.
 double num(const json &j, const char *key, double fallback)
 {
@@ -1390,6 +1396,22 @@ bool Client::poll_events()
         events_next_ = next;
         return true;
     }
+    // Events were missed (the app sat suspended in a game past the core's ring), or a new
+    // core counts from 0 again: every loaded history may lack messages. Load them afresh.
+    if (flag(e, "gap", false) || next < events_next_)
+    {
+        events_next_ = next;
+        std::lock_guard<std::mutex> lock(mutex_);
+        hui::sys::log("[CLIENT] events missed: reloading the chats");
+        snapshot_.messages.clear();
+        snapshot_.history_start.clear();
+        snapshot_.load_failed.clear();
+        last_chat_ms_ = 0;
+        if (!open_.channel_id.empty())
+            queue_.push_back(open_);
+        publish();
+        return true;
+    }
     events_next_ = next;
     if (!e.contains("events") || e["events"].empty())
         return true;
@@ -1620,6 +1642,11 @@ void Client::handle(const Request &request)
                 return;
             path += "&before=" + oldest;
         }
+        if (request.kind == Request::Kind::open_channel)
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            open_ = request; // the chat on screen, reloaded when events were missed
+        }
         const Reply reply = http(port_, "GET", path);
         const json r = json::parse(reply.body, nullptr, false);
         if (reply.status != 200 || r.is_discarded() || !r.contains("body") || !r["body"].is_array())
@@ -1654,7 +1681,16 @@ void Client::handle(const Request &request)
             if (request.kind == Request::Kind::load_older)
                 ms.insert(ms.begin(), page.begin(), page.end());
             else
-                ms = page;
+            {
+                // What arrived while the page was on its way (newer than its newest), and our
+                // own sends still pending, stay after it.
+                std::vector<Message> later;
+                for (const Message &m : ms)
+                    if (m.pending || newer_id(m.id, newest))
+                        later.push_back(m);
+                ms = std::move(page);
+                ms.insert(ms.end(), later.begin(), later.end());
+            }
             publish();
         }
         // Opening a channel reads it.

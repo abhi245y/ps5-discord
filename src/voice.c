@@ -1,4 +1,5 @@
 #include "voice.h"
+#include "json_num.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -100,7 +101,7 @@ static const char *str(cJSON *o, const char *key)
 
 static int64_t num(cJSON *o, const char *key)
 {
-    return (int64_t)cJSON_GetNumberValue(cJSON_GetObjectItem(o, key));
+    return json_int(o, key, 0);
 }
 
 // Lock held. Replaces the current connection: its thread exits without reporting.
@@ -617,7 +618,7 @@ static int on_session(vthread *t, cJSON *d)
     if (cJSON_GetArraySize(k) != 32)
         return fatal(t, "The voice server sent a bad encryption key.");
     for (int i = 0; i < 32; i++)
-        t->key[i] = (uint8_t)cJSON_GetNumberValue(cJSON_GetArrayItem(k, i));
+        t->key[i] = (uint8_t)json_item_int(cJSON_GetArrayItem(k, i), 0);
     dave_start(t, (int)num(d, "dave_protocol_version"));
     attach_audio(t);
     LOG("voice: session up, DAVE version %d", t->dave_version);
@@ -791,7 +792,7 @@ static int on_text(vthread *t, const char *json)
         return 0;
     if (cJSON_IsNumber(cJSON_GetObjectItem(m, "seq")))
         t->seq_ack = num(m, "seq");
-    int op = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(m, "op"));
+    int op = (int)json_int(m, "op", 0);
     cJSON *d = cJSON_GetObjectItem(m, "d");
     int r = 0;
     switch (op) {

@@ -98,7 +98,11 @@ static http_response rest(const char *method, const char *path, const char *json
 
 static void reply_rest(int c, http_response res)
 {
-    const char *body = res.body && res.body[0] ? res.body : "null";
+    // Discord's reply goes in as JSON only when it is JSON: a proxy's HTML error page would
+    // make the whole reply unreadable, and the app would lose the status with it.
+    cJSON *parsed = res.body ? cJSON_Parse(res.body) : NULL;
+    const char *body = parsed ? res.body : "null";
+    cJSON_Delete(parsed);
     size_t cap = strlen(body) + 48;
     char *out = malloc(cap);
     if (out)
