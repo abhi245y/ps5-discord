@@ -13,7 +13,6 @@ Go Live, not released yet.
 - Server pages, channel chat and DMs: read, send, reply, react, edit and delete your own
 - The PS5 system keyboard on Triangle (the app's own keyboard as a fallback)
 - Avatars, server icons, banners, image previews, colour emoji, many scripts
-- Status web UI at `http://<ps5-ip>:9041`: state, login QR, account, live log, stop
 - Voice: server voice channels and DM calls, with Discord's end-to-end encryption (DAVE),
   mute and deafen. The call stays up while a game covers the app.
 - Go Live: stream the game you are playing into the call (1280x720 H.264 at 30 fps and the
@@ -64,9 +63,6 @@ WebKit storage without modifying it, and saves the validated session atomically
 with owner-only permissions. No watchdog is used. Tested with a real human
 verification challenge.
 
-The core still runs on its own too: send `ps5-discord-core-*.elf` to elfldr and use the
-status page.
-
 ## Known limitations
 
 - The token is stored unencrypted. Use a throwaway account until it is encrypted at rest.
@@ -95,8 +91,7 @@ ps5-discord is free software under the GNU Affero General Public License, versio
 later ([LICENSE](LICENSE)). The app builds on the ps5-homebrew-ui kit by BlackBearReloaded;
 those files keep their GPL-3.0-or-later headers ([app/LICENSE.GPL-3.0](app/LICENSE.GPL-3.0),
 [app/THIRD_PARTY_NOTICES.md](app/THIRD_PARTY_NOTICES.md)) and are combined with the AGPL code
-under GPLv3 section 13. Because the core serves a status page over the network, that page
-links to this source.
+under GPLv3 section 13. The app's About page links to this source.
 
 The core includes the Remote Play client from chiaki-ng (`third_party/`, see
 [third_party/README.md](third_party/README.md)), which is AGPL-3.0-only, so the core as built

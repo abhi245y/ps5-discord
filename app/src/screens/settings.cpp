@@ -181,9 +181,9 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
         };
     case 4:
         return {
-            {Kind::info, "Your sign-in", "Kept on the console in /data/ps5-discord, not encrypted yet.", ""},
-            {Kind::info, "Status page",
-             "Anyone on your network can open http://<console>:9041: the app's state and log, never your sign-in.", ""},
+            {Kind::info, "Your sign-in", "Kept on this console, encrypted: a copy of the file works nowhere else.", ""},
+            {Kind::info, "Network", "The core answers only this app, on this console; nothing on your network can reach it.",
+             ""},
         };
     default:
         return {
