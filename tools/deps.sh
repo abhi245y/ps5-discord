@@ -50,4 +50,9 @@ mkdir -p "$deps/src/nlohmann"
 fetch https://github.com/nlohmann/json/releases/download/v3.11.3/json.hpp \
     9bea4c8066ef4a1c206b2be5a36302f8926f7fdc6087af5d20b417d0cf103ea6 "$deps/src/nlohmann/json.hpp"
 
+# The core's trust store (Makefile CA_PEM): curl's extract of Mozilla's roots, one dated copy,
+# so every build ships the same roots. The hash is curl's published cacert.pem.sha256.
+fetch https://curl.se/ca/cacert-2026-10-20.pem \
+    796f1389bfea13c0ed78f663b765baaff54a508e5483786bd6ece73c5e3e3cbe "$deps/cacert-2026-10-20.pem"
+
 echo "deps ready in $deps"

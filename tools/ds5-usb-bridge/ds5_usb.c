@@ -55,7 +55,7 @@ static uint64_t now_ms(void)
     return (uint64_t)t.tv_sec * 1000u + (uint64_t)t.tv_nsec / 1000000u;
 }
 
-static void log_line(const char *fmt, ...)
+__attribute__((format(printf, 1, 2))) static void log_line(const char *fmt, ...)
 {
     char line[512];
     va_list ap;

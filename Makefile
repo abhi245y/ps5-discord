@@ -11,7 +11,8 @@
 
 PS5_HOST ?=
 ELFLDR_PORT ?= 9021
-CA_PEM ?= $(firstword $(wildcard /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem))
+# The trust store built in: curl's extract of Mozilla's roots, pinned in tools/deps.sh.
+CA_PEM := .deps/cacert-2026-10-20.pem
 HOST_CC ?= cc
 
 SDK := .deps/ps5-payload-sdk
@@ -83,9 +84,12 @@ HOST_DAVE_TEST :=
 endif
 # The SDK wrappers find LLVM through llvm-config; use the system one if present.
 export LLVM_CONFIG ?= $(or $(shell command -v llvm-config),$(abspath tools/llvm-config))
-PS5_CFLAGS := -std=gnu11 -O2 -Wall $(INCLUDES) $(OPUS_FLAGS) $(PS5_DAVE_INC) -D__unix__ $(CHIAKI_FLAGS) \
+# Hardening: the SDK's libkernel has __stack_chk_fail; its libc has no _chk functions, so
+# no _FORTIFY_SOURCE.
+HARDEN := -fstack-protector-strong -Wformat=2 -Wformat-security
+PS5_CFLAGS := -std=gnu11 -O2 -Wall -Wextra $(HARDEN) $(INCLUDES) $(OPUS_FLAGS) $(PS5_DAVE_INC) -D__unix__ $(CHIAKI_FLAGS) \
 	'-DMBEDTLS_USER_CONFIG_FILE="platform/mbedtls_config_ps5.h"' $(SQLITE_FLAGS) $(CV_FLAGS)
-HOST_CFLAGS := -std=gnu11 -O1 -g -Wall $(INCLUDES) $(OPUS_FLAGS) $(HOST_DAVE_INC) $(SQLITE_FLAGS) $(CV_FLAGS) \
+HOST_CFLAGS := -std=gnu11 -O1 -g -Wall -Wextra $(HARDEN) $(INCLUDES) $(OPUS_FLAGS) $(HOST_DAVE_INC) $(SQLITE_FLAGS) $(CV_FLAGS) \
 	'-DMBEDTLS_USER_CONFIG_FILE="platform/mbedtls_config_core.h"'
 # build/build_config.h, rewritten only when it changes (so the files using it rebuild then):
 # - CORE_VERSION: VERSION, or VERSION-dev+g<commit> unless RELEASE=1 (GIT_COMMIT where the
@@ -132,6 +136,9 @@ deps:
 dave:
 	@bash tools/dave/build.sh $(abspath $(SDK)) $(abspath $(DAVE_OUT)) all
 
+$(CA_PEM):
+	@echo "$@ is missing: run make deps"; exit 1
+
 build/ca_bundle.c: $(CA_PEM) tools/embed.py
 	@mkdir -p $(@D)
 	@python3 tools/embed.py $< $@ ca_bundle_pem
@@ -151,10 +158,12 @@ build/host/ps5-discord: $(HOST_OBJ)
 
 build/host/%.o: %.c
 	@mkdir -p $(@D)
-	@$(HOST_CC) $(if $(filter .deps/%,$<),-w) $(HOST_CFLAGS) -MMD -MP -c $< -o $@
+	@$(HOST_CC) $(if $(filter .deps/%,$<),-w) $(HOST_CFLAGS) $(if $(filter src/% tests/%,$<),-Werror) -MMD -MP -c $< -o $@
 
-test: build/host/selftest build/host/browser-storage-test build/host/client-read-state-test build/host/gif-frames-test $(HOST_DAVE_TEST)
+test: build/host/selftest build/host/browser-storage-test build/host/client-read-state-test build/host/gif-frames-test \
+		build/host/ds5-usb-test $(HOST_DAVE_TEST)
 	./build/host/selftest
+	./build/host/ds5-usb-test
 	./build/host/browser-storage-test
 	./build/host/client-read-state-test
 	./build/host/gif-frames-test
@@ -180,24 +189,38 @@ build/host/gif-frames-test: tests/gif_frames.cpp app/src/discord/gif.hpp
 	@mkdir -p $(@D)
 	$(CXX) -std=c++17 -Wall -Wextra -Iapp/src -o $@ $<
 
-build/host/browser-storage-test: tests/browser_storage.c src/browser_storage.c $(CJSON)/cJSON.c $(SQLITE)/sqlite3.c \
-		$(patsubst %.c,build/host/%.o,$(wildcard $(MBED)/library/*.c))
+build/host/browser-storage-test: tests/browser_storage.c src/browser_storage.c \
+		$(patsubst %.c,build/host/%.o,$(CJSON)/cJSON.c $(SQLITE)/sqlite3.c $(wildcard $(MBED)/library/*.c))
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ $^ -lm
-build/host/selftest: tests/selftest.c src/ws.c src/tls.c src/zstream.c src/log.c src/status.c src/chat.c src/ratelimit.c \
-		src/voice.c src/voice_proto.c src/voice_audio.c src/prefs.c src/notify.c $(DS5)/pcm_stream.c $(OPUS_SRC) $(HOST_DAVE_SRC) \
-		$(CJSON)/cJSON.c $(QRGEN)/qrcodegen.c $(ZLIB_SRC) \
-		$(ZLIB)/deflate.c $(ZLIB)/trees.c $(wildcard $(MBED)/library/*.c) build/ca_bundle.c | build/build_config.h
+# The bridge's checks (tools/ds5-usb-bridge: make test there adds sanitizers).
+build/host/ds5-usb-test: $(DS5)/test_usb.c $(DS5)/pcm_stream.c $(wildcard $(DS5)/*.h)
+	@mkdir -p $(@D)
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -g -o $@ $(DS5)/test_usb.c $(DS5)/pcm_stream.c
+# From the same objects as the host build: our sources with -Werror, the libraries quiet.
+SELFTEST_SRC := tests/selftest.c src/ws.c src/tls.c src/zstream.c src/log.c src/status.c src/chat.c src/ratelimit.c \
+	src/voice.c src/voice_proto.c src/voice_audio.c src/prefs.c src/notify.c $(DS5)/pcm_stream.c $(OPUS_SRC) \
+	$(HOST_DAVE_SRC) $(CJSON)/cJSON.c $(QRGEN)/qrcodegen.c $(ZLIB_SRC) $(ZLIB)/deflate.c $(ZLIB)/trees.c \
+	$(wildcard $(MBED)/library/*.c) build/ca_bundle.c
+build/host/selftest: $(patsubst %.c,build/host/%.o,$(SELFTEST_SRC)) | build/build_config.h
 	@mkdir -p $(@D)
 	@echo "  LD    $@"
-	@$(HOST_CC) $(HOST_CFLAGS) -w -o $@ $^ $(HOST_DAVE_LINK)
+	@$(HOST_CC) -o $@ $^ $(HOST_DAVE_LINK)
 
+# A development core (CORE_LAN=1: make stop can reach it). The console must then run this
+# build: a core that kept the port (a release build answers only the console) makes the new
+# one exit at once ("already running").
+deploy: CORE_LAN = 1
 deploy: build/ps5-discord.elf stop
 	bash -c 'cat $< > /dev/tcp/$(PS5_HOST)/$(ELFLDR_PORT)'
+	@sleep 5
+	@curl -s -m 3 http://$(PS5_HOST):9041/api/state | grep -q '"version":"$(CORE_VERSION)"' || \
+		{ echo "deploy: $(PS5_HOST) does not run $(CORE_VERSION): another core holds port 9041 (quit it from the app)"; exit 1; }
 
 stop:
 	@test -n "$(PS5_HOST)" || { echo "usage: make $@ PS5_HOST=<ip>"; exit 2; }
-	@curl -s -m 3 -X POST http://$(PS5_HOST):9041/api/quit >/dev/null && sleep 1 || true
+	@if curl -s -m 3 -X POST http://$(PS5_HOST):9041/api/quit >/dev/null; then sleep 1; \
+	else echo "stop: no core answered on $(PS5_HOST):9041 (none running, or a release build that answers only the console)"; fi
 
 clean:
 	rm -rf build
