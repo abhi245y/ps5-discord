@@ -42,6 +42,7 @@ class VoiceRoom
     std::string channel_;
     int focus_ = 0; // index into the controls: Mute, Deafen, Go Live, Leave
     bool need_pair_ = false;     // the note: Go Live is not paired yet
+    bool need_replug_ = false;   // the question: the controller should be replugged first
     bool open_settings_ = false;
 };
 

@@ -88,6 +88,11 @@ void bc_request_keyframe(void)
 {
 }
 
+const char *bc_controller(void)
+{
+    return "ok";
+}
+
 #else
 
 #include <dlfcn.h>
@@ -453,5 +458,26 @@ int bc_holds_controller(void)
 void bc_rescue_controller(void)
 {
     ds5_usb_rescue();
+}
+
+const char *bc_controller(void)
+{
+    static const char *last = "ok";
+    static time_t at;
+    static pthread_mutex_t once = PTHREAD_MUTEX_INITIALIZER;
+    // Only Go Live as the user on screen takes the controller, and not while it runs.
+    if (strcmp(bc_state(), "off") != 0 && strcmp(bc_state(), "error") != 0)
+        return last;
+    if (rp_used() < 0 || rp_used() != rp_foreground())
+        return "ok";
+    pthread_mutex_lock(&once);
+    if (time(NULL) - at >= 2) { // the app asks every poll; a scan opens USB devices
+        static const char *const names[] = {"ok", "replug", "unknown"};
+        last = names[ds5_usb_replug_state()];
+        at = time(NULL);
+    }
+    const char *r = last;
+    pthread_mutex_unlock(&once);
+    return r;
 }
 #endif

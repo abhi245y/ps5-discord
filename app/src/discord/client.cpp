@@ -1345,6 +1345,7 @@ void Client::poll_voice()
         {
             voice.broadcast = text(v["broadcast"], "state");
             voice.broadcast_error = text(v["broadcast"], "error");
+            voice.replug = text(v["broadcast"], "controller");
             voice.paired = flag(v["broadcast"], "paired", false);
             voice.pair_state = text(v["broadcast"], "pair_state");
             voice.pair_error = text(v["broadcast"], "pair_error");

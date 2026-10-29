@@ -25,6 +25,10 @@
 extern int32_t sceKernelSendNotificationRequest(int, void *, size_t, int);
 static atomic_int g_stop;
 static atomic_int rescue_fd = -1; // the device while its system drivers are detached
+// The plug time (USB_GET_PLUGTIME) of the pad last handed back by re-enumerating, 0 none;
+// a replug makes a new device with a new one. plug_unknown: the console would not say.
+static atomic_uint handed_plug;
+static atomic_int plug_unknown;
 static atomic_flag running = ATOMIC_FLAG_INIT;
 static struct {
     ds5_usb_config config;
@@ -75,10 +79,11 @@ static void notify(const char *message)
 
 
 
-static int scan(void)
+// quiet: a look from another thread, not the owner's (no log, no stop).
+static int scan(int quiet)
 {
-    for (int bus = 0; bus < 8 && !g_stop; bus++)
-        for (int unit = 1; unit < 16 && !g_stop; unit++) {
+    for (int bus = 0; bus < 8 && (quiet || !g_stop); bus++)
+        for (int unit = 1; unit < 16 && (quiet || !g_stop); unit++) {
             char path[32];
             snprintf(path, sizeof path, "/dev/ugen%d.%d", bus, unit);
             int fd = open(path, O_RDWR | O_NONBLOCK);
@@ -87,7 +92,8 @@ static int scan(void)
             struct usb_device_descriptor d = {0};
             if (!ioctl(fd, USB_GET_DEVICE_DESC, &d) && UGETW(d.idVendor) == 0x054c &&
                 (UGETW(d.idProduct) == 0x0ce6 || UGETW(d.idProduct) == 0x0df2)) {
-                log_line("selected %s VID:PID %04x:%04x", path, UGETW(d.idVendor), UGETW(d.idProduct));
+                if (!quiet)
+                    log_line("selected %s VID:PID %04x:%04x", path, UGETW(d.idVendor), UGETW(d.idProduct));
                 return fd;
             }
             close(fd);
@@ -300,7 +306,7 @@ static int run_usb(void)
     log_line("gain: mic %02x headphones %02x speaker %02x, Q15 headphone/speaker %u/%u",
              g.config.mic_volume, g.config.headphone_volume, g.config.speaker_volume,
              g.config.headphone_gain_q15, g.config.speaker_gain_q15);
-    fd = scan();
+    fd = scan(0);
     if (fd < 0 || discover(fd, formats, &hid, hid_ep))
         goto cleanup;
     for (unsigned n = 0; n < 2; n++) {
@@ -512,6 +518,12 @@ cleanup:
         log_line("audio released; the console's controller audio returns on replug");
     } else if ((detached || detaching) && fd >= 0) {
         // Also when a detach failed: the pad may have been left detached by a crash before.
+        uint32_t plugged = 0;
+        if (ioctl(fd, USB_GET_PLUGTIME, &plugged)) {
+            log_line("plug time errno %d", errno);
+            atomic_store(&plug_unknown, 1);
+        } else
+            atomic_store(&handed_plug, plugged ? plugged : 1);
         int rc = -1;
         for (int i = 0; i < 3 && rc; i++) {
             int zero = 0;
@@ -546,6 +558,27 @@ void ds5_usb_default_config(ds5_usb_config *config)
 void ds5_usb_request_stop(void)
 {
     atomic_store(&g_stop, 1);
+}
+
+int ds5_usb_replug_state(void)
+{
+    if (atomic_load(&plug_unknown))
+        return 2;
+    const uint32_t handed = atomic_load(&handed_plug);
+    if (!handed)
+        return 0;
+    int fd = scan(1);
+    if (fd < 0)
+        return 0; // not on USB: Go Live will not take it
+    uint32_t now = 0;
+    const int rc = ioctl(fd, USB_GET_PLUGTIME, &now);
+    close(fd);
+    if (rc)
+        return 2;
+    if ((now ? now : 1) == handed)
+        return 1;
+    atomic_store(&handed_plug, 0); // replugged since
+    return 0;
 }
 
 void ds5_usb_rescue(void)
