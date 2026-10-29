@@ -42,6 +42,7 @@
 #define VIDEO_EXT 0
 
 typedef struct {
+    unsigned gen; // the stream_start it serves (see gen below)
     char endpoint[256], token[256], server_id[IDS], user_id[IDS], session_id[64];
     ws_conn ws;
     int udp;
@@ -69,6 +70,9 @@ static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;  // the gateway side be
 static pthread_mutex_t mlock = PTHREAD_MUTEX_INITIALIZER; // conn's shared part, DAVE
 static char state[16] = "off", error[200];
 static int want, running, viewers;
+// Each stream_start is a generation: a connection ending after Go Live was stopped and
+// started again (same key) must not take the new stream down with it.
+static unsigned gen;
 static char guild[IDS], channel[IDS], self[IDS], session[64], key_[160];
 static char rtc_server[IDS], endpoint[256], token[256];
 static cJSON *gw_queue[4];
@@ -133,8 +137,18 @@ static void gw_push(int op, cJSON *d)
     cJSON_AddItemToObject(m, "d", d);
     if (gw_count < 4)
         gw_queue[gw_count++] = m;
-    else
+    else {
+        LOG("stream: gateway queue full, dropped op %d", op);
         cJSON_Delete(m);
+    }
+}
+
+void stream_forget_gateway(void)
+{
+    pthread_mutex_lock(&lock);
+    while (gw_count)
+        cJSON_Delete(gw_queue[--gw_count]);
+    pthread_mutex_unlock(&lock);
 }
 
 int stream_gateway_pending(void)
@@ -180,8 +194,13 @@ static void send_rtp(conn *c, int pt, uint32_t ssrc, uint16_t seq, uint32_t ts, 
         h += 8;
     }
     memcpy(plain + h, p, n);
+    if (c->counter >= 0xFFFF0000u) { // a 32-bit nonce must never repeat (about 24 days of stream)
+        c->dropped++;
+        return;
+    }
     size_t len = voice_gcm_seal(c->key, c->counter++, plain, h + n, out, sizeof out);
-    if (len && send(c->udp, out, len, 0) == (ssize_t)len)
+    // Never wait here: this is Remote Play's video thread, and a full buffer is a lost packet.
+    if (len && send(c->udp, out, len, MSG_DONTWAIT) == (ssize_t)len)
         c->sent_packets++;
     else
         c->dropped++;
@@ -321,6 +340,11 @@ static void on_audio(const uint8_t *opus, size_t n)
             else
                 p = body;
         }
+        // The clock, not the count, so dropped frames do not pull the sound behind the picture;
+        // never less than a frame on, so frames arriving together keep their order.
+        const uint32_t clock = (uint32_t)((mono_ms() - c->t0) * 48);
+        if ((int32_t)(clock - c->ts_a) > 0)
+            c->ts_a = clock;
         if (p) {
             send_rtp(c, PT_OPUS, c->audio_ssrc, c->seq_a++, c->ts_a, 0, 0, p, m);
             c->sent_audio++;
@@ -839,6 +863,8 @@ static int serve(conn *c)
     }
 }
 
+static void connect_locked(void);
+
 static void *stream_main(void *arg)
 {
     conn *c = arg;
@@ -864,17 +890,24 @@ static void *stream_main(void *arg)
                       : code != 0    ? "Lost Discord's stream server."
                                      : NULL;
     pthread_mutex_lock(&lock);
-    if (want) { // ended by itself: take the stream down at Discord too
-        cJSON *d = cJSON_CreateObject();
-        cJSON_AddStringToObject(d, "stream_key", key_);
-        gw_push(19, d);
-        want = 0;
+    const int current = c->gen == gen;
+    if (current) {
+        if (want) { // ended by itself: take the stream down at Discord too
+            cJSON *d = cJSON_CreateObject();
+            cJSON_AddStringToObject(d, "stream_key", key_);
+            gw_push(19, d);
+            want = 0;
+        }
+        rtc_server[0] = endpoint[0] = token[0] = 0;
     }
     running = 0;
-    rtc_server[0] = endpoint[0] = token[0] = 0;
+    if (!current)
+        connect_locked(); // the newer stream's details may have come while this one ended
     pthread_mutex_unlock(&lock);
-    set_state(why ? "error" : "off", why ? why : "");
-    bc_stop(); // the picture has nowhere to go
+    if (current) {
+        set_state(why ? "error" : "off", why ? why : "");
+        bc_stop(); // the picture has nowhere to go
+    }
     if (c->enc)
         daveEncryptorDestroy(c->enc);
     if (c->dave)
@@ -888,11 +921,12 @@ static void *stream_main(void *arg)
 // lock held. Both halves of the server's answer are in: open the connection.
 static void connect_locked(void)
 {
-    if (running || !rtc_server[0] || !endpoint[0] || !token[0])
+    if (running || !want || !rtc_server[0] || !endpoint[0] || !token[0])
         return;
     conn *c = calloc(1, sizeof *c);
     if (!c)
         return;
+    c->gen = gen;
     c->udp = -1;
     c->seq_ack = -1;
     copy(c->endpoint, sizeof c->endpoint, endpoint);
@@ -924,7 +958,9 @@ int stream_start(void)
         return 0;
     }
     want = 1;
+    gen++;
     viewers = 0;
+    rtc_server[0] = endpoint[0] = token[0] = 0; // the last stream's, if its connection still ends
     copy(guild, sizeof guild, g);
     copy(channel, sizeof channel, ch);
     copy(self, sizeof self, me);
@@ -984,6 +1020,12 @@ void stream_on_dispatch(const char *type, cJSON *d)
     } else if (strcmp(type, "STREAM_DELETE") == 0 && !cJSON_IsTrue(cJSON_GetObjectItem(d, "unavailable"))) {
         LOG("stream: Discord ended the stream (%s)", str(d, "reason") ? str(d, "reason") : "?");
         want = 0;
+        if (!running) { // no connection to end it: say so here, and stop the picture
+            pthread_mutex_unlock(&lock);
+            set_state("off", "");
+            bc_stop();
+            return;
+        }
     }
     pthread_mutex_unlock(&lock);
 }

@@ -279,6 +279,11 @@ int main(void)
         }
         if (code == GATEWAY_SWITCH) { // the user on screen changed: their account next
             end_calls();
+            // What end_calls queued for the old account's gateway is gone with it; on the next
+            // account's it would end that account's stream or call.
+            stream_forget_gateway();
+            voice_op4 old;
+            voice_take_request(&old);
             chat_reset();
             status_state("starting");
             continue;

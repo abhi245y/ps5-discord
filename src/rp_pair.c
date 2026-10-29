@@ -184,16 +184,20 @@ static void chiaki_log_cb(ChiakiLogLevel level, const char *msg, void *user)
 }
 
 // The user service, started here: the core does not use it otherwise.
+static void *user_lib_handle;
+
+static void user_lib_open(void)
+{
+    sceUserServiceInitialize(NULL); // already started is fine
+    user_lib_handle = dlopen("libSceUserService.sprx", RTLD_LAZY);
+}
+
+// Once, and a second caller waits for the first (watch_user and a pairing may race here).
 static void *user_lib(void)
 {
-    static void *lib;
-    static int started;
-    if (!started) {
-        started = 1;
-        sceUserServiceInitialize(NULL); // already started is fine
-        lib = dlopen("libSceUserService.sprx", RTLD_LAZY);
-    }
-    return lib;
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    pthread_once(&once, user_lib_open);
+    return user_lib_handle;
 }
 
 int32_t rp_foreground(void)
