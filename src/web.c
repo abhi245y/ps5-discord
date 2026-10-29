@@ -831,9 +831,9 @@ void web_serve(int fd)
         socklen_t plen = sizeof peer;
         int c = accept(fd, (struct sockaddr *)&peer, &plen);
         if (c < 0) {
-            // One failure is a client that gave up, or no descriptors left for a moment
-            // (EMFILE). A run of them is a dead socket: the caller listens again.
-            if (++failures >= 20) {
+            // One failure is a client that gave up; no descriptors left (EMFILE) passes as
+            // requests finish. A run of anything else is a dead socket: the caller listens again.
+            if (errno != EMFILE && errno != ENFILE && ++failures >= 20) {
                 LOG("control: accept keeps failing (errno %d), listening again", errno);
                 return;
             }

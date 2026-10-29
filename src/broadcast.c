@@ -352,8 +352,11 @@ static const char *run(void)
         }
         if (ds5_done)
             pthread_join(usb, NULL);
-        else
+        else {
             pthread_detach(usb);
+            LOG("broadcast: the USB thread is still stuck; Go Live cannot take the controller again "
+                "until the core restarts");
+        }
         holding = 0;
     }
     vau_ext_set(0);

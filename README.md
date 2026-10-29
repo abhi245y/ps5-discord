@@ -28,7 +28,7 @@ Builds on Linux with clang (no llvm-devel needed).
 make deps                        # pinned ps5-payload-sdk, mbedTLS, zlib, cJSON, qrcodegen, SQLite
 make dave                        # OpenSSL + mlspp + libdave into .deps/dave (slow; needs full perl)
 make                             # build/ps5-discord.elf
-make test                        # host self-checks (needs the app's deps: cd app && make deps)
+make test                        # host self-checks
 cd app && make                   # app folder in app/dist/PPSA99072, core bundled (build it first)
 make deploy PS5_HOST=<ps5-ip>    # stop the running copy, send the new one to elfldr (9021)
 make stop PS5_HOST=<ps5-ip>
