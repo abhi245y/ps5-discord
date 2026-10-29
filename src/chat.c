@@ -463,9 +463,8 @@ static void load_ready(cJSON *d)
         cJSON *r = read_state(id);
         set_string(r, "last_read", str(c, "last_message_id"));
         cJSON_DeleteItemFromObject(r, "mentions");
-        const double count = cJSON_GetNumberValue(cJSON_GetObjectItem(c, "mention_count"));
-        cJSON_AddNumberToObject(r, "mentions",
-                               count >= 0 && count <= INT_MAX ? count : 0);
+        const int64_t count = json_int(c, "mention_count", 0);
+        cJSON_AddNumberToObject(r, "mentions", count >= 0 && count <= INT_MAX ? (double)count : 0);
     }
 }
 

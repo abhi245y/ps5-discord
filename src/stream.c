@@ -61,6 +61,7 @@ typedef struct {
     int media_ok, need_idr; // need_idr: viewers start from a keyframe, so P-frames wait
     uint16_t seq_a, seq_v;
     uint32_t ts_a, counter;
+    _Atomic int spent; // the 32-bit GCM nonce is nearly used up: the stream must end
     int64_t t0;
     unsigned sent_frames, sent_packets, sent_audio, dropped;
     char err[200];
@@ -196,6 +197,7 @@ static void send_rtp(conn *c, int pt, uint32_t ssrc, uint16_t seq, uint32_t ts, 
     memcpy(plain + h, p, n);
     if (c->counter >= 0xFFFF0000u) { // a 32-bit nonce must never repeat (about 24 days of stream)
         c->dropped++;
+        c->spent = 1; // serve() ends the stream with a reason
         return;
     }
     size_t len = voice_gcm_seal(c->key, c->counter++, plain, h + n, out, sizeof out);
@@ -824,6 +826,10 @@ static int serve(conn *c)
     for (;;) {
         if (!still_wanted())
             return 0;
+        if (c->spent) {
+            snprintf(c->err, sizeof c->err, "Go Live ran for too long in one go. Start it again.");
+            return -2;
+        }
         int64_t now = mono_ms();
         if (c->next_hb && now >= c->next_hb) {
             if (!c->hb_acked)
