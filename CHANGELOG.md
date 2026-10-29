@@ -62,8 +62,20 @@ All notable changes to this project are documented here. The format follows
 - License: ps5-discord's own code is now AGPL-3.0-or-later (was GPL-3.0-or-later), so
   Remote Play code from chiaki-ng can ship in it. Files from the ps5-homebrew-ui kit keep
   GPL-3.0-or-later. The status page links to the source.
+- Lighter on big accounts: /api/state carries the QR code only while signing in and the
+  log only in development builds; /api/chat answers "not modified" while nothing changed, the
+  app refreshes it at most once a second after events, and the core keeps only the people
+  the app shows (friends, DMs, voice, calls). Core API version 4.
+- Controller audio without Go Live (parked) is left out of the build unless
+  `CONTROLLER_VOICE=1`; the never-built console keyboard reader is removed.
+- Build: `-Wextra` everywhere, our sources build with `-Werror` in the tests, stack
+  protection and format checks in the core and the app; CI runs `make test` on every push.
+  `make deploy` checks that the console then runs the new core.
 
 ### Security
+- The core trusts one pinned set of root certificates (curl's extract of Mozilla's,
+  2026-10-20), the same on every build machine.
+- A sign-in file cut short or holding junk is refused instead of read as an old plain one.
 - The Discord sign-in is stored encrypted to the console (AES-256-GCM, key from the
   console's OpenPSID, the file name authenticated): a copy of the file is no use elsewhere.
   A sign-in saved in the clear by an older build is encrypted on first start.
