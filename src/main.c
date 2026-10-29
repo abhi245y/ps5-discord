@@ -1,6 +1,6 @@
-// ps5-discord core: background payload holding the Discord gateway session.
-// PoC: logs in by QR code (printed to klog), keeps the token in a file,
-// logs session state to klog.
+// ps5-discord core: the background payload that holds the Discord session for the app.
+// Signs in (QR or the console's browser), keeps each console user's sign-in encrypted
+// (browser_storage.c), runs the gateway, calls and Go Live, and serves the app on 9041.
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <pthread.h>

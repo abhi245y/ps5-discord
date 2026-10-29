@@ -993,13 +993,6 @@ void Client::want_image(const std::string &url)
     image_queue_.push_back(url);
 }
 
-std::vector<KeyPress> Client::take_keys()
-{
-    std::lock_guard<std::mutex> lock(mutex_);
-    std::vector<KeyPress> out;
-    out.swap(keys_);
-    return out;
-}
 
 std::vector<Image> Client::take_images()
 {
@@ -1456,13 +1449,6 @@ bool Client::poll_events()
         if (type == "CALL") // a DM call changed: its calls come with the tree
         {
             chat_dirty_ = true;
-            continue;
-        }
-        if (type == "KEY")
-        {
-            keys_.push_back({static_cast<std::uint16_t>(num(ev, "usage", 0.0)),
-                             static_cast<std::uint32_t>(num(ev, "mods", 0.0)),
-                             static_cast<std::uint32_t>(num(ev, "led", 0.0))});
             continue;
         }
         if (type == "MESSAGE_CREATE")

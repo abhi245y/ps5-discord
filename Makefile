@@ -4,7 +4,7 @@
 #   make                          build/ps5-discord.elf (payload)
 #   make deploy PS5_HOST=<ip>     stop the running copy, send the new one to elfldr
 #   make stop PS5_HOST=<ip>       stop the running copy
-#   status UI: http://<ip>:9041
+#   control API: 127.0.0.1:9041 for the app (CORE_LAN=1: the LAN too, for make stop)
 #   make host                     build/host/ps5-discord (runs on Linux, token in ./token)
 #   make test                     host self-checks
 #   make dave                     build libdave (DAVE E2EE) into .deps/dave with tools/dave/build.sh (run on arlp-pc)
@@ -29,8 +29,13 @@ OPUS_INCLUDES := -I$(OPUS)/include -I$(OPUS)/celt -I$(OPUS)/silk -I$(OPUS)/silk/
 
 DS5 := tools/ds5-usb-bridge
 APP_SRC := src/main.c src/log.c src/status.c src/web.c src/chat.c src/gateway.c src/remote_auth.c src/browser_auth.c src/browser_storage.c src/http.c src/props.c src/ws.c src/tls.c src/zstream.c src/ratelimit.c \
-	src/voice.c src/voice_proto.c src/voice_audio.c src/controller_voice.c src/broadcast.c src/rp_pair.c src/prefs.c src/notify.c src/stream.c $(DS5)/pcm_stream.c
-# Controller voice (console only): a loopback Remote Play session (vendored chiaki-ng,
+	src/voice.c src/voice_proto.c src/voice_audio.c src/broadcast.c src/rp_pair.c src/prefs.c src/notify.c src/stream.c $(DS5)/pcm_stream.c
+# Controller audio without Go Live (controller_voice.c) is parked: CONTROLLER_VOICE=1 builds it.
+ifneq ($(CONTROLLER_VOICE),)
+APP_SRC += src/controller_voice.c
+CV_FLAGS := -DCONTROLLER_VOICE
+endif
+# Go Live (console only): a loopback Remote Play session (vendored chiaki-ng,
 # third_party/README.md) and the DualSense USB runtime from tools/ds5-usb-bridge.
 CHIAKI := third_party/chiaki-ng
 CHIAKI_SRC := $(wildcard $(CHIAKI)/src/*.c) $(CHIAKI)/src/remote/rudp.c $(CHIAKI)/src/remote/rudpsendbuffer.c \
@@ -79,8 +84,8 @@ endif
 # The SDK wrappers find LLVM through llvm-config; use the system one if present.
 export LLVM_CONFIG ?= $(or $(shell command -v llvm-config),$(abspath tools/llvm-config))
 PS5_CFLAGS := -std=gnu11 -O2 -Wall $(INCLUDES) $(OPUS_FLAGS) $(PS5_DAVE_INC) -D__unix__ $(CHIAKI_FLAGS) \
-	'-DMBEDTLS_USER_CONFIG_FILE="platform/mbedtls_config_ps5.h"' $(SQLITE_FLAGS)
-HOST_CFLAGS := -std=gnu11 -O1 -g -Wall $(INCLUDES) $(OPUS_FLAGS) $(HOST_DAVE_INC) $(SQLITE_FLAGS) \
+	'-DMBEDTLS_USER_CONFIG_FILE="platform/mbedtls_config_ps5.h"' $(SQLITE_FLAGS) $(CV_FLAGS)
+HOST_CFLAGS := -std=gnu11 -O1 -g -Wall $(INCLUDES) $(OPUS_FLAGS) $(HOST_DAVE_INC) $(SQLITE_FLAGS) $(CV_FLAGS) \
 	'-DMBEDTLS_USER_CONFIG_FILE="platform/mbedtls_config_core.h"'
 # build/build_config.h, rewritten only when it changes (so the files using it rebuild then):
 # - CORE_VERSION: VERSION, or VERSION-dev+g<commit> unless RELEASE=1 (GIT_COMMIT where the

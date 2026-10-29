@@ -21,6 +21,4 @@ int chat_call_active(const char *channel_id);
 // Where a message worth an alert goes (not quiet, not muted), and a ring: who and where,
 // what, the sender's avatar URL, urgent for a ring. main.c: app_alert (notify.h).
 void chat_set_alert(void (*sink)(const char *context, const char *text, const char *icon, int urgent));
-// A key pressed (or repeating) on the console's keyboard: a "KEY" event for the app.
-void chat_key(int usage, int mods, int led);
 char *chat_events_json(long since, int wait_ms); // {"next":N, "events":[...]}; waits up to wait_ms for one; caller frees

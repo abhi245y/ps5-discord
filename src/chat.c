@@ -508,12 +508,7 @@ static void push_event(const char *type, cJSON *d)
     copy(e, d, "id");
     copy(e, d, "channel_id");
     copy(e, d, "guild_id");
-    if (strcmp(type, "KEY") == 0) {
-        copy(e, d, "usage");
-        copy(e, d, "mods");
-        copy(e, d, "led");
-    }
-    else if (strncmp(type, "MESSAGE_REACTION_", 17) == 0) {
+    if (strncmp(type, "MESSAGE_REACTION_", 17) == 0) {
         copy(e, d, "message_id");
         copy(e, d, "user_id");
         cJSON *em = cJSON_GetObjectItem(d, "emoji");
@@ -944,18 +939,6 @@ int chat_call_active(const char *channel_id)
     int on = tree && cJSON_GetObjectItem(cJSON_GetObjectItem(tree, "calls"), channel_id) != NULL;
     pthread_mutex_unlock(&lock);
     return on;
-}
-
-void chat_key(int usage, int mods, int led)
-{
-    cJSON *d = cJSON_CreateObject();
-    cJSON_AddNumberToObject(d, "usage", usage);
-    cJSON_AddNumberToObject(d, "mods", mods);
-    cJSON_AddNumberToObject(d, "led", led);
-    pthread_mutex_lock(&lock);
-    push_event("KEY", d);
-    pthread_mutex_unlock(&lock);
-    cJSON_Delete(d);
 }
 
 static int listed(cJSON *array, const char *id)

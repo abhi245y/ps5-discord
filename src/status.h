@@ -1,4 +1,4 @@
-// Shared session status, written by login/gateway, read by the web UI. Thread-safe.
+// Shared session status, written by login/gateway, read by the app (/api/state). Thread-safe.
 #pragma once
 
 // The control API's version (ROADMAP.md, "Core API version"). Raise it on any

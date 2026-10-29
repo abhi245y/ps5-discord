@@ -812,8 +812,8 @@ static void handle(int c, int local)
     }
 }
 
-// ponytail: one connection at a time; an image fetch (~0.3 s) holds the next request.
-// Threads need mbedTLS threading (shared DRBG) first.
+// A thread per connection, MAX_CONNECTIONS at most (503 past that): an image fetch or a
+// long poll does not hold the others. mbedTLS threading covers the shared DRBG.
 struct conn {
     int c, local;
 };

@@ -52,14 +52,6 @@ int browser_auth_pending(void)
     return value;
 }
 
-int browser_auth_keepalive(void)
-{
-    pthread_mutex_lock(&lock);
-    int value = active || pending || (finished && time(NULL) - finished < 60);
-    pthread_mutex_unlock(&lock);
-    return value;
-}
-
 static int is_cancelled(void)
 {
     pthread_mutex_lock(&lock);

@@ -237,7 +237,7 @@ int remote_auth_login(char *out, size_t cap)
             snprintf(qr_url, sizeof qr_url, QR_PREFIX "%s", fp);
             status_qr(qr_url);
             status_state("login");
-            LOG("remote auth: QR ready, open the web UI on port 9041 or scan below "
+            LOG("remote auth: QR ready, the app shows it; or scan below "
                 "(Discord app: Settings > Scan QR Code)");
             log_qr(qr_url);
         } else if (strcmp(op, "pending_ticket") == 0) {
