@@ -97,6 +97,7 @@ PS5_OBJ = $(patsubst %.c,build/ps5/%.o,$(APP_SRC) $(PS5_ONLY_SRC) $(PS5_DAVE_SRC
 HOST_OBJ = $(patsubst %.c,build/host/%.o,$(APP_SRC) $(HOST_DAVE_SRC) build/ca_bundle.c $(DEP_SRC))
 
 .PHONY: all deps dave host test deploy stop clean release FORCE
+.DEFAULT_GOAL := all
 
 build/build_config.h: FORCE
 	@mkdir -p $(@D)

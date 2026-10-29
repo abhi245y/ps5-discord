@@ -188,11 +188,10 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
         };
     default:
         return {
-            {Kind::value, "Version", "This app.", version.empty() ? "development" : version},
-            {Kind::value, "Core", "The part that keeps you connected.", s.core_version.empty() ? "not running" : s.core_version},
-            {Kind::value, "License", "Free software: you may share and change it.", "AGPL-3.0"},
-            {Kind::value, "Source", "Where the code lives.", "github.com/abhi245y/ps5-discord"},
-            {Kind::value, "Emoji", "Twemoji graphics by Twitter and contributors.", "CC-BY 4.0"},
+            {Kind::value, "Version", "", version.empty() ? "development" : version},
+            {Kind::value, "License", "", "AGPL-3.0"},
+            {Kind::value, "Source", "", "github.com/abhi245y/ps5-discord"},
+            {Kind::value, "Emoji", "", "Twemoji, CC-BY 4.0"},
         };
     }
 }
@@ -695,8 +694,9 @@ void SettingsScreen::draw(const discord::Snapshot &s, const hui::Settings &app, 
             list.rounded_rect(r, kCardRadius, kRaised);
         else
             list.rounded_rect({r.x + 28.0f, r.y + r.h + kRowGap * 0.5f - 1.0f, r.w - 56.0f, 1.0f}, 0.0f, kLine);
-        ui::text(list, ink_.fonts.semibold, row.title, r.x + 28.0f, r.y + 42.0f, 28.0f, kText);
         const std::string desc = row.soon ? "Coming in a later build." : row.desc;
+        const bool alone = desc.empty() && !row.meter; // no line under it: the title sits centred
+        ui::text(list, ink_.fonts.semibold, row.title, r.x + 28.0f, alone ? cy + 10.0f : r.y + 42.0f, 28.0f, kText);
         // The description gets the row's width, less the control at the right.
         const float control = row.kind == Kind::info     ? 0.0f
                               : row.kind == Kind::button ? 260.0f

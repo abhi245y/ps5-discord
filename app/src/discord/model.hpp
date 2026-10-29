@@ -363,7 +363,6 @@ struct Snapshot
 {
     Connection connection = Connection::starting;
     std::string status_message; // why we are starting or reconnecting, for the user
-    std::string core_version;   // the running core's ("0.5.0-alpha.1"), for the About page
     // While signing in: the core's login QR, row-major '1' = dark module.
     std::string login_qr;
     int login_qr_size = 0;
