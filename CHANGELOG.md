@@ -63,8 +63,28 @@ All notable changes to this project are documented here. The format follows
   A sign-in saved in the clear by an older build is encrypted on first start.
 - The core answers only the app on the console: the LAN status page is gone, and nothing
   on the network can reach port 9041 (development builds can open it with `CORE_LAN=1`).
+- Hostile sizes are refused: WebSocket messages and REST replies over 16 MiB, pictures over
+  4096 px a side, GIF stickers over 512x512, Lottie stickers over 1 MiB. The image proxy
+  matches Discord's hosts by suffix and refuses CR, LF or spaces in a URL.
+- During a DAVE group reset nothing is sent until the new group is ready (was: audio
+  without end-to-end encryption for a moment).
 
 ### Fixed
+- Pictures in messages showed their stand-in: Discord's media proxy sends WebP unless asked,
+  and the app reads PNG and JPEG; it now asks for those.
+- A call opens its screen only once connected, with a spinner meanwhile (Circle cancels);
+  Leave goes back only once the call is over. A failed join says why.
+- The app crashed on every start while one of your servers was unavailable at Discord.
+- TLS on several threads at once (pictures loading while a message is sent) could fail or
+  crash: mbedTLS is now built thread-safe.
+- A session Discord ends for good (signed out elsewhere) gives the USB controller back
+  first, and other fatal closes say why instead of spinning.
+- The gateway no longer reconnects every second when Discord closes right after HELLO.
+- Go Live that ends by itself also stops the stream in the call (no frozen picture).
+- The message menu no longer reads past the list when its message is deleted elsewhere.
+- A core started before anyone signs in to the console waits for them, instead of filing
+  the sign-in under no user.
+- `make release` stops when libdave is missing (voice would fail with 4017).
 - Quit waits for Go Live to give the USB controller back before the core exits (up to 30 s,
   was 10 s), and Go Live stopped while Remote Play is connecting no longer takes it.
 - Editing a message with server emoji showed them as raw <:name:id>.

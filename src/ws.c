@@ -63,6 +63,9 @@ static int read_exact(ws_conn *ws, void *dst, size_t len)
     return 0;
 }
 
+// Discord sends READY compressed, a few MB at most.
+#define WS_MAX_MESSAGE ((size_t)16 << 20)
+
 static int msg_reserve(ws_conn *ws, size_t need)
 {
     if (need <= ws->msg_cap)
@@ -174,6 +177,10 @@ int ws_recv(ws_conn *ws, int timeout_ms)
         }
         if (op != 0)
             msg_op = op;
+        if (len > WS_MAX_MESSAGE - ws->msg_len) { // also keeps msg_len + len + 1 from wrapping
+            LOG("ws: message over %zu MiB, dropping the connection", WS_MAX_MESSAGE >> 20);
+            return -1;
+        }
         if (msg_reserve(ws, ws->msg_len + (size_t)len + 1) != 0 ||
             read_exact(ws, ws->msg + ws->msg_len, (size_t)len) != 0)
             return -1;

@@ -1,5 +1,6 @@
 // mbedTLS overrides for the console (MBEDTLS_USER_CONFIG_FILE). Same as spot5.
 #pragma once
+#include "mbedtls_config_core.h"
 // Entropy comes from the kernel CSPRNG (sysctl KERN_ARND), see entropy_ps5.c.
 #define MBEDTLS_NO_PLATFORM_ENTROPY
 #define MBEDTLS_ENTROPY_HARDWARE_ALT

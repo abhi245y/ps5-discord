@@ -80,7 +80,8 @@ endif
 export LLVM_CONFIG ?= $(or $(shell command -v llvm-config),$(abspath tools/llvm-config))
 PS5_CFLAGS := -std=gnu11 -O2 -Wall $(INCLUDES) $(OPUS_FLAGS) $(PS5_DAVE_INC) -D__unix__ $(CHIAKI_FLAGS) \
 	'-DMBEDTLS_USER_CONFIG_FILE="platform/mbedtls_config_ps5.h"' $(SQLITE_FLAGS)
-HOST_CFLAGS := -std=gnu11 -O1 -g -Wall $(INCLUDES) $(OPUS_FLAGS) $(HOST_DAVE_INC) $(SQLITE_FLAGS)
+HOST_CFLAGS := -std=gnu11 -O1 -g -Wall $(INCLUDES) $(OPUS_FLAGS) $(HOST_DAVE_INC) $(SQLITE_FLAGS) \
+	'-DMBEDTLS_USER_CONFIG_FILE="platform/mbedtls_config_core.h"'
 # build/build_config.h, rewritten only when it changes (so the files using it rebuild then):
 # - CORE_VERSION: VERSION, or VERSION-dev+g<commit> unless RELEASE=1 (GIT_COMMIT where the
 #   tree is no checkout, as on the build PC);
@@ -108,6 +109,7 @@ build/ps5/src/main.o build/ps5/src/status.o build/host/src/main.o build/host/src
 # The files of a GitHub release (ROADMAP.md), from a clean tree: the core built for release
 # (no LAN, no -dev), the self-checks, the app with that core inside, and their checksums.
 release:
+	@test -f $(DAVE_PS5)/lib/libdave.a || { echo "release: libdave is missing (voice would fail with 4017): run make dave first"; exit 1; }
 	$(MAKE) clean
 	$(MAKE) RELEASE=1 CORE_LAN=0 all
 	$(MAKE) test

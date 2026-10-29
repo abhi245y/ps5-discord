@@ -10,6 +10,7 @@
 
 #define API_HOST "discord.com"
 #define API_BASE "/api/v9"
+#define HTTP_MAX_REPLY (16 << 20)
 
 // Sends head (and body) over a fresh TLS connection to host and reads the
 // whole reply (HTTP/1.0: no chunking, ends at close).
@@ -30,7 +31,9 @@ static http_response exchange(const char *host, const char *head, size_t head_le
     char *buf = malloc(cap);
     for (int r; buf; len += (size_t)r) {
         if (cap - len < 4096) {
-            char *p = realloc(buf, cap *= 2);
+            char *p = cap < HTTP_MAX_REPLY ? realloc(buf, cap *= 2) : NULL; // no reply grows the core without end
+            if (!p)
+                LOG("http: reply from %s over %d MiB or out of memory", host, HTTP_MAX_REPLY >> 20);
             if (!p) {
                 free(buf);
                 buf = NULL;

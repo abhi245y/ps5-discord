@@ -415,7 +415,9 @@ static void load_ready(cJSON *d)
     int gi = -1;
     cJSON_ArrayForEach(g, cJSON_GetObjectItem(d, "guilds"))
     {
-        ++gi;
+        ++gi; // merged_members follows READY's guild order, unavailable ones included
+        if (cJSON_IsTrue(cJSON_GetObjectItem(g, "unavailable")))
+            continue; // only an id; GUILD_CREATE brings it when it is back
         cJSON_AddItemToArray(guilds, guild_tree(g, me, my_roles_in(d, gi, me)));
     }
 

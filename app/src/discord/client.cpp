@@ -89,6 +89,32 @@ std::string text(const json &j, const char *key)
     return it != j.end() && it->is_string() ? it->get<std::string>() : std::string();
 }
 
+// value() throws on null or a wrong type, and the core writes null for absent keys.
+double num(const json &j, const char *key, double fallback)
+{
+    const auto it = j.find(key);
+    return it != j.end() && it->is_number() ? it->get<double>() : fallback;
+}
+
+bool flag(const json &j, const char *key, bool fallback)
+{
+    const auto it = j.find(key);
+    return it != j.end() && it->is_boolean() ? it->get<bool>() : fallback;
+}
+
+// An exception leaving a thread calls std::terminate: log it and carry on instead.
+template <class F> void guarded(const char *where, F &&f)
+{
+    try
+    {
+        f();
+    }
+    catch (const std::exception &e)
+    {
+        hui::sys::log("[CLIENT] %s: %s", where, e.what());
+    }
+}
+
 // ---- loopback HTTP -----------------------------------------------------------
 
 struct Reply
@@ -184,7 +210,11 @@ Reply http(int port, const char *method, const std::string &path, const std::str
     std::string raw;
     char buf[16384];
     for (ssize_t r; (r = recv(fd, buf, sizeof buf, 0)) > 0;)
+    {
         raw.append(buf, static_cast<std::size_t>(r));
+        if (raw.size() > (16u << 20)) // the core caps its own replies the same
+            return failed(reply, "recv (over 16 MiB)", fd);
+    }
     close(fd);
     const std::size_t split = raw.find("\r\n\r\n");
     if (split == std::string::npos || std::sscanf(raw.c_str(), "HTTP/%*s %d", &reply.status) != 1)
@@ -373,7 +403,7 @@ Message message_from(const json &m, const std::string &me_id)
     out.content = readable(text(m, "content"), m, &out.emojis);
     out.time_ms = snowflake_ms(out.id);
     // Messages without text of their own: say what they are.
-    const int type = static_cast<int>(m.value("type", 0.0));
+    const int type = static_cast<int>(num(m, "type", 0.0));
     if (type == 7)
         out.content = "joined the server. \xF0\x9F\x91\x8B";
     else if (type == 6)
@@ -441,20 +471,22 @@ Message message_from(const json &m, const std::string &me_id)
             if (att.image)
             {
                 // A small preview from the media proxy, and a screen-sized copy at the
-                // picture's own aspect (at most 1760x860) for the full-screen view.
-                const std::string join = att.url.find('?') == std::string::npos ? "?" : "&";
-                const double w = a.value("width", 0.0), h = a.value("height", 0.0);
+                // picture's own aspect (at most 1760x860) for the full-screen view. The proxy
+                // answers in WebP unless told otherwise, which stb_image cannot read: a PNG
+                // preview (sharp text in screenshots), a JPEG full-size copy (a tenth the bytes).
+                const std::string join = (att.url.find('?') == std::string::npos ? "?" : "&") + std::string("format=");
+                const double w = num(a, "width", 0.0), h = num(a, "height", 0.0);
                 if (w > 0 && h > 0)
                 {
                     const double scale = std::min({1.0, 1760.0 / w, 860.0 / h});
-                    att.full_url = att.url + join + "width=" + std::to_string(static_cast<int>(w * scale)) +
+                    att.full_url = att.url + join + "jpeg&width=" + std::to_string(static_cast<int>(w * scale)) +
                                    "&height=" + std::to_string(static_cast<int>(h * scale));
                 }
                 else
-                    att.full_url = att.url + join + "width=1760";
-                att.url += join + "width=440&height=248";
+                    att.full_url = att.url + join + "jpeg&width=1760";
+                att.url += join + "png&width=440&height=248";
             }
-            const double size = a.value("size", 0.0);
+            const double size = num(a, "size", 0.0);
             char sz[32];
             std::snprintf(sz, sizeof sz, size >= 1048576 ? "%.1f MB" : "%.0f KB",
                           size >= 1048576 ? size / 1048576 : size / 1024);
@@ -471,8 +503,8 @@ Message message_from(const json &m, const std::string &me_id)
                 reaction.emoji_id = text(r["emoji"], "id");
                 reaction.emoji = reaction.emoji_id.empty() ? text(r["emoji"], "name") : ":" + text(r["emoji"], "name") + ":";
             }
-            reaction.count = static_cast<int>(r.value("count", 0.0));
-            reaction.me = r.value("me", false);
+            reaction.count = static_cast<int>(num(r, "count", 0.0));
+            reaction.me = flag(r, "me", false);
             if (reaction.count > 0 && !reaction.emoji.empty())
                 out.reactions.push_back(reaction);
         }
@@ -577,7 +609,7 @@ void apply_tree(Snapshot &s, const json &t)
             else if (const std::string splash = text(g, "splash"); !splash.empty())
                 guild.banner_url = "https://cdn.discordapp.com/splashes/" + guild.id + "/" + splash + ".png?size=640";
             guild.art = art_for(guild.id, kSceneArt);
-            guild.members = static_cast<int>(g.value("member_count", 0.0));
+            guild.members = static_cast<int>(num(g, "member_count", 0.0));
             if (g.contains("emojis") && g["emojis"].is_array())
                 for (const json &e : g["emojis"])
                     if (e.is_object() && !text(e, "id").empty())
@@ -611,19 +643,19 @@ void apply_tree(Snapshot &s, const json &t)
                 // category by its position, channels by theirs within it.
                 std::map<std::string, std::pair<double, std::string>> categories;
                 for (const json &c : g["channels"])
-                    if (static_cast<int>(c.value("type", 0.0)) == 4)
-                        categories[text(c, "id")] = {c.value("position", 0.0), text(c, "name")};
+                    if (static_cast<int>(num(c, "type", 0.0)) == 4)
+                        categories[text(c, "id")] = {num(c, "position", 0.0), text(c, "name")};
                 std::vector<std::pair<std::pair<double, double>, Channel>> ordered;
                 for (const json &c : g["channels"])
                 {
-                    const int type = static_cast<int>(c.value("type", 0.0));
+                    const int type = static_cast<int>(num(c, "type", 0.0));
                     if (type == 4) // categories only group channels
                         continue;
                     Channel ch;
                     ch.id = text(c, "id");
                     ch.name = text(c, "name");
                     ch.topic = text(c, "topic");
-                    ch.can_send = c.value("can_send", true);
+                    ch.can_send = flag(c, "can_send", true);
                     ch.kind = type == 5 ? ChannelKind::announcement : ChannelKind::text;
                     const std::string last = text(c, "last_message_id");
                     ch.last_ms = snowflake_ms(last);
@@ -649,7 +681,7 @@ void apply_tree(Snapshot &s, const json &t)
                         conv.mention = mentions > 0;
                         unread.push_back(conv);
                     }
-                    ordered.emplace_back(std::make_pair(category_pos, c.value("position", 0.0)), ch);
+                    ordered.emplace_back(std::make_pair(category_pos, num(c, "position", 0.0)), ch);
                 }
                 std::stable_sort(ordered.begin(), ordered.end(),
                                  [](const auto &a, const auto &b) { return a.first < b.first; });
@@ -744,7 +776,7 @@ void apply_tree(Snapshot &s, const json &t)
                             name += (name.empty() ? "" : ", ") + users[rid.get<std::string>()].name;
             }
             conv.title = name.empty() ? std::string("Direct message") : name;
-            if (static_cast<int>(d.value("type", 1.0)) == 1 && !conv.user_id.empty())
+            if (static_cast<int>(num(d, "type", 1.0)) == 1 && !conv.user_id.empty())
                 s.dm_by_user[conv.user_id] = conv.channel_id;
             const auto [has_unread, mentions] = read_of(conv.channel_id, last);
             conv.unread = has_unread ? std::max(1, mentions) : 0;
@@ -775,7 +807,7 @@ void apply_tree(Snapshot &s, const json &t)
         std::vector<VoiceSeat> &seats = s.seats[channel];
         if (states.is_array())
             for (const json &st : states)
-                seats.push_back({text(st, "user_id"), st.value("self_mute", false), st.value("self_deaf", false)});
+                seats.push_back({text(st, "user_id"), flag(st, "self_mute", false), flag(st, "self_deaf", false)});
     }
     // DM calls going on or ringing; a ring lists the people it still rings.
     s.calls.clear();
@@ -1017,7 +1049,7 @@ void Client::run_images()
     while (!stop_)
     {
         if (ready_)
-            fetch_images();
+            guarded("images", [&] { fetch_images(); });
         usleep(50000);
     }
 }
@@ -1028,38 +1060,40 @@ void Client::run()
     std::int64_t last_state = 0;
     while (!stop_)
     {
-        const std::int64_t now = now_ms();
-        if (now - last_state >= 1000)
-        {
-            poll_state();
-            last_state = now;
-        }
-        if (ready_)
-        {
-            if (now - last_chat_ms_ >= 3000)
-                poll_chat();
-            if (now - last_mentions_ms_ >= 30000)
-                poll_mentions();
-        }
-        // Quick while connected (the core's speaking window is ~300 ms, so rings follow it),
-        // quick while joining, slower otherwise.
-        const std::int64_t voice_every = snapshot_.voice.state == VoiceState::connected ? 250
-                                         : snapshot_.voice.active()                     ? 1000
-                                                                                        : 4000;
-        if (now - last_voice_ms_ >= voice_every)
-            poll_voice();
-        for (;;)
-        {
-            Request request;
+        guarded("client", [&] {
+            const std::int64_t now = now_ms();
+            if (now - last_state >= 1000)
             {
-                std::lock_guard<std::mutex> lock(mutex_);
-                if (queue_.empty())
-                    break;
-                request = queue_.front();
-                queue_.pop_front();
+                poll_state();
+                last_state = now;
             }
-            handle(request);
-        }
+            if (ready_)
+            {
+                if (now - last_chat_ms_ >= 3000)
+                    poll_chat();
+                if (now - last_mentions_ms_ >= 30000)
+                    poll_mentions();
+            }
+            // Quick while connected (the core's speaking window is ~300 ms, so rings follow it),
+            // quick while joining, slower otherwise.
+            const std::int64_t voice_every = snapshot_.voice.state == VoiceState::connected ? 250
+                                             : snapshot_.voice.active()                     ? 1000
+                                                                                            : 4000;
+            if (now - last_voice_ms_ >= voice_every)
+                poll_voice();
+            for (;;)
+            {
+                Request request;
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    if (queue_.empty())
+                        break;
+                    request = queue_.front();
+                    queue_.pop_front();
+                }
+                handle(request);
+            }
+        });
         usleep(250000);
     }
 }
@@ -1083,7 +1117,7 @@ void Client::poll_state()
     const json state = json::parse(reply.body, nullptr, false);
     if (state.is_discarded())
         return;
-    const int api = static_cast<int>(state.value("api_version", 0.0));
+    const int api = static_cast<int>(num(state, "api_version", 0.0));
     if (api < kApiVersionMin || api > kApiVersionMax)
     {
         snapshot_.connection = Connection::starting;
@@ -1095,6 +1129,15 @@ void Client::poll_state()
         return;
     }
     const std::string s = text(state, "state");
+    if (s == "stopped") // Discord ended the session for good: say why, not a spinner
+    {
+        snapshot_.connection = Connection::starting;
+        snapshot_.status_message = text(state, "note").empty() ? "Discord closed the session. Quit and start the app again."
+                                                                : text(state, "note");
+        ready_ = false;
+        publish();
+        return;
+    }
     const Connection before = snapshot_.connection;
     // Signed in before, signing in now: another console user's turn, or signed out. The
     // last account's servers, chats and DMs go.
@@ -1116,7 +1159,7 @@ void Client::poll_state()
     if (s == "browser" || s == "ready") browser_error_.clear();
     snapshot_.login_qr = text(state, "qr");
     snapshot_.login_note = browser_error_.empty() ? text(state, "note") : browser_error_;
-    snapshot_.login_qr_size = static_cast<int>(state.value("qr_size", 0.0));
+    snapshot_.login_qr_size = static_cast<int>(num(state, "qr_size", 0.0));
     snapshot_.status_message.clear();
     const bool was_ready = ready_;
     ready_ = snapshot_.connection == Connection::ready;
@@ -1181,11 +1224,11 @@ void Client::poll_voice()
         voice.state = voice_state_of(text(v, "state"));
         voice.channel_id = text(v, "channel");
         voice.guild_id = text(v, "guild");
-        voice.muted = v.value("mute", false);
-        voice.deafened = v.value("deaf", false);
-        voice.ping_ms = static_cast<int>(v.value("ping_ms", 0.0));
-        voice.secure = v.value("secure", false);
-        voice.since_ms = static_cast<std::int64_t>(v.value("since_ms", 0.0));
+        voice.muted = flag(v, "mute", false);
+        voice.deafened = flag(v, "deaf", false);
+        voice.ping_ms = static_cast<int>(num(v, "ping_ms", 0.0));
+        voice.secure = flag(v, "secure", false);
+        voice.since_ms = static_cast<std::int64_t>(num(v, "since_ms", 0.0));
         voice.error = text(v, "error");
         voice.controller = text(v, "controller");
         voice.output_tv = text(v, "output") != "controller";
@@ -1193,33 +1236,33 @@ void Client::poll_voice()
         {
             voice.broadcast = text(v["broadcast"], "state");
             voice.broadcast_error = text(v["broadcast"], "error");
-            voice.paired = v["broadcast"].value("paired", false);
+            voice.paired = flag(v["broadcast"], "paired", false);
             voice.pair_state = text(v["broadcast"], "pair_state");
             voice.pair_error = text(v["broadcast"], "pair_error");
             voice.pair_console = text(v["broadcast"], "pair_console");
             voice.pair_user = text(v["broadcast"], "pair_user");
-            voice.pair_since = static_cast<std::int64_t>(v["broadcast"].value("pair_since", 0.0));
+            voice.pair_since = static_cast<std::int64_t>(num(v["broadcast"], "pair_since", 0.0));
             voice.rp_use = text(v["broadcast"], "use");
             if (v["broadcast"].contains("users") && v["broadcast"]["users"].is_array())
                 for (const json &u : v["broadcast"]["users"])
                     if (u.is_object())
-                        voice.rp_users.push_back({text(u, "id"), text(u, "name"), u.value("account", false),
-                                                  u.value("paired", false), u.value("on_screen", false),
+                        voice.rp_users.push_back({text(u, "id"), text(u, "name"), flag(u, "account", false),
+                                                  flag(u, "paired", false), flag(u, "on_screen", false),
                                                   text(u, "console"),
-                                                  static_cast<std::int64_t>(u.value("since", 0.0))});
+                                                  static_cast<std::int64_t>(num(u, "since", 0.0))});
         }
         if (v.contains("prefs") && v["prefs"].is_object())
         {
             const json &p = v["prefs"];
             Prefs &prefs = snapshot_.prefs;
-            prefs.golive_quality = std::clamp(static_cast<int>(p.value("golive_quality", 0.0)), 0, 3);
-            prefs.mic_gain = std::clamp(static_cast<int>(p.value("mic_gain", 5.0)), 0, 10);
-            prefs.call_volume = std::clamp(static_cast<int>(p.value("call_volume", 5.0)), 0, 10);
-            prefs.notify_dm = p.value("notify_dm", 1.0) != 0.0;
-            prefs.notify_server = std::clamp(static_cast<int>(p.value("notify_server", 1.0)), 0, 2);
-            prefs.notify_system = p.value("notify_system", 1.0) != 0.0;
-            prefs.notify_live = p.value("notify_live", 0.0) != 0.0;
-            prefs.quiet_hours = std::clamp(static_cast<int>(p.value("quiet_hours", 0.0)), 0, 4);
+            prefs.golive_quality = std::clamp(static_cast<int>(num(p, "golive_quality", 0.0)), 0, 3);
+            prefs.mic_gain = std::clamp(static_cast<int>(num(p, "mic_gain", 5.0)), 0, 10);
+            prefs.call_volume = std::clamp(static_cast<int>(num(p, "call_volume", 5.0)), 0, 10);
+            prefs.notify_dm = num(p, "notify_dm", 1.0) != 0.0;
+            prefs.notify_server = std::clamp(static_cast<int>(num(p, "notify_server", 1.0)), 0, 2);
+            prefs.notify_system = num(p, "notify_system", 1.0) != 0.0;
+            prefs.notify_live = num(p, "notify_live", 0.0) != 0.0;
+            prefs.quiet_hours = std::clamp(static_cast<int>(num(p, "quiet_hours", 0.0)), 0, 4);
         }
         if (v.contains("speaking") && v["speaking"].is_array())
             for (const json &id : v["speaking"])
@@ -1234,7 +1277,9 @@ void Client::run_events()
 {
     while (!stop_)
     {
-        if (!ready_ || !poll_events())
+        bool ok = false;
+        guarded("events", [&] { ok = ready_ && poll_events(); });
+        if (!ok)
             usleep(250000); // not signed in, or the core is away: try again shortly
     }
 }
@@ -1250,7 +1295,7 @@ bool Client::poll_events()
     const json e = json::parse(reply.body, nullptr, false);
     if (e.is_discarded())
         return true;
-    const long next = static_cast<long>(e.value("next", 0.0));
+    const long next = static_cast<long>(num(e, "next", 0.0));
     if (events_next_ < 0) // first contact: start from now, history comes from /api/messages
     {
         events_next_ = next;
@@ -1271,9 +1316,9 @@ bool Client::poll_events()
         }
         if (type == "KEY")
         {
-            keys_.push_back({static_cast<std::uint16_t>(ev.value("usage", 0.0)),
-                             static_cast<std::uint32_t>(ev.value("mods", 0.0)),
-                             static_cast<std::uint32_t>(ev.value("led", 0.0))});
+            keys_.push_back({static_cast<std::uint16_t>(num(ev, "usage", 0.0)),
+                             static_cast<std::uint32_t>(num(ev, "mods", 0.0)),
+                             static_cast<std::uint32_t>(num(ev, "led", 0.0))});
             continue;
         }
         if (type == "MESSAGE_CREATE")
@@ -1283,7 +1328,7 @@ bool Client::poll_events()
             // (the PS5's alert shows it), nor one older than a few seconds (a backlog).
             const Message m = message_from(ev, snapshot_.me.id);
             const std::string guild = text(ev, "guild_id");
-            const int kind = static_cast<int>(ev.value("notify", 0.0));
+            const int kind = static_cast<int>(num(ev, "notify", 0.0));
             if (kind > 0 && g_front && (m.time_ms == 0 || now_ms() - m.time_ms < 15000)) // else the PS5 alert
             {
                 Notice n;
@@ -1292,7 +1337,7 @@ bool Client::poll_events()
                 n.channel_id = channel;
                 n.kind = kind;
                 n.for_me = kind >= 2;
-                n.quiet = ev.value("quiet", false);
+                n.quiet = flag(ev, "quiet", false);
                 n.author = ev.contains("author") && ev["author"].is_object() ? user_from(ev["author"]) : User{};
                 n.title = n.author.name;
                 for (const Guild &g : snapshot_.guilds)
@@ -1458,7 +1503,7 @@ void Client::handle(const Request &request)
                 if (p.contains("stickers") && p["stickers"].is_array())
                     for (const json &st : p["stickers"])
                         pack.stickers.push_back({text(st, "id"), text(st, "name"),
-                                                 static_cast<int>(st.value("format_type", 1.0))});
+                                                 static_cast<int>(num(st, "format_type", 1.0))});
                 if (!pack.stickers.empty())
                     packs.push_back(std::move(pack));
             }
@@ -1490,7 +1535,7 @@ void Client::handle(const Request &request)
         const json r = json::parse(reply.body, nullptr, false);
         if (reply.status != 200 || r.is_discarded() || !r.contains("body") || !r["body"].is_array())
         {
-            const int discord_status = r.is_discarded() ? 0 : static_cast<int>(r.value("status", 0.0));
+            const int discord_status = r.is_discarded() ? 0 : static_cast<int>(num(r, "status", 0.0));
             hui::sys::log("[CLIENT] history for %s failed (%d/%d)", request.channel_id.c_str(), reply.status,
                           discord_status);
             std::lock_guard<std::mutex> lock(mutex_);
@@ -1536,7 +1581,7 @@ void Client::handle(const Request &request)
             body["sticker"] = request.sticker_id;
         const Reply reply = http(port_, "POST", "/api/send", body.dump());
         const json r = json::parse(reply.body, nullptr, false);
-        const int discord_status = r.is_discarded() ? 0 : static_cast<int>(r.value("status", 0.0));
+        const int discord_status = r.is_discarded() ? 0 : static_cast<int>(num(r, "status", 0.0));
         if (reply.status != 200 || discord_status < 200 || discord_status >= 300)
         {
             hui::sys::log("[CLIENT] send to %s failed (%d/%d)", request.channel_id.c_str(), reply.status,
@@ -1568,7 +1613,7 @@ void Client::handle(const Request &request)
         const Reply reply = http(port_, "POST", request.kind == Request::Kind::edit ? "/api/edit" : "/api/delete",
                                  body.dump());
         const json r = json::parse(reply.body, nullptr, false);
-        const int discord_status = r.is_discarded() ? 0 : static_cast<int>(r.value("status", 0.0));
+        const int discord_status = r.is_discarded() ? 0 : static_cast<int>(num(r, "status", 0.0));
         if (reply.status != 200 || discord_status < 200 || discord_status >= 300)
             hui::sys::log("[CLIENT] %s failed (%d/%d)", request.kind == Request::Kind::edit ? "edit" : "delete",
                           reply.status, discord_status);
