@@ -39,11 +39,9 @@ using hui::Action;
 using hui::Direction;
 
 constexpr float kRight = 1920.0f - kMargin;
-constexpr float kWidth = kRight - kMargin;
 constexpr float kHeaderY = 34.0f;
 constexpr float kHeaderH = 68.0f;
-constexpr float kChipsY = 112.0f;
-constexpr float kChipH = 54.0f;
+constexpr float kTop = 150.0f; // the history's top, under the header
 constexpr float kComposerY = 916.0f;
 constexpr float kComposerH = 76.0f;
 constexpr float kListBottom = kComposerY - 14.0f;
@@ -324,6 +322,33 @@ void Chat::open_picker(const discord::Snapshot &s, PickFor pick_for, std::vector
     mode_ = Mode::emoji;
 }
 
+float Chat::left() const
+{
+    return dm() ? kMargin : kListX + kListW + 30.0f;
+}
+
+// The channel list follows the open channel while the chat has the focus, and keeps its
+// focused row in view.
+void Chat::follow_list(const discord::Snapshot &s, float dt)
+{
+    const std::vector<const discord::Channel *> all = chips(s);
+    const int n = static_cast<int>(all.size());
+    if (mode_ != Mode::channels)
+        for (int i = 0; i < n; ++i)
+            if (all[static_cast<std::size_t>(i)]->id == channel_id_)
+                list_index_ = i;
+    if (list_index_ < n)
+    {
+        const bool call = s.voice.active();
+        const float row_y = list_tops(all)[static_cast<std::size_t>(list_index_)];
+        if (row_y - list_scroll_.target < 34.0f) // room above for its category heading
+            list_scroll_.target = std::max(0.0f, row_y - 34.0f);
+        if (row_y + 54.0f - list_scroll_.target > list_view(call))
+            list_scroll_.target = row_y + 54.0f - list_view(call);
+    }
+    list_scroll_.update(dt, 16.0f);
+}
+
 bool Chat::can_send(const discord::Snapshot &s) const
 {
     for (const discord::Channel *c : chips(s))
@@ -362,7 +387,7 @@ void Chat::open(const discord::Snapshot &s, const std::string &guild_id, const s
 float Chat::row_height(const discord::Snapshot &s, int index, bool grouped) const
 {
     const discord::Message &m = messages(s)[static_cast<std::size_t>(index)];
-    const float width = dm() ? kDmBubbleW - 48.0f : kWidth - kAvatarCol - 40.0f;
+    const float width = dm() ? kDmBubbleW - 48.0f : kRight - left() - kAvatarCol - 40.0f;
     float h = grouped ? kPadGrouped : kPadTop;
     if (!grouped)
         h += kNameLine;
@@ -415,7 +440,7 @@ std::pair<float, float> Chat::focus_range(const Row &row) const
 {
     // Scroll values that keep a row in view. A row taller than the view
     // swaps the ends: it then fills the view, and Up/Down read through it.
-    const float top_edge = (dm() ? 170.0f : kChipsY + kChipH + 16.0f) + 10.0f;
+    const float top_edge = kTop + 30.0f;
     const float base = kListBottom - row.bottom - row.height;
     const float a = top_edge - base;
     const float b = kListBottom - row.height - base;
@@ -500,13 +525,15 @@ float Chat::bubble_fit(const discord::Snapshot &s, const discord::Message &m, fl
 Rect Chat::row_rect(const Row &row) const
 {
     const float y = kListBottom - row.bottom - row.height + scroll_.value;
-    return {kMargin - 16.0f, y, kWidth + 32.0f, row.height};
+    return {left() - 16.0f, y, kRight - left() + 32.0f, row.height};
 }
 
 bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, float dt, hui::ui::Feedback &feedback,
                   std::vector<discord::Request> &requests)
 {
     size_note_ = std::max(0.0f, size_note_ - dt);
+    if (!dm())
+        follow_list(s, dt);
     const std::vector<discord::Message> &ms = messages(s);
     const int count = static_cast<int>(ms.size());
     // An older page landed above: keep the focus on the same message.
@@ -765,13 +792,14 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
             list_index_ = std::max(0, n - 1);
         else if (list_index_ >= n && (input.nav == Direction::left || input.nav == Direction::right))
             list_index_ = std::clamp(list_index_ + (input.nav == Direction::right ? 1 : -1), n, last);
-        if (input.nav != Direction::none && list_index_ == before)
+        const bool leaving = input.nav == Direction::right && before < n;
+        if (input.nav != Direction::none && list_index_ == before && !leaving)
             feedback.play(hui::audio::Cue::error, 1.0f, 0.0f, 0.5f);
-        else if (input.nav != Direction::none)
+        else if (input.nav != Direction::none && !leaving)
             feedback.play(hui::audio::Cue::focus, 1.0f + 0.01f * static_cast<float>(list_index_ % 8));
         if (input.is_pressed(Action::confirm) && list_index_ < n)
         {
-            open(s, guild_id_, all[static_cast<std::size_t>(list_index_)]->id, requests);
+            open(s, guild_id_, all[static_cast<std::size_t>(list_index_)]->id, requests); // back to the chat
             feedback.play(hui::audio::Cue::open);
         }
         else if (input.is_pressed(Action::confirm) && call)
@@ -791,21 +819,12 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
             mode_ = Mode::browse; // closed first, so coming back finds the chat
             voice_ = true;
         }
-        else if (input.is_pressed(Action::back) || input.is_pressed(Action::menu))
+        else if (input.is_pressed(Action::back) || input.is_pressed(Action::menu) ||
+                 (input.nav == Direction::right && list_index_ < n)) // back to the chat
         {
             mode_ = Mode::browse;
-            feedback.play(hui::audio::Cue::modal_close);
+            feedback.play(hui::audio::Cue::back);
         }
-        // Keep the focused row inside the card, with room above it for its category heading.
-        if (list_index_ < n)
-        {
-            const float row_y = list_tops(all)[static_cast<std::size_t>(list_index_)];
-            if (row_y - list_scroll_.target < 34.0f)
-                list_scroll_.target = std::max(0.0f, row_y - 34.0f);
-            if (row_y + 54.0f - list_scroll_.target > list_view(call))
-                list_scroll_.target = row_y + 54.0f - list_view(call);
-        }
-        list_scroll_.update(dt, 16.0f);
         return true;
     }
 
@@ -950,19 +969,10 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
         feedback.play(hui::audio::Cue::toggle);
         return true;
     }
-    if (!dm() && input.is_pressed(Action::menu))
+    if (!dm() && (input.is_pressed(Action::menu) || input.nav == Direction::left)) // to the channel list
     {
-        const std::vector<const discord::Channel *> all = chips(s);
-        list_index_ = 0;
-        for (int i = 0; i < static_cast<int>(all.size()); ++i)
-            if (all[static_cast<std::size_t>(i)]->id == channel_id_)
-                list_index_ = i;
-        const std::vector<float> tops = list_tops(all);
-        list_scroll_.snap(tops.empty() ? 0.0f
-                                       : std::max(0.0f, tops[static_cast<std::size_t>(list_index_)] -
-                                                            list_view(s.voice.active()) * 0.5f));
-        mode_ = Mode::channels;
-        feedback.play(hui::audio::Cue::modal_open);
+        mode_ = Mode::channels; // from the open channel (follow_list)
+        feedback.play(hui::audio::Cue::focus);
         return true;
     }
     if (input.is_pressed(Action::back))
@@ -989,12 +999,12 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
         return true;
     }
     // A message taller than the view: Up/Down scroll through it first.
-    const float view_step = (kListBottom - kChipsY - kChipH) * 0.6f;
+    const float view_step = (kListBottom - kTop) * 0.6f;
     std::pair<float, float> range;
     if (focus_ >= 0 && focus_ < count && (input.nav == Direction::up || input.nav == Direction::down))
     {
         const Row row = layout(s)[static_cast<std::size_t>(focus_)];
-        if (row.height > kListBottom - kChipsY - kChipH - 26.0f) // a short row: Up/Down move the focus
+        if (row.height > kListBottom - kTop - 26.0f) // a short row: Up/Down move the focus
             range = focus_range(row);
         else
             range = {scroll_.target, scroll_.target};
@@ -1105,57 +1115,11 @@ void Chat::draw_header(const discord::Snapshot &s, DrawList &list) const
     for (const discord::Channel *c : chips(s))
         if (c->id == channel_id_)
             channel_name = c->name;
-    float x = kMargin;
+    float x = left();
     x += ui::text(list, ink_.fonts.display, g ? g->name : std::string(), x, 78.0f, 52.0f, kText);
     x += ui::text(list, ink_.fonts.display, "  /  ", x, 78.0f, 52.0f, kFaint);
     ui::text(list, ink_.fonts.display, "#" + channel_name, x, 78.0f, 52.0f, Color::rgb(0xb9bfdc));
     voice_dock(list, ink_, s, kHeaderY, kHeaderH, kRight);
-
-    constexpr float kChipGap = 16.0f;
-    // Channel chips: the run starts late enough that the open channel is in it.
-    const std::vector<const discord::Channel *> all = chips(s);
-    std::vector<float> widths;
-    std::size_t current = 0;
-    for (std::size_t i = 0; i < all.size(); ++i)
-    {
-        const discord::Channel *c = all[i];
-        const float badge = c->unread > 0 ? ink_.fonts.semibold.measure(count_text(c->unread), 22.0f) + 46.0f : 0.0f;
-        widths.push_back(ink_.fonts.semibold.measure(c->name, 26.0f) + 96.0f + badge + kChipGap);
-        if (c->id == channel_id_)
-            current = i;
-    }
-    std::size_t first = 0;
-    const auto run = [&](std::size_t from) {
-        float w = 0.0f;
-        for (std::size_t i = from; i <= current && i < widths.size(); ++i)
-            w += widths[i];
-        return w;
-    };
-    while (first < current && run(first) + 92.0f > kRight - kMargin)
-        ++first;
-    float cx = kMargin;
-    for (std::size_t i = first; i < all.size(); ++i)
-    {
-        const discord::Channel *c = all[i];
-        const float w = widths[i] - kChipGap;
-        if (cx + w + (i + 1 < all.size() ? 92.0f : 0.0f) > kRight)
-        {
-            list.rounded_rect({cx, kChipsY, 92.0f, kChipH}, 16.0f, kRaised);
-            ui::text(list, ink_.fonts.semibold, "+" + std::to_string(all.size() - i), cx + 46.0f, kChipsY + 41.0f, 26.0f,
-                     kText, gfx::Align::center);
-            break;
-        }
-        const bool on = c->id == channel_id_;
-        const Rect r{cx, kChipsY, w, kChipH};
-        list.rounded_rect(r, 16.0f, on ? kRaisedHigh : kRaised);
-        ui::text(list, ink_.fonts.semibold, "#", r.x + 26.0f, r.y + 42.0f, 30.0f, on ? kText : kFaint);
-        ui::text(list, ink_.fonts.semibold, c->name, r.x + 58.0f, r.y + 41.0f, 26.0f, on ? kText : kDim);
-        if (c->unread > 0)
-            count_badge(list, ink_, c->unread, r.x + r.w - 22.0f, r.cy(), 36.0f);
-        if (on)
-            list.rounded_rect({r.x + 22.0f, r.y + r.h - 5.0f, r.w - 44.0f, 4.0f}, 2.0f, kCoral);
-        cx += w + kChipGap;
-    }
 }
 
 void Chat::draw_message(const discord::Snapshot &s, DrawList &list, const Row &row, const Rect &r, bool focused) const
@@ -1173,8 +1137,8 @@ void Chat::draw_message(const discord::Snapshot &s, DrawList &list, const Row &r
     }
 
     // Geometry of the content column.
-    float text_x = kMargin + kAvatarCol;
-    float width = kWidth - kAvatarCol - 40.0f;
+    float text_x = left() + kAvatarCol;
+    float width = kRight - left() - kAvatarCol - 40.0f;
     float y = r.y + (row.grouped ? kPadGrouped : kPadTop);
     Rect bubble{};
     if (dm())
@@ -1201,7 +1165,7 @@ void Chat::draw_message(const discord::Snapshot &s, DrawList &list, const Row &r
 
     if (!row.grouped)
     {
-        const float acx = dm() && mine ? kRight - 52.0f : kMargin + 52.0f;
+        const float acx = dm() && mine ? kRight - 52.0f : left() + 52.0f;
         if (const discord::User *u = author_of(s, m))
         {
             discord::User face = *u;
@@ -1348,7 +1312,7 @@ void Chat::draw_message(const discord::Snapshot &s, DrawList &list, const Row &r
 
 void Chat::draw_composer(const discord::Snapshot &s, DrawList &list) const
 {
-    const Rect bar{kMargin, kComposerY, kWidth, kComposerH};
+    const Rect bar{left(), kComposerY, kRight - left(), kComposerH};
     if (!can_send(s))
     {
         list.rounded_rect(bar, 22.0f, Color::rgb(0x1d2026));
@@ -1406,7 +1370,7 @@ void Chat::draw_composer(const discord::Snapshot &s, DrawList &list) const
     ui::draw_hints(list, ink_.fonts, glyphs, draft ? draft_hints : type_hint, draft ? 2 : 1, bar.x + bar.w - 30.0f,
                    true, layout);
 
-    if (focus_ < 0)
+    if (focus_ < 0 && mode_ != Mode::channels)
         focus_outline(list, bar, 22.0f, 1.0f);
 
     // The message being answered, above the bar.
@@ -1546,7 +1510,7 @@ void Chat::draw_image(const discord::Snapshot &s, DrawList &list) const
 void Chat::draw(const discord::Snapshot &s, DrawList &list) const
 {
     list.rounded_rect({0, 0, 1920, 1080}, 0.0f, kGround);
-    const float top = dm() ? 150.0f : kChipsY + kChipH + 10.0f;
+    const float top = kTop;
     list.push_clip({0, top, 1920, kListBottom - top + 4.0f});
     const std::vector<Row> rows = layout(s);
     Rect focused_rect{};
@@ -1555,7 +1519,7 @@ void Chat::draw(const discord::Snapshot &s, DrawList &list) const
         const Rect r = row_rect(row);
         if (r.y > kListBottom || r.y + r.h < top)
             continue;
-        const bool focused = row.index == focus_;
+        const bool focused = row.index == focus_ && mode_ != Mode::channels;
         if (focused)
             focused_rect = r;
         draw_message(s, list, row, r, focused);
@@ -1572,7 +1536,7 @@ void Chat::draw(const discord::Snapshot &s, DrawList &list) const
                     name = "#" + c->name;
             const bool start = s.history_start.count(channel_id_) > 0;
             ui::text(list, ink_.fonts.regular, start ? "This is the start of " + name + "." : "Loading older messages…",
-                     kMargin + kAvatarCol, first.y - 22.0f, 22.0f, kFaint);
+                     left() + kAvatarCol, first.y - 22.0f, 22.0f, kFaint);
         }
     }
     if (rows.empty())
@@ -1581,7 +1545,7 @@ void Chat::draw(const discord::Snapshot &s, DrawList &list) const
                  : s.load_failed.count(channel_id_) ? "Couldn't load messages. Switch channels to try again."
                  : s.messages.count(channel_id_) == 0 ? "Loading messages…"
                                                       : "No messages yet. Say hi.",
-                 960.0f,
+                 (left() + kRight) * 0.5f,
                  520.0f, 30.0f, kDim, gfx::Align::center);
     list.pop_clip();
     // Header after the list so scrolled history slides under it, fading out.
@@ -1589,20 +1553,34 @@ void Chat::draw(const discord::Snapshot &s, DrawList &list) const
     list.gradient_rect({0, top, 1920, 56.0f}, 0.0f, kGround, kGround.with_alpha(0.0f));
     draw_header(s, list);
     draw_composer(s, list);
+    if (!dm())
+        draw_channel_list(s, list);
     if (focus_ >= 0)
         draw_actions(s, list, focused_rect);
 
     ui::Hint hints[7] = {{ui::Button::cross, "Select"}, {ui::Button::circle, "Back"}, {ui::Button::triangle, "Type"},
                          {ui::Button::right_stick, "Text size"}, {}};
     int count = 4;
-    if (can_send(s))
-        hints[count++] = {ui::Button::left_stick, "Emoji"};
-    if (!dm())
-        hints[count++] = {ui::Button::options, "Channels"};
-    if (dm())
-        hints[count++] = {ui::Button::square, s.voice.active() && s.voice.channel_id == channel_id_ ? "In call" : "Call"};
-    else if (s.voice.active())
-        hints[count++] = {ui::Button::square, "Voice"};
+    if (mode_ == Mode::channels) // the list has the focus
+    {
+        const bool dock = list_index_ >= static_cast<int>(chips(s).size());
+        hints[0] = {ui::Button::cross, dock ? "Select" : "Open"};
+        hints[1] = {ui::Button::circle, "Back to chat"};
+        count = 2;
+        if (s.voice.active())
+            hints[count++] = {ui::Button::square, "Voice room"};
+    }
+    else
+    {
+        if (can_send(s))
+            hints[count++] = {ui::Button::left_stick, "Emoji"};
+        if (!dm())
+            hints[count++] = {ui::Button::options, "Channels"};
+        if (dm())
+            hints[count++] = {ui::Button::square, s.voice.active() && s.voice.channel_id == channel_id_ ? "In call" : "Call"};
+        else if (s.voice.active())
+            hints[count++] = {ui::Button::square, "Voice"};
+    }
     ui::HintLayout layout;
     layout.size = 34.0f;
     layout.text_size = 23.0f;
@@ -1619,8 +1597,6 @@ void Chat::draw(const discord::Snapshot &s, DrawList &list) const
     }
     if (mode_ == Mode::image)
         draw_image(s, list);
-    if (mode_ == Mode::channels)
-        draw_channel_list(s, list);
     if (mode_ == Mode::profile)
         if (const discord::User *u = dm_person(s))
         {
@@ -1662,7 +1638,6 @@ void Chat::draw(const discord::Snapshot &s, DrawList &list) const
 // Every channel of the server, under its categories (Options in a server).
 void Chat::draw_channel_list(const discord::Snapshot &s, DrawList &list) const
 {
-    list.rounded_rect({0, 0, 1920, 1080}, 0.0f, Color::rgb(0x0d0e12, 0.55f));
     const discord::Voice &v = s.voice;
     const bool call = v.active();
     const Rect card = channel_card(call);
@@ -1698,10 +1673,12 @@ void Chat::draw_channel_list(const discord::Snapshot &s, DrawList &list) const
         const Rect r{card.x + 12.0f, y + 2.0f, card.w - 24.0f, 48.0f};
         const bool on = c.id == channel_id_;
         const bool hot = i == list_index_;
-        if (hot)
+        if (hot) // the open channel, or the focus while the list has it
         {
-            list.rounded_rect(r, 12.0f, kCoral.with_alpha(0.16f));
+            list.rounded_rect(r, 12.0f, kCoral.with_alpha(mode_ == Mode::channels ? 0.16f : 0.08f));
             list.rounded_rect({r.x, r.y, 5.0f, r.h}, 2.5f, kCoral);
+            if (mode_ == Mode::channels)
+                focus_outline(list, r, 12.0f, 1.0f);
         }
         const bool lit = on || hot || c.has_unread || c.unread > 0;
         ui::text(list, ink_.fonts.semibold, "#", r.x + 22.0f, r.cy() + 9.0f, 26.0f, hot ? kText : kFaint);
@@ -1773,17 +1750,6 @@ void Chat::draw_channel_list(const discord::Snapshot &s, DrawList &list) const
                 focus_outline(list, {cx - 42.0f, cy - 42.0f, 84.0f, 84.0f}, 42.0f, 1.0f);
         }
     }
-
-    ui::Hint hints[3] = {{ui::Button::cross, list_index_ < static_cast<int>(all.size()) ? "Open" : "Select"},
-                         {ui::Button::circle, "Close"}};
-    int count = 2;
-    if (call)
-        hints[count++] = {ui::Button::square, "Voice room"};
-    ui::HintLayout layout;
-    layout.size = 30.0f;
-    layout.text_size = 22.0f;
-    layout.cy = kHintsBaseline;
-    ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints, count, kListX + 8.0f, false, layout); // under the card
 }
 
 } // namespace screens
