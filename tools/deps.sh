@@ -45,4 +45,9 @@ fetch https://www.sqlite.org/2025/sqlite-amalgamation-3500400.zip \
     "$deps/sqlite-amalgamation-3500400.zip"
 [[ -d $deps/src/sqlite-amalgamation-3500400 ]] || unzip -q "$deps/sqlite-amalgamation-3500400.zip" -d "$deps/src"
 
+# nlohmann/json, the app's pin (app/tools/build-deps.sh): for the host test of its JSON reading.
+mkdir -p "$deps/src/nlohmann"
+fetch https://github.com/nlohmann/json/releases/download/v3.11.3/json.hpp \
+    9bea4c8066ef4a1c206b2be5a36302f8926f7fdc6087af5d20b417d0cf103ea6 "$deps/src/nlohmann/json.hpp"
+
 echo "deps ready in $deps"

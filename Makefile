@@ -169,7 +169,7 @@ build/host/dave-test: tests/dave_session.c tests/dave/external_sender.cpp tests/
 
 build/host/client-read-state-test: tests/client_read_state.cpp app/src/discord/read_state.hpp
 	@mkdir -p $(@D)
-	$(CXX) -std=c++17 -Wall -Wextra -Iapp/src -isystem app/.deps/src -o $@ $<
+	$(CXX) -std=c++17 -Wall -Wextra -Iapp/src -isystem .deps/src -o $@ $<
 
 build/host/gif-frames-test: tests/gif_frames.cpp app/src/discord/gif.hpp
 	@mkdir -p $(@D)
@@ -182,7 +182,7 @@ build/host/browser-storage-test: tests/browser_storage.c src/browser_storage.c $
 build/host/selftest: tests/selftest.c src/ws.c src/tls.c src/zstream.c src/log.c src/status.c src/chat.c src/ratelimit.c \
 		src/voice.c src/voice_proto.c src/voice_audio.c src/prefs.c src/notify.c $(DS5)/pcm_stream.c $(OPUS_SRC) $(HOST_DAVE_SRC) \
 		$(CJSON)/cJSON.c $(QRGEN)/qrcodegen.c $(ZLIB_SRC) \
-		$(ZLIB)/deflate.c $(ZLIB)/trees.c $(wildcard $(MBED)/library/*.c) build/ca_bundle.c
+		$(ZLIB)/deflate.c $(ZLIB)/trees.c $(wildcard $(MBED)/library/*.c) build/ca_bundle.c | build/build_config.h
 	@mkdir -p $(@D)
 	@echo "  LD    $@"
 	@$(HOST_CC) $(HOST_CFLAGS) -w -o $@ $^ $(HOST_DAVE_LINK)

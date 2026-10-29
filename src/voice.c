@@ -163,6 +163,8 @@ static void maybe_start_locked(void)
 void voice_set_self(const char *user_id)
 {
     pthread_mutex_lock(&lock);
+    if (strcmp(self_id, user_id ? user_id : "") != 0)
+        listed[0] = 0; // another account: where Discord listed the last one is not ours
     copy(self_id, sizeof self_id, user_id);
     pthread_mutex_unlock(&lock);
 }
