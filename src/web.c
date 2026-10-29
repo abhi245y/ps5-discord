@@ -32,8 +32,6 @@
 #include <ps5/kernel.h>
 #endif
 
-extern const unsigned char web_index_html[];
-extern const size_t web_index_html_len;
 
 static void reply(int c, const char *status, const char *type, const void *body, size_t len)
 {
@@ -709,9 +707,7 @@ static void handle(int c, int local)
         return;
     }
 
-    if (get && strcmp(path, "/") == 0) {
-        reply(c, "200 OK", "text/html; charset=utf-8", web_index_html, web_index_html_len - 1);
-    } else if (get && strcmp(path, "/api/state") == 0) {
+    if (get && strcmp(path, "/api/state") == 0) {
         reply_json(c, status_json());
     } else if (post && strcmp(path, "/api/browser-login") == 0) {
         if (browser_auth_request() == 0)

@@ -184,9 +184,8 @@ static int claim_instance(void)
 {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons(CONTROL_PORT)};
-    // ponytail: open to the LAN for the PoC web UI; no auth, shows no secrets.
-    // Loopback-only (or authenticated) once it carries app IPC.
-    a.sin_addr.s_addr = htonl(INADDR_ANY);
+    // The app on this console only; a development build (CORE_LAN) lets the LAN in too.
+    a.sin_addr.s_addr = htonl(CORE_LAN ? INADDR_ANY : INADDR_LOOPBACK);
     int one = 1; // a just-stopped instance leaves TIME_WAIT behind; a live one still blocks bind
     if (fd >= 0)
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);

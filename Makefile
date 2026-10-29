@@ -81,9 +81,15 @@ export LLVM_CONFIG ?= $(or $(shell command -v llvm-config),$(abspath tools/llvm-
 PS5_CFLAGS := -std=gnu11 -O2 -Wall $(INCLUDES) $(OPUS_FLAGS) $(PS5_DAVE_INC) -D__unix__ $(CHIAKI_FLAGS) \
 	'-DMBEDTLS_USER_CONFIG_FILE="platform/mbedtls_config_ps5.h"' $(SQLITE_FLAGS)
 HOST_CFLAGS := -std=gnu11 -O1 -g -Wall $(INCLUDES) $(OPUS_FLAGS) $(HOST_DAVE_INC) $(SQLITE_FLAGS)
+# The core answers only the app on the console. CORE_LAN=1 (development: make stop, the
+# deploy's restart) also lets the LAN read /api/state and POST /api/quit. Switching it needs
+# a rebuild of src/main.c (make clean, or touch it).
+CORE_LAN ?= 0
+PS5_CFLAGS += -DCORE_LAN=$(CORE_LAN)
+HOST_CFLAGS += -DCORE_LAN=$(CORE_LAN)
 
-PS5_OBJ = $(patsubst %.c,build/ps5/%.o,$(APP_SRC) $(PS5_ONLY_SRC) $(PS5_DAVE_SRC) src/platform/entropy_ps5.c build/ca_bundle.c build/web_index.c $(DEP_SRC))
-HOST_OBJ = $(patsubst %.c,build/host/%.o,$(APP_SRC) $(HOST_DAVE_SRC) build/ca_bundle.c build/web_index.c $(DEP_SRC))
+PS5_OBJ = $(patsubst %.c,build/ps5/%.o,$(APP_SRC) $(PS5_ONLY_SRC) $(PS5_DAVE_SRC) src/platform/entropy_ps5.c build/ca_bundle.c $(DEP_SRC))
+HOST_OBJ = $(patsubst %.c,build/host/%.o,$(APP_SRC) $(HOST_DAVE_SRC) build/ca_bundle.c $(DEP_SRC))
 
 .PHONY: all deps dave host test deploy stop clean
 all: build/ps5-discord.elf
@@ -98,10 +104,6 @@ dave:
 build/ca_bundle.c: $(CA_PEM) tools/embed.py
 	@mkdir -p $(@D)
 	@python3 tools/embed.py $< $@ ca_bundle_pem
-
-build/web_index.c: web/index.html tools/embed.py
-	@mkdir -p $(@D)
-	@python3 tools/embed.py $< $@ web_index_html
 
 build/ps5-discord.elf: $(PS5_OBJ)
 	@echo "  LD    $@"
