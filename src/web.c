@@ -409,22 +409,40 @@ static void api_voice_join(int c, const char *body)
 
 // Join a DM call: {channel}. With no call running, rings the other side first (answer is the
 // same: the ring is already on, so no new ring is sent).
+// Rings the others once we are in the call (arg: the channel, freed here). Discord rings
+// only for a call its caller is in: rung before the join, nobody saw it (the official
+// client joins, then rings).
+static void *ring_when_joined(void *arg)
+{
+    char *channel = arg, g[32], ch[32], me[32], sess[64];
+    for (int i = 0; i < 150 && voice_wanted(); i++) { // 15 s, while the call is still wanted
+        if (voice_current(g, ch, me, sess) && strcmp(ch, channel) == 0) {
+            char path[96];
+            snprintf(path, sizeof path, "/channels/%s/call/ring", channel);
+            http_response res = rest("POST", path, "{\"recipients\":null}");
+            LOG("voice: ringing the call in %s: Discord answered %d", channel, res.status);
+            free(res.body);
+            break;
+        }
+        usleep(100000);
+    }
+    free(channel);
+    return NULL;
+}
+
 static void api_voice_call(int c, const char *body)
 {
     cJSON *in = cJSON_Parse(body ? body : "");
     const char *channel = body_channel(c, in);
-    if (channel && !chat_call_active(channel)) {
-        char path[96];
-        snprintf(path, sizeof path, "/channels/%s/call/ring", channel);
-        http_response res = rest("POST", path, "{\"recipients\":null}");
-        free(res.body);
-        if (res.status < 200 || res.status > 299) {
-            refuse(c, "409 Conflict", "Discord would not ring that call.");
-            channel = NULL;
-        }
-    }
     if (channel) {
+        const int ring = !chat_call_active(channel); // a call already there (they rang us): join it
         voice_join(NULL, channel);
+        pthread_t t;
+        char *arg = ring ? strdup(channel) : NULL;
+        if (arg && pthread_create(&t, NULL, ring_when_joined, arg) == 0)
+            pthread_detach(t);
+        else
+            free(arg);
         reply_ok(c);
     }
     cJSON_Delete(in);
