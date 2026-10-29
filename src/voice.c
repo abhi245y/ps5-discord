@@ -298,6 +298,8 @@ int voice_take_request(voice_op4 *out)
     int due = op4_due;
     if (due)
         *out = op4;
+    if (due && state == V_JOINING)
+        joined_ms = mono_ms(); // the join timeout counts from when Discord gets it, not from the queue
     op4_due = 0;
     pthread_mutex_unlock(&lock);
     return due;

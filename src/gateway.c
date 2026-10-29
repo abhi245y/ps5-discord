@@ -340,8 +340,12 @@ static int send_voice_state(gateway *g, const voice_op4 *v)
 // Called on the gateway thread between reads.
 static int send_pending(gateway *g)
 {
+    // Only once Discord took this connection (READY or RESUMED): anything sent before the
+    // resume is answered with 4003 and lost with the connection. It waits in its queue.
+    if (!g->ready)
+        return 0;
     voice_op4 v;
-    if (g->session_id[0] && voice_take_request(&v)) {
+    if (voice_take_request(&v)) {
         if (v.leave_first) { // otherwise a join of the channel Discord has us in brings no reply
             voice_op4 leave = {.mute = v.mute, .deaf = v.deaf};
             if (send_voice_state(g, &leave) != 0)
@@ -351,7 +355,7 @@ static int send_pending(gateway *g)
             return -1;
     }
     cJSON *op;
-    while (g->session_id[0] && (op = stream_take_gateway()))
+    while ((op = stream_take_gateway()))
         if (send_json(g, op) != 0) // Go Live ops 18, 22, 19
             return -1;
     char guild[32];
@@ -359,7 +363,7 @@ static int send_pending(gateway *g)
     snprintf(guild, sizeof guild, "%s", pending_subscribe);
     pending_subscribe[0] = 0;
     pthread_mutex_unlock(&pending_lock);
-    if (!guild[0] || !g->session_id[0])
+    if (!guild[0])
         return 0;
     cJSON *sub = cJSON_CreateObject(), *subs = cJSON_AddObjectToObject(sub, "subscriptions");
     cJSON *opts = cJSON_AddObjectToObject(subs, guild);
