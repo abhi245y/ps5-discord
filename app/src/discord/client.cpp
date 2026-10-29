@@ -1222,6 +1222,7 @@ void Client::poll_state()
         prefetched_ = false;
         last_voice_ms_ = 0;
         been_ready_ = false;
+        open_ = Request{};
         ++account_;
     }
     if (s == "ready")
@@ -1279,6 +1280,7 @@ void Client::poll_chat()
             prefetched_ = false;
             events_next_ = -1;
             last_voice_ms_ = 0;
+            open_ = Request{};
             ++account_;
         }
         next = snapshot_;

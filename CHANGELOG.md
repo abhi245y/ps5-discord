@@ -70,6 +70,18 @@ All notable changes to this project are documented here. The format follows
   without end-to-end encryption for a moment).
 
 ### Fixed
+- Chats: after a long game (events missed) or a core restart the chats reload; a channel
+  reopened keeps what arrived meanwhile; a send with no answer in time waits for its echo
+  instead of showing twice; a message that never reached Discord can be deleted; focus stays
+  on its message when the list changes; mention counts include @everyone and roles, and
+  every DM message; a DM is listed once and group DMs appear when created.
+- Pictures: a failed one is retried after 10 s, and the app keeps them within 256 MB (the
+  least recently shown go first); the sticker picker frees its previews when it closes.
+- Voice: calls of up to 99 people; a new DAVE epoch takes effect when Discord executes it;
+  a join is never left hanging with the app closed.
+- Go Live: stopping and starting again at once keeps the new stream; the sound no longer
+  drifts from the picture over a long stream; one failed USB transfer no longer ends it, and
+  the controller is re-enumerated (or you are told to replug it) whenever it was detached.
 - Calls survive a network drop: a short one resumes, and the call's audio socket (which the
   console aborts with the network) is replaced, so sound comes back both ways; a long one
   rejoins the call once Discord is back. Losing the network no longer counts against the
