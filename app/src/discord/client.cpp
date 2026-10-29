@@ -89,6 +89,12 @@ std::string text(const json &j, const char *key)
     return it != j.end() && it->is_string() ? it->get<std::string>() : std::string();
 }
 
+// Snowflakes as decimal strings: the longer one, or the larger at equal length, is newer.
+bool newer_id(const std::string &a, const std::string &b)
+{
+    return a.size() != b.size() ? a.size() > b.size() : a > b;
+}
+
 // value() throws on null or a wrong type, and the core writes null for absent keys.
 double num(const json &j, const char *key, double fallback)
 {
@@ -1059,7 +1065,7 @@ void Client::fetch_images()
             else
                 image.w = image.h = 0;
         }
-        if (image.rgba.empty()) // shown as its stand-in for good: say why
+        if (image.rgba.empty()) // its stand-in shows until the app asks again (10 s on): say why
             hui::sys::log("[CLIENT] image failed (%d, %zu bytes, starts %.8s): %s", reply.status, reply.body.size(),
                           reply.body.c_str(), image.url.c_str());
         std::lock_guard<std::mutex> lock(mutex_);
@@ -1216,6 +1222,8 @@ void Client::poll_state()
         prefetched_ = false;
         last_voice_ms_ = 0;
         been_ready_ = false;
+        open_ = Request{};
+        ++account_;
     }
     if (s == "ready")
         snapshot_.connection = Connection::ready;
@@ -1272,14 +1280,26 @@ void Client::poll_chat()
             prefetched_ = false;
             events_next_ = -1;
             last_voice_ms_ = 0;
+            open_ = Request{};
+            ++account_;
         }
         next = snapshot_;
     }
     apply_tree(next, tree);
     refresh_mentions(next);
     std::lock_guard<std::mutex> lock(mutex_);
+    // What the events thread changed meanwhile is newer than the copy: carry it over.
     next.messages = std::move(snapshot_.messages);
+    next.notices = std::move(snapshot_.notices);
+    next.history_start = std::move(snapshot_.history_start);
+    next.load_failed = std::move(snapshot_.load_failed);
     snapshot_ = std::move(next);
+    for (auto &[channel, list] : snapshot_.messages) // sends that never heard back
+        if (std::any_of(list->begin(), list->end(),
+                        [](const Message &m) { return m.pending && now_ms() - m.time_ms > 60000; }))
+            for (Message &m : edit_messages(snapshot_, channel))
+                if (m.pending && now_ms() - m.time_ms > 60000)
+                    m.pending = false, m.failed = true;
     if (!prefetched_)
     {
         // Warm the conversations people open first, so they show at once.
@@ -1377,6 +1397,7 @@ void Client::run_events()
 bool Client::poll_events()
 {
     const std::string wait = events_next_ < 0 ? "0" : "6"; // under the 8 s socket timeout
+    const unsigned account = account_; // a batch asked for by the last account is not this one's
     const Reply reply =
         http(port_, "GET", "/api/events?since=" + std::to_string(std::max(0L, events_next_.load())) + "&wait=" + wait);
     if (reply.status != 200)
@@ -1384,16 +1405,36 @@ bool Client::poll_events()
     const json e = json::parse(reply.body, nullptr, false);
     if (e.is_discarded())
         return true;
+    if (account != account_) // the account was reset while this poll waited
+        return true;
     const long next = static_cast<long>(num(e, "next", 0.0));
     if (events_next_ < 0) // first contact: start from now, history comes from /api/messages
     {
         events_next_ = next;
         return true;
     }
+    // Events were missed (the app sat suspended in a game past the core's ring), or a new
+    // core counts from 0 again: every loaded history may lack messages. Load them afresh.
+    if (flag(e, "gap", false) || next < events_next_)
+    {
+        events_next_ = next;
+        std::lock_guard<std::mutex> lock(mutex_);
+        hui::sys::log("[CLIENT] events missed: reloading the chats");
+        snapshot_.messages.clear();
+        snapshot_.history_start.clear();
+        snapshot_.load_failed.clear();
+        last_chat_ms_ = 0;
+        if (!open_.channel_id.empty())
+            queue_.push_back(open_);
+        publish();
+        return true;
+    }
     events_next_ = next;
     if (!e.contains("events") || e["events"].empty())
         return true;
     std::lock_guard<std::mutex> lock(mutex_);
+    if (account != account_)
+        return true;
     for (const json &ev : e["events"])
     {
         const std::string type = text(ev, "t");
@@ -1620,6 +1661,11 @@ void Client::handle(const Request &request)
                 return;
             path += "&before=" + oldest;
         }
+        if (request.kind == Request::Kind::open_channel)
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            open_ = request; // the chat on screen, reloaded when events were missed
+        }
         const Reply reply = http(port_, "GET", path);
         const json r = json::parse(reply.body, nullptr, false);
         if (reply.status != 200 || r.is_discarded() || !r.contains("body") || !r["body"].is_array())
@@ -1654,7 +1700,16 @@ void Client::handle(const Request &request)
             if (request.kind == Request::Kind::load_older)
                 ms.insert(ms.begin(), page.begin(), page.end());
             else
-                ms = page;
+            {
+                // What arrived while the page was on its way (newer than its newest), and our
+                // own sends still pending, stay after it.
+                std::vector<Message> later;
+                for (const Message &m : ms)
+                    if (m.pending || newer_id(m.id, newest))
+                        later.push_back(m);
+                ms = std::move(page);
+                ms.insert(ms.end(), later.begin(), later.end());
+            }
             publish();
         }
         // Opening a channel reads it.
@@ -1671,7 +1726,12 @@ void Client::handle(const Request &request)
         const Reply reply = http(port_, "POST", "/api/send", body.dump());
         const json r = json::parse(reply.body, nullptr, false);
         const int discord_status = r.is_discarded() ? 0 : static_cast<int>(num(r, "status", 0.0));
-        if (reply.status != 200 || discord_status < 200 || discord_status >= 300)
+        // No answer in time (the core may be waiting out a rate limit): it may still go out,
+        // and its echo replaces the row. Only a refusal is "not sent" now; a row that never
+        // hears back is, after a minute (poll_chat).
+        if (reply.status <= 0)
+            hui::sys::log("[CLIENT] send to %s: no answer yet, waiting for the echo", request.channel_id.c_str());
+        else if (reply.status != 200 || discord_status < 200 || discord_status >= 300)
         {
             hui::sys::log("[CLIENT] send to %s failed (%d/%d)", request.channel_id.c_str(), reply.status,
                           discord_status);
@@ -1696,6 +1756,19 @@ void Client::handle(const Request &request)
     }
     case Request::Kind::edit:
     case Request::Kind::remove: {
+        if (request.message_id.rfind("pending-", 0) == 0) // never reached Discord: ours alone
+        {
+            if (request.kind == Request::Kind::remove)
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                std::vector<Message> &ms = edit_messages(snapshot_, request.channel_id);
+                ms.erase(std::remove_if(ms.begin(), ms.end(),
+                                        [&](const Message &m) { return m.id == request.message_id; }),
+                         ms.end());
+                publish();
+            }
+            break;
+        }
         json body{{"channel", request.channel_id}, {"message", request.message_id}};
         if (request.kind == Request::Kind::edit)
             body["content"] = request.content;

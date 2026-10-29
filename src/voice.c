@@ -1,4 +1,5 @@
 #include "voice.h"
+#include "json_num.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -27,7 +28,7 @@
 // so it does not count against MAX_RESUMES; the call waits up to UNREACHABLE_MS for it.
 #define VOICE_UNREACHABLE -4
 #define UNREACHABLE_MS (10 * 60 * 1000)
-#define MAX_USERS 64
+#define MAX_USERS 99 // a voice channel's limit
 #define IDS 32
 
 enum vstate { V_IDLE, V_JOINING, V_CONNECTING, V_SECURING, V_CONNECTED, V_ERROR };
@@ -52,6 +53,7 @@ typedef struct {
     uint8_t ext_sender[512]; // op 25, sent once per call: a reset session needs it again
     size_t ext_sender_len;
     char users[MAX_USERS][IDS]; // who is in the call, for DAVE
+    int readds;                 // op 31 re-add requests in a row
     int n_users;
     char err[256];
 } vthread;
@@ -100,7 +102,7 @@ static const char *str(cJSON *o, const char *key)
 
 static int64_t num(cJSON *o, const char *key)
 {
-    return (int64_t)cJSON_GetNumberValue(cJSON_GetObjectItem(o, key));
+    return json_int(o, key, 0);
 }
 
 // Lock held. Replaces the current connection: its thread exits without reporting.
@@ -142,6 +144,8 @@ static void set_state_locked(enum vstate s)
         since_ms = 0;
     if (s == V_JOINING && state != V_JOINING)
         joined_ms = mono_ms(); // the join timeout counts from entering this state
+    if (s == V_IDLE || s == V_ERROR)
+        secure = ping_ms = 0; // the next call starts without the last one's
     state = s;
 }
 
@@ -327,7 +331,8 @@ void voice_on_state(cJSON *d)
         const char *sid = str(d, "session_id"), *gid = str(d, "guild_id");
         if (strcmp(channel, cid) != 0 || strcmp(session_id, sid ? sid : "") != 0) {
             stop_locked();
-            token[0] = endpoint[0] = 0; // server details belong to the old call
+            if (session_id[0]) // server details of the old call; on a first join Discord may
+                token[0] = endpoint[0] = 0; // send the server update first, and it is ours
             copy(session_id, sizeof session_id, sid);
             if (state != V_ERROR)
                 set_state_locked(V_JOINING);
@@ -366,11 +371,11 @@ void voice_on_server(cJSON *d)
     pthread_mutex_unlock(&lock);
 }
 
-char *voice_state_json(void)
+// Lock held: a join Discord did not confirm in time ends (or, for a switch, keeps the call).
+static void join_timeout_locked(void)
 {
-    char ids[8][VAU_ID];
-    int ns = vau_speaking(ids, 8); // before our lock: the engine never takes ours
-    pthread_mutex_lock(&lock);
+    if (op4_due) // not sent yet (the gateway is reconnecting): the wait starts when it goes
+        return;
     if (state == V_JOINING && mono_ms() - joined_ms > JOIN_TIMEOUT_MS && cur && channel[0]) {
         // A switch Discord never confirmed: we are still in the old channel, so stay there.
         LOG("voice: the switch was not confirmed, staying in the call");
@@ -385,6 +390,21 @@ char *voice_state_json(void)
         queue_leave_locked();
         set_state_locked(V_ERROR);
     }
+}
+
+void voice_tick(void)
+{
+    pthread_mutex_lock(&lock);
+    join_timeout_locked();
+    pthread_mutex_unlock(&lock);
+}
+
+char *voice_state_json(void)
+{
+    char ids[8][VAU_ID];
+    int ns = vau_speaking(ids, 8); // before our lock: the engine never takes ours
+    pthread_mutex_lock(&lock);
+    join_timeout_locked();
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "state", state_names[state]);
     cJSON_AddStringToObject(o, "channel", channel[0] ? channel : want_channel);
@@ -617,7 +637,7 @@ static int on_session(vthread *t, cJSON *d)
     if (cJSON_GetArraySize(k) != 32)
         return fatal(t, "The voice server sent a bad encryption key.");
     for (int i = 0; i < 32; i++)
-        t->key[i] = (uint8_t)cJSON_GetNumberValue(cJSON_GetArrayItem(k, i));
+        t->key[i] = (uint8_t)json_item_int(cJSON_GetArrayItem(k, i), 0);
     dave_start(t, (int)num(d, "dave_protocol_version"));
     attach_audio(t);
     LOG("voice: session up, DAVE version %d", t->dave_version);
@@ -742,14 +762,22 @@ static void dave_commit_or_welcome(vthread *t, int op, const uint8_t *p, size_t 
     }
     LOG("voice: DAVE %s %s, transition %lld", op == 29 ? "commit" : "welcome", failed ? "failed" : "ok",
         (long long)tid);
-    if (failed) { // ask for a re-add
-        send_json(t, voice_json_transition(31, tid));
+    if (failed) { // ask for a re-add, a few times: a roster we cannot match fails every time
+        if (++t->readds <= 3)
+            send_json(t, voice_json_transition(31, tid));
+        else
+            LOG("voice: DAVE keeps failing, no more re-adds (nothing is sent until a group forms)");
         return;
     }
+    t->readds = 0;
+    int first = !t->dave_ready;
+    t->dave_ready = 1;
     if (tid)
         send_json(t, voice_json_transition(23, tid));
-    t->dave_ready = 1;
-    update_state(t);
+    // The new epoch's keys are used once Discord executes the transition (op 22, which updates
+    // the state); a transition 0 or our first group takes effect now.
+    if (!tid || first)
+        update_state(t);
 }
 
 // Binary frame from the server: [seq][op][payload].
@@ -791,7 +819,7 @@ static int on_text(vthread *t, const char *json)
         return 0;
     if (cJSON_IsNumber(cJSON_GetObjectItem(m, "seq")))
         t->seq_ack = num(m, "seq");
-    int op = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(m, "op"));
+    int op = (int)json_int(m, "op", 0);
     cJSON *d = cJSON_GetObjectItem(m, "d");
     int r = 0;
     switch (op) {

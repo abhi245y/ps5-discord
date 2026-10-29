@@ -1,4 +1,5 @@
 #include "gateway.h"
+#include "json_num.h"
 
 #include <pthread.h>
 #include <stdint.h>
@@ -165,7 +166,7 @@ static int on_message(gateway *g, const char *json)
     cJSON *m = cJSON_Parse(json);
     if (!m)
         return LOG("gateway: bad json"), -1;
-    int op = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(m, "op"));
+    int op = (int)json_int(m, "op", 0);
     cJSON *s = cJSON_GetObjectItem(m, "s"), *d = cJSON_GetObjectItem(m, "d");
     if (cJSON_IsNumber(s))
         g->seq = (int64_t)s->valuedouble;
@@ -173,7 +174,7 @@ static int on_message(gateway *g, const char *json)
     int r = 0;
     switch (op) {
     case OP_HELLO:
-        g->heartbeat_ms = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(d, "heartbeat_interval"));
+        g->heartbeat_ms = (int)json_int(d, "heartbeat_interval", 0);
         g->next_heartbeat = now_ms() + (int64_t)(g->heartbeat_ms * (rand() / (RAND_MAX + 1.0)));
         g->acked = 1;
         LOG("gateway: HELLO, heartbeat %d ms", g->heartbeat_ms);
@@ -273,6 +274,7 @@ static int run_connection(gateway *g)
             g->next_heartbeat += g->heartbeat_ms;
             continue;
         }
+        voice_tick();
         if (send_pending(g) != 0) {
             result = -1;
             break;

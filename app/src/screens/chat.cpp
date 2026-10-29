@@ -131,6 +131,11 @@ bool has_image(const discord::Message &m)
 std::vector<Action_> actions_for(const discord::Message &m, bool mine)
 {
     std::vector<Action_> a;
+    if (m.pending || m.failed) // not at Discord (yet): only taking it off the list makes sense
+    {
+        a.push_back({Act::remove, ui::Button::none, "Delete"});
+        return a;
+    }
     if (has_image(m))
         a.push_back({Act::view, ui::Button::none, "View image"});
     a.push_back({Act::reply, ui::Button::cross, "Reply"});
@@ -536,16 +541,23 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
         follow_list(s, dt);
     const std::vector<discord::Message> &ms = messages(s);
     const int count = static_cast<int>(ms.size());
-    // An older page landed above: keep the focus on the same message.
-    if (count > 0 && !front_id_.empty() && ms.front().id != front_id_ && focus_ >= 0)
-        for (int i = 0; i < count; ++i)
-            if (ms[static_cast<std::size_t>(i)].id == front_id_)
-            {
-                focus_ += i;
-                break;
-            }
-    front_id_ = count > 0 ? ms.front().id : std::string();
+    // The list changed under the focus (an older page above, a message deleted elsewhere):
+    // keep it on the same message, found by id. Moved since last frame: that is the user's.
+    const auto at = [&](int i) { return ms[static_cast<std::size_t>(i)].id; };
+    if (focus_ >= 0 && focus_ == focus_at_ && !focus_id_.empty() && (focus_ >= count || at(focus_) != focus_id_))
+    {
+        int found = -1;
+        for (int i = 0; i < count && found < 0; ++i)
+            if (at(i) == focus_id_)
+                found = i;
+        if (found >= 0)
+            focus_ = found;
+        else if (mode_ == Mode::actions) // its message is gone: so is its menu
+            mode_ = Mode::browse;
+    }
     focus_ = std::min(focus_, count - 1);
+    focus_at_ = focus_;
+    focus_id_ = focus_ >= 0 ? at(focus_) : std::string();
     // Near the top of what is loaded: fetch the page above before it is needed.
     if (focus_ >= 0 && focus_ < 8 && count > 0 && !s.history_start.count(channel_id_) &&
         older_asked_for_ != ms.front().id)
@@ -706,7 +718,7 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
             reply_to_ = fm.id;
             start_typing(s, feedback);
         }
-        else if (mine && (chosen(Act::edit) || input.is_pressed(Action::north)))
+        else if (mine && !fm.pending && !fm.failed && (chosen(Act::edit) || input.is_pressed(Action::north)))
         {
             // Edit: the keyboard opens on the message's text; the draft waits.
             editing_id_ = fm.id;
@@ -953,7 +965,9 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
         r.guild_id = guild_id_;
         r.channel_id = channel_id_;
         r.content = typed;
-        r.reply_to = reply_to_;
+        // A reply to a message deleted meanwhile goes out as a plain message.
+        if (std::any_of(ms.begin(), ms.end(), [&](const discord::Message &m) { return m.id == reply_to_; }))
+            r.reply_to = reply_to_;
         requests.push_back(r);
         keys_.clear();
         reply_to_.clear();

@@ -116,7 +116,8 @@ class Chat
     std::string channel_id_;
     Mode mode_ = Mode::browse;
     int focus_ = -1;  // focused message index; -1 is the composer
-    std::string front_id_;        // oldest loaded message last frame: an older page shifts focus
+    std::string focus_id_;        // the focused message last frame, and its index: a changed list
+    int focus_at_ = -1;           // keeps the focus on it
     std::string editing_id_;      // the own message the keyboard is rewriting
     std::string draft_before_edit_;
     bool delete_armed_ = false;   // Delete pressed once: the next press deletes

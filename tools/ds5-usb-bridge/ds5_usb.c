@@ -274,9 +274,15 @@ static int complete_one(int fd, unsigned *slot)
     if (ioctl(fd, USB_FS_COMPLETE, &complete))
         return errno == EBUSY || errno == EINTR ? 0 : -1;
     *slot = complete.ep_index;
-    if (*slot >= SLOTS || !g.busy[*slot] || g.eps[*slot].status) {
-        log_line("bad completion slot %u status %d", *slot, *slot < SLOTS ? g.eps[*slot].status : -1);
+    if (*slot >= SLOTS || !g.busy[*slot]) {
+        log_line("bad completion slot %u", *slot);
         return -1;
+    }
+    if (g.eps[*slot].status) { // one failed transfer: the caller may drop it and go on
+        log_line("transfer error slot %u status %d", *slot, g.eps[*slot].status);
+        g.busy[*slot] = 0;
+        g.last[*slot] = now_ms();
+        return 2;
     }
     g.busy[*slot] = 0;
     g.last[*slot] = now_ms();
@@ -285,7 +291,7 @@ static int complete_one(int fd, unsigned *slot)
 
 static int run_usb(void)
 {
-    int fd = -1, result = 1, detached = 0, initialized = 0, hid = -1;
+    int fd = -1, result = 1, detached = 0, initialized = 0, hid = -1, detaching = 0;
     unsigned changed = 0, opened = 0;
     struct ds5_mic_format formats[2];
     struct usb_alt_interface old[2];
@@ -302,6 +308,7 @@ static int run_usb(void)
         if (ioctl(fd, USB_GET_ALTINTERFACE, &old[n]))
             goto cleanup;
     }
+    detaching = 1; // from here a failure may leave the pad detached (or find it so after a crash)
     if (formats[0].control_index != 255) {
         int parent = formats[0].control_index;
         int active = ioctl(fd, USB_IFACE_DRIVER_ACTIVE, &parent);
@@ -361,7 +368,7 @@ static int run_usb(void)
     while (!g.config.audio_only && g.initial && !g_stop && now_ms() < deadline) {
         unsigned slot;
         int rc = complete_one(fd, &slot);
-        if (rc < 0 || (rc && slot != HID_IN))
+        if (rc < 0 || rc == 2 || (rc && slot != HID_IN))
             goto cleanup;
         if (rc)
             process_hid();
@@ -374,7 +381,7 @@ static int run_usb(void)
     while (g.busy[HID_OUT] && !g_stop && now_ms() < deadline) {
         unsigned slot;
         int rc = complete_one(fd, &slot);
-        if (rc < 0 || (rc && slot != HID_OUT))
+        if (rc < 0 || rc == 2 || (rc && slot != HID_OUT))
             goto cleanup;
         if (rc) {
             if (g.eps[HID_OUT].aFrames != 1 || g.lengths[HID_OUT][0] != 63)
@@ -392,7 +399,8 @@ static int run_usb(void)
         goto cleanup;
     notify(g.muted ? "DS5 USB audio connected. Mic is muted; use mute button to enable."
                    : "DS5 USB audio connected. Headphone handoff active.");
-    uint64_t start = now_ms(), last_log = start;
+    uint64_t start = now_ms(), last_log = start, err_since = start;
+    unsigned errors = 0;
     for (unsigned slot = 0; slot < SLOTS; slot++)
         g.last[slot] = start;
     if ((!g.config.audio_only && submit(fd, HID_IN)) || submit(fd, 0) || submit(fd, 1) ||
@@ -410,6 +418,17 @@ static int run_usb(void)
         int rc = complete_one(fd, &slot);
         if (rc < 0)
             goto cleanup;
+        if (rc == 2) { // a failed transfer: drop that frame and resubmit, up to 5 a second
+            if (now_ms() - err_since >= 1000)
+                err_since = now_ms(), errors = 0;
+            if (++errors > 5)
+                goto cleanup;
+            if (slot < 2 || slot == HID_IN ? submit(fd, slot) : slot < 4 ? submit_output(fd, slot) : 0)
+                goto cleanup;
+            if (slot == HID_OUT)
+                g.route_dirty = 1; // submit_route sends it again
+            continue;
+        }
         if (!rc) {
             usleep(1000);
         } else if (slot < 2) {
@@ -491,19 +510,26 @@ cleanup:
         // ponytail: the console's audio driver stays off this controller until it is
         // replugged; re-enumerating would disconnect the buttons too (press PS).
         log_line("audio released; the console's controller audio returns on replug");
-    } else if (detached) {
-        int zero = 0;
-        int rc = ioctl(fd, USB_DEVICEENUMERATE, &zero);
-        log_line("re-enumerate rc %d errno %d", rc, rc ? errno : 0);
+    } else if ((detached || detaching) && fd >= 0) {
+        // Also when a detach failed: the pad may have been left detached by a crash before.
+        int rc = -1;
+        for (int i = 0; i < 3 && rc; i++) {
+            int zero = 0;
+            if (i)
+                usleep(200000);
+            rc = ioctl(fd, USB_DEVICEENUMERATE, &zero);
+            log_line("re-enumerate rc %d errno %d", rc, rc ? errno : 0);
+        }
         if (rc)
-            result = 1;
+            result = 2; // says replug below
     }
     atomic_store(&rescue_fd, -1);
     if (fd >= 0)
         close(fd);
     if (!g.config.audio_only)
-        notify(result ? "DS5 USB audio stopped with an error. Press PS to reconnect."
-                      : "DS5 USB audio released. Press PS to reconnect controller.");
+        notify(result == 2 ? "The controller did not come back. Unplug it and plug it in again."
+               : result ? "DS5 USB audio stopped with an error. Press PS to reconnect."
+                        : "DS5 USB audio released. Press PS to reconnect controller.");
     log_line("done: result %d", result);
     return result ? DS5_USB_ERROR : DS5_USB_OK;
 }

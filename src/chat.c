@@ -1,4 +1,5 @@
 #include "chat.h"
+#include "json_num.h"
 #include "log.h"
 #include "notify.h"
 #include "prefs.h"
@@ -89,7 +90,7 @@ static void set_presence(const char *user_id, const char *status, cJSON *activit
     cJSON *a;
     cJSON_ArrayForEach(a, activities)
     {
-        if ((int)cJSON_GetNumberValue(cJSON_GetObjectItem(a, "type")) == 0 && str(a, "name"))
+        if ((int)json_int(a, "type", 0) == 0 && str(a, "name"))
         {
             cJSON_AddStringToObject(p, "activity", str(a, "name"));
             break;
@@ -229,7 +230,7 @@ static uint64_t channel_permissions(uint64_t base, cJSON *c, const char *gid, co
     cJSON_ArrayForEach(o, cJSON_GetObjectItem(c, "permission_overwrites"))
     {
         const char *id = str(o, "id");
-        int type = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "type"));
+        int type = (int)json_int(o, "type", 0);
         if (id && type == 0 && strcmp(id, gid ? gid : "") != 0 && has_role(my_roles, id)) {
             allow |= perm_bits(o, "allow");
             deny |= perm_bits(o, "deny");
@@ -239,7 +240,7 @@ static uint64_t channel_permissions(uint64_t base, cJSON *c, const char *gid, co
     cJSON_ArrayForEach(o, cJSON_GetObjectItem(c, "permission_overwrites"))
     {
         const char *id = str(o, "id");
-        int type = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "type"));
+        int type = (int)json_int(o, "type", 0);
         if (id && me && type == 1 && strcmp(id, me) == 0)
             base = (base & ~perm_bits(o, "deny")) | perm_bits(o, "allow");
     }
@@ -277,7 +278,7 @@ static void put_channel(cJSON *og, cJSON *c)
     const char *me = str(cJSON_GetObjectItem(tree, "me"), "id");
     const uint64_t base = perm_bits(og, "_base");
     const uint64_t perms = channel_permissions(base, c, str(og, "id"), me, cJSON_GetObjectItem(og, "_my_roles"));
-    int type = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(c, "type"));
+    int type = (int)json_int(c, "type", 0);
     // ponytail: categories are kept regardless; their children carry their own overwrites.
     if (type != 4 && !(perms & PERM_VIEW_CHANNEL))
         return; // hidden from this account, as in the official client
@@ -436,7 +437,7 @@ static void load_ready(cJSON *d)
     cJSON *friends = cJSON_AddArrayToObject(t, "friends");
     cJSON_ArrayForEach(c, cJSON_GetObjectItem(d, "relationships"))
     {
-        if ((int)cJSON_GetNumberValue(cJSON_GetObjectItem(c, "type")) != 1) // 1 = friend
+        if ((int)json_int(c, "type", 0) != 1) // 1 = friend
             continue;
         const char *id = str(c, "id");
         if (!id)
@@ -462,9 +463,8 @@ static void load_ready(cJSON *d)
         cJSON *r = read_state(id);
         set_string(r, "last_read", str(c, "last_message_id"));
         cJSON_DeleteItemFromObject(r, "mentions");
-        const double count = cJSON_GetNumberValue(cJSON_GetObjectItem(c, "mention_count"));
-        cJSON_AddNumberToObject(r, "mentions",
-                               count >= 0 && count <= INT_MAX ? count : 0);
+        const int64_t count = json_int(c, "mention_count", 0);
+        cJSON_AddNumberToObject(r, "mentions", count >= 0 && count <= INT_MAX ? (double)count : 0);
     }
 }
 
@@ -657,11 +657,28 @@ static int has_id(cJSON *list, const char *id)
     return 0;
 }
 
+// The message mentions us as Discord counts it: by name, @everyone/@here (unless the server
+// suppresses it for us), or one of our roles (unless suppressed).
+static int mentions_me(cJSON *d, const char *me)
+{
+    cJSON *m, *e = cJSON_GetObjectItem(cJSON_GetObjectItem(tree, "notify"), str(d, "guild_id") ? str(d, "guild_id") : "");
+    cJSON_ArrayForEach(m, cJSON_GetObjectItem(d, "mentions"))
+        if (me && str(m, "id") && strcmp(str(m, "id"), me) == 0)
+            return 1;
+    if (cJSON_IsTrue(cJSON_GetObjectItem(d, "mention_everyone")) && !cJSON_IsTrue(cJSON_GetObjectItem(e, "suppress_everyone")))
+        return 1;
+    if (!cJSON_IsTrue(cJSON_GetObjectItem(e, "suppress_roles")))
+        cJSON_ArrayForEach(m, cJSON_GetObjectItem(d, "mention_roles"))
+            if (has_id(cJSON_GetObjectItem(guild_of(str(d, "guild_id")), "_my_roles"), cJSON_GetStringValue(m)))
+                return 1;
+    return 0;
+}
+
 // What a new message is worth: 0 nothing, 1 a server message, 2 a mention, 3 a DM.
 // ponytail: a thread's parent channel is not looked up, so a muted channel's threads still alert.
 static int notify_kind(cJSON *d, const char *me)
 {
-    int type = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(d, "type"));
+    int type = (int)json_int(d, "type", 0);
     if (type != 0 && type != 19) // plain messages and replies; not joins, pins, calls
         return 0;
     const char *channel = str(d, "channel_id"), *guild = str(d, "guild_id");
@@ -682,18 +699,7 @@ static int notify_kind(cJSON *d, const char *me)
         cJSON *n = cJSON_GetObjectItem(g, "default_message_notifications");
         level = cJSON_IsNumber(n) ? n->valueint : 1;
     }
-    cJSON *m;
-    int mention = 0;
-    cJSON_ArrayForEach(m, cJSON_GetObjectItem(d, "mentions"))
-        if (me && str(m, "id") && strcmp(str(m, "id"), me) == 0)
-            mention = 1;
-    if (cJSON_IsTrue(cJSON_GetObjectItem(d, "mention_everyone")) && !cJSON_IsTrue(cJSON_GetObjectItem(e, "suppress_everyone")))
-        mention = 1;
-    if (!cJSON_IsTrue(cJSON_GetObjectItem(e, "suppress_roles")))
-        cJSON_ArrayForEach(m, cJSON_GetObjectItem(d, "mention_roles"))
-            if (has_id(cJSON_GetObjectItem(g, "_my_roles"), cJSON_GetStringValue(m)))
-                mention = 1;
-    if (mention)
+    if (mentions_me(d, me))
         return level != 2 && prefs_get("notify_dm") ? 2 : 0;
     int server = prefs_get("notify_server"); // 0 off, 1 as set in Discord, 2 every message
     return server == 2 || (server == 1 && level == 0) ? 1 : 0;
@@ -789,7 +795,7 @@ static void message_created(cJSON *d)
         return;
     // A call's ring message (type 3) names who started the call.
     cJSON *call = cJSON_GetObjectItem(cJSON_GetObjectItem(tree, "calls"), channel_id);
-    if (call && (int)cJSON_GetNumberValue(cJSON_GetObjectItem(d, "type")) == 3 &&
+    if (call && (int)json_int(d, "type", 0) == 3 &&
         strcmp(str(call, "message_id") ? str(call, "message_id") : "", id) == 0) {
         const char *who = str(cJSON_GetObjectItem(d, "author"), "id");
         set_string(call, "caller", who ? who : "");
@@ -805,16 +811,11 @@ static void message_created(cJSON *d)
         set_string(r, "last_read", id); // your own message reads the channel
         return;
     }
-    cJSON *m;
-    cJSON_ArrayForEach(m, cJSON_GetObjectItem(d, "mentions"))
+    if (!str(d, "guild_id") || mentions_me(d, me)) // every DM message counts, as in Discord
     {
-        if (me && str(m, "id") && strcmp(str(m, "id"), me) == 0)
-        {
-            const double n = cJSON_GetNumberValue(cJSON_GetObjectItem(r, "mentions"));
-            cJSON_DeleteItemFromObject(r, "mentions");
-            cJSON_AddNumberToObject(r, "mentions", n + 1);
-            break;
-        }
+        const double n = (double)json_int(r, "mentions", 0);
+        cJSON_DeleteItemFromObject(r, "mentions");
+        cJSON_AddNumberToObject(r, "mentions", n + 1);
     }
     // For the app's banner (notify, quiet) and, sent after the lock, the PS5 alert.
     const int kind = notify_kind(d, me), quiet = kind && notify_quiet_now();
@@ -822,6 +823,15 @@ static void message_created(cJSON *d)
     cJSON_AddBoolToObject(d, "quiet", quiet);
     if (kind && !quiet && alert_sink)
         alert_text(d);
+}
+
+static int dm_listed(const char *id)
+{
+    cJSON *c;
+    cJSON_ArrayForEach(c, cJSON_GetObjectItem(tree, "dms"))
+        if (id && str(c, "id") && strcmp(str(c, "id"), id) == 0)
+            return 1;
+    return 0;
 }
 
 void chat_dispatch(const char *type, cJSON *d)
@@ -868,12 +878,14 @@ void chat_dispatch(const char *type, cJSON *d)
         cJSON_DeleteItemFromObject(r, "mentions");
         cJSON_AddNumberToObject(r, "mentions", 0);
     }
-    else if (strcmp(type, "CHANNEL_CREATE") == 0 && (int)cJSON_GetNumberValue(cJSON_GetObjectItem(d, "type")) == 1)
+    else if (strcmp(type, "CHANNEL_CREATE") == 0 && (json_int(d, "type", 0) == 1 || json_int(d, "type", 0) == 3) &&
+             !dm_listed(str(d, "id"))) // a DM (1) or group DM (3), once: Discord resends a known one
     {
         cJSON *oc = cJSON_CreateObject(), *r;
         copy(oc, d, "id");
         copy(oc, d, "type");
         copy(oc, d, "last_message_id");
+        copy(oc, d, "name"); // group DMs only
         cJSON *ids = cJSON_AddArrayToObject(oc, "recipient_ids");
         cJSON_ArrayForEach(r, cJSON_GetObjectItem(d, "recipients"))
         {
@@ -963,7 +975,8 @@ char *chat_events_json(long since, int wait_ms)
                 break;
     }
     long first = next_event > EVENT_RING ? next_event - EVENT_RING : 0;
-    if (since < first)
+    int gap = since < first; // the app missed events (suspended in a game): it reloads
+    if (gap)
         since = first;
     size_t cap = 64;
     for (long i = since; i < next_event; i++)
@@ -971,7 +984,7 @@ char *chat_events_json(long since, int wait_ms)
     char *out = malloc(cap);
     if (out)
     {
-        size_t n = (size_t)snprintf(out, cap, "{\"next\":%ld,\"events\":[", next_event);
+        size_t n = (size_t)snprintf(out, cap, "{\"next\":%ld,%s\"events\":[", next_event, gap ? "\"gap\":true," : "");
         for (long i = since; i < next_event; i++)
             n += (size_t)snprintf(out + n, cap - n, "%s%s", i > since ? "," : "", events[i % EVENT_RING]);
         snprintf(out + n, cap - n, "]}");

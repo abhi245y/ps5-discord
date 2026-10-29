@@ -167,10 +167,16 @@ static void audio_frame_cb(uint8_t *buf, size_t size, void *user)
         s->audio(buf, size);
 }
 
+// live changes under it: a keyframe request (a stream thread) never reaches a session
+// being torn down.
+static pthread_mutex_t live_lock = PTHREAD_MUTEX_INITIALIZER;
+
 void bc_request_keyframe(void)
 {
+    pthread_mutex_lock(&live_lock);
     if (live)
         chiaki_session_request_idr(&session);
+    pthread_mutex_unlock(&live_lock);
 }
 
 // DualSense USB report 0x01 to chiaki's controller state.
@@ -306,7 +312,8 @@ static const char *run(void)
     ChiakiAudioSink audio = {NULL, audio_header_cb, audio_frame_cb};
     chiaki_session_set_audio_sink(&session, &audio);
     const char *why = NULL;
-    if (chiaki_session_start(&session) != CHIAKI_ERR_SUCCESS)
+    const int started = chiaki_session_start(&session) == CHIAKI_ERR_SUCCESS;
+    if (!started)
         why = "Remote Play could not start.";
     for (int i = 0; !why && !connected && !quit && want && i < 200; i++) // 20 s
         usleep(100000);
@@ -324,7 +331,9 @@ static const char *run(void)
             holding = usb_running;
         } else // another console user's session: the controller stays the user's own
             LOG("broadcast: Remote Play connected as another console user; the controller stays yours");
+        pthread_mutex_lock(&live_lock);
         live = 1;
+        pthread_mutex_unlock(&live_lock);
         set_state("live", "");
         unsigned tick = 0;
         while (want && !quit && !(usb_running && ds5_done) && voice_wanted()) {
@@ -332,7 +341,9 @@ static const char *run(void)
             if (++tick % 25 == 0)
                 LOG("broadcast: %u video frames (%u keyframes), %u audio frames", frames, keyframes, audio_frames);
         }
+        pthread_mutex_lock(&live_lock);
         live = 0;
+        pthread_mutex_unlock(&live_lock);
         if (usb_running && ds5_done && want && !quit)
             why = "Plug the controller in by USB to broadcast.";
         else if (quit && want)
@@ -360,8 +371,10 @@ static const char *run(void)
         holding = 0;
     }
     vau_ext_set(0);
-    chiaki_session_stop(&session);
-    chiaki_session_join(&session);
+    if (started) { // its thread exists only then
+        chiaki_session_stop(&session);
+        chiaki_session_join(&session);
+    }
     chiaki_session_fini(&session);
     return why;
 }

@@ -1,4 +1,5 @@
 #include "web.h"
+#include "json_num.h"
 
 #include <sys/time.h>
 #include <time.h>
@@ -98,7 +99,11 @@ static http_response rest(const char *method, const char *path, const char *json
 
 static void reply_rest(int c, http_response res)
 {
-    const char *body = res.body && res.body[0] ? res.body : "null";
+    // Discord's reply goes in as JSON only when it is JSON: a proxy's HTML error page would
+    // make the whole reply unreadable, and the app would lose the status with it.
+    cJSON *parsed = res.body ? cJSON_Parse(res.body) : NULL;
+    const char *body = parsed ? res.body : "null";
+    cJSON_Delete(parsed);
     size_t cap = strlen(body) + 48;
     char *out = malloc(cap);
     if (out)
@@ -260,7 +265,7 @@ static void api_sticker_packs(int c)
                 cJSON *os = cJSON_CreateObject();
                 cJSON_AddStringToObject(os, "id", cJSON_GetStringValue(cJSON_GetObjectItem(s, "id")) ?: "");
                 cJSON_AddStringToObject(os, "name", cJSON_GetStringValue(cJSON_GetObjectItem(s, "name")) ?: "");
-                cJSON_AddNumberToObject(os, "format_type", cJSON_GetNumberValue(cJSON_GetObjectItem(s, "format_type")));
+                cJSON_AddNumberToObject(os, "format_type", (double)json_int(s, "format_type", 1));
                 cJSON_AddItemToArray(list, os);
             }
             cJSON_AddItemToArray(packs, op);
