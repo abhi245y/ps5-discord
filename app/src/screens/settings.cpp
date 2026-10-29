@@ -145,13 +145,19 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
             pair.value = "Not paired";
             pair.desc = "Pair a console user once so Go Live can show your game.";
         }
-        Row mic{Kind::slider, "Input volume", "How loud you are in calls. Join one to see your level here.", "",
+        Row mic{Kind::slider, "Mic gain", "How loud you are in calls. Join one to see your level here.", "",
                 s.prefs.mic_gain, false, false, Act::pref};
         mic.key = "mic_gain";
         mic.percent = 20;
         mic.meter = v.active();
+        Row heard{Kind::slider, "Call volume",
+                  "How loud the others sound to you.", "",
+                  s.prefs.call_volume, false, false, Act::pref};
+        heard.key = "call_volume";
+        heard.percent = 20;
         return {
             mic,
+            heard,
             pair,
             choice_row("Go Live quality", "From the next Go Live on. Above 720p · 30 fps may need Nitro.",
                        "golive_quality", kQualities, s.prefs.golive_quality),
@@ -182,9 +188,8 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
         };
     case 4:
         return {
-            {Kind::info, "Your sign-in", "Kept on this console, encrypted: a copy of the file works nowhere else.", ""},
-            {Kind::info, "Network", "The core answers only this app, on this console; nothing on your network can reach it.",
-             ""},
+            {Kind::info, "Kept on this console",
+             "Your sign-in is encrypted to this console, and nothing on your network can reach the app.", ""},
         };
     default:
         return {
