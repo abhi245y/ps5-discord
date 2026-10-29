@@ -1140,8 +1140,10 @@ void Client::poll_state()
     {
         if (state_failures_ < 3 && snapshot_.connection != Connection::starting)
             return;
-        snapshot_.connection = Connection::starting;
-        snapshot_.status_message = "Starting the ps5-discord core...";
+        // Before the first sign-in this is the launch; after it, a drop like any other.
+        snapshot_.connection = been_ready_ ? Connection::reconnecting : Connection::starting;
+        snapshot_.status_message =
+            been_ready_ ? "The ps5-discord core stopped. Starting it again." : "Starting the ps5-discord core...";
         ready_ = false;
         publish();
         return;
@@ -1205,17 +1207,22 @@ void Client::poll_state()
     const Connection before = snapshot_.connection;
     // Signed in before, signing in now: another console user's turn, or signed out. The
     // last account's servers, chats and DMs go.
-    if (before == Connection::ready && (s == "login" || s == "scanned" || s == "browser" || s == "starting"))
+    const bool signing_in = s == "login" || s == "scanned" || s == "browser";
+    if ((before == Connection::ready && (signing_in || s == "starting")) ||
+        (before == Connection::reconnecting && signing_in))
     {
         snapshot_ = Snapshot{};
         events_next_ = -1;
         prefetched_ = false;
         last_voice_ms_ = 0;
+        been_ready_ = false;
     }
     if (s == "ready")
         snapshot_.connection = Connection::ready;
     else if (s == "login" || s == "scanned" || s == "browser")
         snapshot_.connection = Connection::signing_in;
+    else if (been_ready_ && (s == "connecting" || s == "starting"))
+        snapshot_.connection = Connection::reconnecting; // after the launch: every drop looks the same
     else if (s == "connecting" && before == Connection::ready)
         snapshot_.connection = Connection::reconnecting;
     else
@@ -1229,7 +1236,10 @@ void Client::poll_state()
     snapshot_.status_message.clear();
     snapshot_.reconnect_attempt = static_cast<int>(num(state, "attempt", 0.0));
     if (snapshot_.connection == Connection::ready)
+    {
         snapshot_.synced_ms = now_ms();
+        been_ready_ = true;
+    }
     const bool was_ready = ready_;
     ready_ = snapshot_.connection == Connection::ready;
     if (ready_ && !was_ready)

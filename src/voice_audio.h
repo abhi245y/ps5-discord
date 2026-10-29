@@ -78,6 +78,8 @@ void vau_unlock(void);
 void vau_attach(int udp, const uint8_t key[32], uint32_t ssrc, const char *self_id, int dave_version);
 // The connection ended: stops the engine from using its socket, keys and session.
 void vau_detach(void);
+// The attached socket failed for good: the connection must start again (a new socket).
+int vau_udp_dead(void);
 // The DAVE session and its state (protocol version 0 = plain Opus; ready = group keys exist).
 // Call after every change of either, with session NULL before the session is destroyed.
 void vau_dave_state(DAVESessionHandle session, int version, int ready);

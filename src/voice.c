@@ -878,6 +878,13 @@ static int run_session(vthread *t)
             t->next_hb = now + t->hb_ms;
             continue;
         }
+        pthread_mutex_lock(&lock);
+        int dead = att_owner == t && vau_udp_dead();
+        pthread_mutex_unlock(&lock);
+        if (dead) { // a resume would keep the dead socket: identify again, for a new one
+            t->ready = 0;
+            return -1;
+        }
         int wait = vau_speaking_pending() ? 5 : 500;
         if (t->next_hb && t->next_hb - now < wait)
             wait = (int)(t->next_hb - now);

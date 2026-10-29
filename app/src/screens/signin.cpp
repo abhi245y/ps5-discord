@@ -136,7 +136,7 @@ void draw_reconnecting(DrawList &list, const Ink &ink, const discord::Snapshot &
     spinner(list, card.cx(), card.y + 100.0f, 44.0f, time);
     ui::text(list, ink.fonts.display, "Reconnecting…", card.cx(), card.y + 222.0f, 50.0f, kText, gfx::Align::center);
     // Why, when the core knows (no network, DNS down); else the plain fact and the try.
-    std::string line = s.login_note;
+    std::string line = !s.status_message.empty() ? s.status_message : s.login_note;
     if (line.empty())
         line = s.reconnect_attempt > 0
                    ? "Lost connection to Discord. Trying again (attempt " + std::to_string(s.reconnect_attempt) + ")."

@@ -112,6 +112,7 @@ class Client
     std::atomic<bool> quit_{false}; // a quit request went through: the app closes
     std::string browser_error_; // client thread only; retained across state polls
     int state_failures_ = 0;   // /api/state polls in a row the core did not answer (client thread)
+    bool been_ready_ = false;  // signed in and connected once this launch (same account)
     bool core_seen_ = false;   // it answered once: from then on a missed poll may be only slow
     bool replaced_core_ = false; // an older running core was told to quit (once per launch)
     std::string replaced_version_; // the version it reported (client thread)

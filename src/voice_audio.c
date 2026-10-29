@@ -232,6 +232,23 @@ static int listen_fd = -1, client_fd = -1;
 
 // the connection (set by vau_attach / vau_dave_state)
 static int attached, udp = -1;
+// The socket failed for good (the console aborts a process's sockets when the network goes
+// down): the voice thread connects afresh, which brings a new one.
+static _Atomic int udp_dead;
+
+static void udp_error(const char *what)
+{
+    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR || errno == ENOBUFS)
+        return; // full or interrupted: the next one may go
+    if (!udp_dead)
+        LOG("voice audio: UDP %s failed (%d), the voice connection starts afresh", what, errno);
+    udp_dead = 1;
+}
+
+int vau_udp_dead(void)
+{
+    return udp_dead;
+}
 static uint8_t key[32];
 static uint32_t my_ssrc;
 static char self_id[VAU_ID];
@@ -457,8 +474,8 @@ static void send_opus(const uint8_t *opus, size_t n)
     seq++;
     ts += VAU_FRAME;
     st_sent++;
-    if (send(udp, pkt, len, 0) < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
-        LOG("voice audio: UDP send failed (%d)", errno);
+    if (send(udp, pkt, len, 0) < 0)
+        udp_error("send");
     last_tx_ms = last_self_ms = now_ms();
 }
 
@@ -594,8 +611,10 @@ static void rx(void)
     int16_t pcm[2 * VAU_FRAME];
     for (int i = 0; i < 64 && udp >= 0; i++) {
         ssize_t n = recv(udp, pkt, sizeof pkt, 0);
-        if (n < 0)
+        if (n < 0) {
+            udp_error("receive");
             break;
+        }
         if (n < 12 || deaf || !attached)
             continue;
         st_rx++;
@@ -672,7 +691,8 @@ static void keepalive(int64_t now)
     k[2] = (uint8_t)(ka_counter >> 16);
     k[3] = (uint8_t)(ka_counter >> 24);
     ka_counter++;
-    send(udp, k, sizeof k, 0);
+    if (send(udp, k, sizeof k, 0) < 0)
+        udp_error("keepalive");
     last_ka_ms = now;
 }
 
@@ -790,6 +810,7 @@ void vau_attach(int fd, const uint8_t k[32], uint32_t ssrc, const char *self, in
     session = NULL;
     dave_version = version;
     dave_ready = 0;
+    udp_dead = 0;
     peers_clear();
     if (encryptor)
         daveEncryptorDestroy(encryptor);
