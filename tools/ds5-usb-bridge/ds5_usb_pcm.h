@@ -70,5 +70,14 @@ static inline void ds5_usb_route_report(uint8_t report[63], const ds5_usb_config
     report[9] = muted ? 1 : 0;
     report[10] = muted ? 0x10 : 0;
     report[38] = config->speaker_pre_gain;
+    if (!config->audio_only) {
+        // The system's driver is detached and its lights went with it: player 1, blue,
+        // as the console shows it (report layout: Linux hid-playstation).
+        report[2] |= 0x04 | 0x10; // lightbar, player LEDs
+        report[39] = 0x02;        // lightbar setup
+        report[42] = 0x02;        // light out: end the firmware's own pulse
+        report[44] = 0x04;        // the middle LED
+        report[47] = 0xff;        // blue
+    }
 }
 #endif

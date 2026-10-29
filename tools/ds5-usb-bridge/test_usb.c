@@ -58,6 +58,10 @@ static void test_mapping(void)
     ds5_usb_route_report(output, &config, 1, 1);
     assert(output[5] == 0x7f && output[6] == 0 && output[8] == 1 && output[9] == 1 && output[10] == 0x10);
     assert(output[3] == 0 && output[4] == 0 && output[11] == 0 && output[22] == 0);
+    assert((output[2] & 0x14) == 0x14 && output[44] == 0x04 && output[47] == 0xff);
+    config.audio_only = 1; // the system's driver keeps the lights
+    ds5_usb_route_report(output, &config, 1, 1);
+    assert(output[2] == 0x83 && output[39] == 0 && output[44] == 0);
 }
 
 static void test_format(void)
