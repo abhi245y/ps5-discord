@@ -9,6 +9,8 @@ int gateway_run(const char *token);
 // second or two. Cleared before the next account starts.
 void gateway_switch(int on);
 int gateway_switching(void);
+// Retry now: ends the wait between reconnect attempts (the app's Retry now).
+void gateway_retry(void);
 
 // Ask for live events of a guild (op 37), as the web client does when one is opened.
 // Callable from any thread; the gateway thread sends it within about a second.

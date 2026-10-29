@@ -1227,6 +1227,9 @@ void Client::poll_state()
     snapshot_.login_note = browser_error_.empty() ? text(state, "note") : browser_error_;
     snapshot_.login_qr_size = static_cast<int>(num(state, "qr_size", 0.0));
     snapshot_.status_message.clear();
+    snapshot_.reconnect_attempt = static_cast<int>(num(state, "attempt", 0.0));
+    if (snapshot_.connection == Connection::ready)
+        snapshot_.synced_ms = now_ms();
     const bool was_ready = ready_;
     ready_ = snapshot_.connection == Connection::ready;
     if (ready_ && !was_ready)
@@ -1770,6 +1773,9 @@ void Client::handle(const Request &request)
         last_voice_ms_ = 0;
         break;
     }
+    case Request::Kind::reconnect:
+        hui::sys::log("[CLIENT] /api/reconnect answered %d", http(port_, "POST", "/api/reconnect").status);
+        break;
     case Request::Kind::quit: // the core stops (Go Live and the call first), then the app closes
         hui::sys::log("[CLIENT] /api/quit answered %d", http(port_, "POST", "/api/quit").status);
         quit_ = true;

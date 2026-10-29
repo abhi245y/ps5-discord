@@ -16,7 +16,7 @@
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static char state[32] = "starting", user[64];
-static int guilds, dms;
+static int guilds, dms, attempt;
 static long events;
 static char qr_url[128], note[256];
 static char qr_bits[177 * 177 + 1]; // row-major '1' = dark module
@@ -82,6 +82,13 @@ void status_note(const char *text)
     pthread_mutex_unlock(&lock);
 }
 
+void status_attempt(int n)
+{
+    pthread_mutex_lock(&lock);
+    attempt = n;
+    pthread_mutex_unlock(&lock);
+}
+
 char *status_json(void)
 {
     cJSON *j = cJSON_CreateObject();
@@ -98,6 +105,7 @@ char *status_json(void)
     cJSON_AddNumberToObject(j, "qr_size", qr_size);
     cJSON_AddStringToObject(j, "qr", qr_bits);
     cJSON_AddStringToObject(j, "note", note);
+    cJSON_AddNumberToObject(j, "attempt", attempt);
     cJSON *log = cJSON_AddArrayToObject(j, "log");
     unsigned first = log_next > LOG_LINES ? log_next - LOG_LINES : 0;
     for (unsigned i = first; i < log_next; i++)

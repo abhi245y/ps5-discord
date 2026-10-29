@@ -768,6 +768,9 @@ static void handle(int c, int local)
         api_sticker_packs(c);
     } else if (post && strcmp(path, "/api/prefs") == 0) {
         api_prefs(c, body);
+    } else if (post && strcmp(path, "/api/reconnect") == 0) {
+        gateway_retry();
+        reply(c, "202 Accepted", "application/json", "{}", 2);
     } else if (post && strcmp(path, "/api/signout") == 0) {
         LOG("sign out requested");
         if (core_sign_out() != 0) {

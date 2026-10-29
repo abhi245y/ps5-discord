@@ -133,6 +133,7 @@ static void on_dispatch(gateway *g, const char *t, cJSON *d)
         status_state("ready");
         status_note(NULL);
         g->ready = 1;
+        status_attempt(0);
         LOG("gateway: READY as %s, %d guilds, %d DMs, resume via %s", name ? name : "?",
             cJSON_GetArraySize(cJSON_GetObjectItem(d, "guilds")),
             cJSON_GetArraySize(cJSON_GetObjectItem(d, "private_channels")), g->resume_url);
@@ -140,6 +141,7 @@ static void on_dispatch(gateway *g, const char *t, cJSON *d)
         status_state("ready");
         status_note(NULL);
         g->ready = 1;
+        status_attempt(0);
         LOG("gateway: RESUMED");
     } else if (strcmp(t, "VOICE_STATE_UPDATE") == 0) {
         LOG("gateway: VOICE_STATE_UPDATE %s mute=%d", cJSON_GetObjectItem(d, "guild_id") &&
@@ -215,6 +217,13 @@ static volatile int switching; // gateway_switch: another console user's account
 void gateway_switch(int on)
 {
     switching = on;
+}
+
+static _Atomic int retry_now;
+
+void gateway_retry(void)
+{
+    retry_now = 1;
 }
 
 int gateway_switching(void)
@@ -369,7 +378,7 @@ static void note_unreachable(void)
 int gateway_run(const char *token)
 {
     gateway g = {.token = token, .seq = -1};
-    int backoff = 1;
+    int backoff = 1, attempt = 0;
     for (;;) {
         int code = run_connection(&g);
         if (code == GATEWAY_SWITCH)
@@ -387,13 +396,15 @@ int gateway_run(const char *token)
         // Only a session Discord accepted resets the wait: a close after HELLO (rate limit,
         // invalid session) must not turn into an identify every second.
         if (g.ready)
-            backoff = 1;
+            backoff = 1, attempt = 0;
         else if (!g.heartbeat_ms && backoff >= 2) // no HELLO a second time in a row: say why in the app
             note_unreachable();
         g.heartbeat_ms = 0;
         g.ready = 0;
         LOG("gateway: connection ended (%d), retry in %d s", code, backoff);
-        for (int i = 0; i < backoff * 5 && !switching; i++) // another user on screen: go now
+        status_attempt(++attempt);
+        retry_now = 0;
+        for (int i = 0; i < backoff * 5 && !switching && !retry_now; i++) // another user, or Retry now: go now
             usleep(200000);
         if (switching)
             return GATEWAY_SWITCH;
