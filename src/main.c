@@ -204,7 +204,20 @@ static int claim_instance(void)
 
 static void *control_loop(void *arg)
 {
-    web_serve((int)(intptr_t)arg);
+    int fd = (int)(intptr_t)arg;
+    for (;;) {
+        web_serve(fd);
+        close(fd);
+        // Our port again, or the app cannot reach us and starts another core. Another one
+        // already has it: that is the app's core now, this one goes.
+        for (int i = 0; i < 50 && (fd = claim_instance()) < 0; i++)
+            usleep(100000);
+        if (fd < 0) {
+            LOG("control: another core has the port, quitting");
+            core_quit(0);
+        }
+        LOG("control: listening again");
+    }
     return NULL;
 }
 

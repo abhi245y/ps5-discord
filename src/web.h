@@ -7,7 +7,8 @@
 //             GET /api/sticker-packs; /api/send also takes {"sticker": id}
 #pragma once
 
-// Serves forever on an already listening socket.
+// Serves until the listening socket stops working (the console aborts a process's
+// sockets when the network goes down), then returns for the caller to listen again.
 void web_serve(int listen_fd);
 int web_app_on_screen(void); // the app asked something in the last few seconds
 int core_sign_out(void);         // main.c: ends the session with Discord; 0 when it did

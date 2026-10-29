@@ -822,15 +822,21 @@ static void *serve_one(void *arg)
 
 void web_serve(int fd)
 {
-    for (;;) {
+    for (int failures = 0;;) {
         struct sockaddr_in peer;
         socklen_t plen = sizeof peer;
         int c = accept(fd, (struct sockaddr *)&peer, &plen);
         if (c < 0) {
-            if (errno != EINTR && errno != ECONNABORTED)
-                usleep(100000); // out of descriptors (EMFILE): no busy loop while they come back
+            // One failure is a client that gave up, or no descriptors left for a moment
+            // (EMFILE). A run of them is a dead socket: the caller listens again.
+            if (++failures >= 20) {
+                LOG("control: accept keeps failing (errno %d), listening again", errno);
+                return;
+            }
+            usleep(100000);
             continue;
         }
+        failures = 0;
         int local = peer.sin_family == AF_INET && ntohl(peer.sin_addr.s_addr) >> 24 == 127;
         struct timeval tv = {.tv_sec = 5};
         setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
