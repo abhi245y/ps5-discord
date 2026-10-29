@@ -114,6 +114,8 @@ class Client
     int state_failures_ = 0;   // /api/state polls in a row the core did not answer (client thread)
     bool core_seen_ = false;   // it answered once: from then on a missed poll may be only slow
     bool replaced_core_ = false; // an older running core was told to quit (once per launch)
+    std::string replaced_version_; // the version it reported (client thread)
+    std::int64_t replaced_ms_ = 0;
     bool voice_known_ = false;   // /api/voice answered once: "not in a call" is the core's word
     bool prefetched_ = false; // recent conversations' history asked for once after sign-in
     std::atomic<bool> ready_{false}; // read by the image thread too

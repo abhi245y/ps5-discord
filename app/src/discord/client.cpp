@@ -1155,10 +1155,22 @@ void Client::poll_state()
     // and the bundled one starts once it is gone. Not in the middle of a call unless the old
     // core cannot serve this app at all; once per launch, so a mismatched build cannot loop.
     const std::string theirs = text(state, "version");
+    // The old one on its way out (Go Live gives the controller back first: up to 30 s).
+    if (replaced_core_ && theirs == replaced_version_ && now_ms() - replaced_ms_ < 60000)
+    {
+        core_seen_ = false;
+        snapshot_.connection = Connection::starting;
+        snapshot_.status_message = "Updating the ps5-discord core...";
+        ready_ = false;
+        publish();
+        return;
+    }
     if (!replaced_core_ && !bundled_version().empty() && theirs != bundled_version() &&
         (!api_ok || (voice_known_ && !snapshot_.voice.active())))
     {
         replaced_core_ = true;
+        replaced_version_ = theirs;
+        replaced_ms_ = now_ms();
         core_seen_ = false; // its port going quiet is the cue to start ours at once
         snapshot_.connection = Connection::starting;
         snapshot_.status_message = "Updating the ps5-discord core...";
@@ -1198,6 +1210,7 @@ void Client::poll_state()
         snapshot_ = Snapshot{};
         events_next_ = -1;
         prefetched_ = false;
+        last_voice_ms_ = 0;
     }
     if (s == "ready")
         snapshot_.connection = Connection::ready;
@@ -1248,6 +1261,7 @@ void Client::poll_chat()
             snapshot_ = std::move(fresh);
             prefetched_ = false;
             events_next_ = -1;
+            last_voice_ms_ = 0;
         }
         next = snapshot_;
     }

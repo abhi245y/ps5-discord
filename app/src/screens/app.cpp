@@ -714,13 +714,20 @@ class DiscordApp final : public app::Concept
                 joining_.clear();
                 feedback.play(hui::audio::Cue::open);
             }
+            else if (settled && v.state == discord::VoiceState::connected && v.channel_id != joining_)
+            {
+                // A switch Discord refused: the core stayed in the call we were in.
+                join_error_ = "Discord did not confirm that channel. You are still in " +
+                              room_title(context_.snapshot, v.channel_id) + ".";
+                feedback.play(hui::audio::Cue::error);
+            }
             else if (settled && (v.state == discord::VoiceState::error || v.state == discord::VoiceState::idle ||
                                  voice_wait_ > 30.0f))
             {
                 join_error_ = v.state == discord::VoiceState::error && !v.error.empty()
                                   ? v.error
                                   : "The call did not connect. Try again in a moment.";
-                if (v.active()) // timed out half-way: do not leave it hanging
+                if (v.active() && v.channel_id == joining_) // timed out half-way: do not leave it hanging
                 {
                     discord::Request r;
                     r.kind = discord::Request::Kind::voice_leave;
