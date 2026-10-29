@@ -36,6 +36,12 @@ All notable changes to this project are documented here. The format follows
   ones too) and sent from the picker's Stickers tab (Square), Discord's packs and the
   servers' own.
 - Settings, Voice & audio: Call volume sets how loud the call plays.
+- Go Live quality: choosing more than 720p · 30 fps first says it is for Nitro or boosted
+  servers and recommends 720p · 30 fps.
+- Go Live: the controller's lightbar turns teal (a colour the console never gives a pad)
+  with player 1's light while Go Live holds it; before going live again with a controller
+  Go Live already used, the app asks to unplug and replug it first (else a PS press during
+  Go Live gives the console a second pad with no user, and choosing one ends the stream).
 - One VERSION file names the core and the app (Settings, About shows it; the core's
   /api/state reports it); `make release` builds both in release mode into dist/ with
   SHA256SUMS.
