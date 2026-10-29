@@ -246,6 +246,27 @@ bool VoiceRoom::update(const discord::Snapshot &s, const hui::InputFrame &input,
         }
         return true;
     }
+    auto go_live = [&](bool on) {
+        discord::Request r;
+        r.kind = discord::Request::Kind::voice_broadcast;
+        r.on = on;
+        requests.push_back(r);
+    };
+    if (need_replug_) // the question over the room: Cross goes live anyway, Circle waits
+    {
+        if (input.is_pressed(Action::confirm))
+        {
+            need_replug_ = false;
+            go_live(true);
+            feedback.play(hui::audio::Cue::toggle);
+        }
+        else if (input.is_pressed(Action::back))
+        {
+            need_replug_ = false;
+            feedback.play(hui::audio::Cue::modal_close);
+        }
+        return true;
+    }
     auto set = [&](bool mute, bool deaf) {
         discord::Request r;
         r.kind = discord::Request::Kind::voice_set;
@@ -293,12 +314,15 @@ bool VoiceRoom::update(const discord::Snapshot &s, const hui::InputFrame &input,
             need_pair_ = true;
             feedback.play(hui::audio::Cue::modal_open);
         }
+        else if (focus_ == kShare && live && v.broadcast != "live" && v.broadcast != "starting" &&
+                 (v.replug == "replug" || v.replug == "unknown"))
+        {
+            need_replug_ = true;
+            feedback.play(hui::audio::Cue::modal_open);
+        }
         else if (focus_ == kShare && live)
         {
-            discord::Request r;
-            r.kind = discord::Request::Kind::voice_broadcast;
-            r.on = v.broadcast != "live" && v.broadcast != "starting";
-            requests.push_back(r);
+            go_live(v.broadcast != "live" && v.broadcast != "starting");
             feedback.play(hui::audio::Cue::toggle);
         }
         else if (focus_ == kLeave)
@@ -470,6 +494,15 @@ void VoiceRoom::draw(const discord::Snapshot &s, DrawList &list) const
         l.cy = card.y + card.h - 44.0f;
         ui::draw_hints(list, ink_.fonts, hint_glyphs(), pair_hints, 2, card.x + card.w - 48.0f, true, l);
     }
+    if (need_replug_) // ds5_usb_replug_state: the controller came back from Go Live by a bus reset
+        confirm_card(list, ink_, "Replug your controller",
+                     v.replug == "unknown"
+                         ? "The console can't tell how your controller is connected. If Go Live used it since it "
+                           "was plugged in, unplug and replug it first, or the PS button may end the stream."
+                         : "Go Live has used your controller since it was last plugged in. Unplug its USB cable "
+                           "and plug it back in first, or the PS button may ask who is using it and end the "
+                           "stream.",
+                     "Go Live");
 }
 
 void draw_incoming(DrawList &list, const Ink &ink, const discord::Snapshot &s, const discord::Call &call)

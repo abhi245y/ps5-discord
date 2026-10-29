@@ -64,6 +64,10 @@ void ds5_usb_default_config(ds5_usb_config *config);
 int ds5_usb_run(const ds5_usb_config *config, const ds5_usb_callbacks *callbacks,
                 void *user, ds5_usb_stats *stats);
 void ds5_usb_request_stop(void);
+// Not while ds5_usb_run runs. 1: the pad on USB was handed back (re-enumerated) and not
+// replugged since; a PS press then reaches the console over Bluetooth too, as a second pad
+// with no user. 0: fine, or no pad on USB. 2: the console would not tell.
+int ds5_usb_replug_state(void);
 // Async-signal-safe: while the system's drivers are detached from the controller, hand it
 // back (re-enumerate) at once, for a crash handler or a stuck stop. Does nothing otherwise.
 void ds5_usb_rescue(void);

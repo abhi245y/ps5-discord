@@ -21,6 +21,9 @@ int bc_holds_controller(void);
 // From a crash handler (async-signal-safe): re-enumerate the controller if Go Live holds it.
 void bc_rescue_controller(void);
 void bc_request_keyframe(void); // a viewer lost the picture
+// Before Go Live: "replug" when the USB controller should be unplugged and plugged in again
+// first (ds5_usb_replug_state), "unknown" when that cannot be told, else "ok".
+const char *bc_controller(void);
 void bc_profile(int *w, int *h, int *fps); // the picture's size and rate (prefs golive_quality)
 const char *bc_state(void); // "off", "starting", "live" or "error"
 const char *bc_error(void); // why it stopped or could not start; "" when none

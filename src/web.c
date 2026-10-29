@@ -596,6 +596,7 @@ static char *voice_json(void)
     cJSON_AddBoolToObject(bc, "paired", used >= 0);
     cJSON_AddStringToObject(bc, "pair_state", rp_pair_state());
     cJSON_AddStringToObject(bc, "pair_error", rp_pair_error());
+    cJSON_AddStringToObject(bc, "controller", bc_controller());
     cJSON_AddItemToObject(o, "prefs", prefs_json());
     s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
