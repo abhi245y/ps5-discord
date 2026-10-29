@@ -413,8 +413,8 @@ static void audio_dave(vthread *t, int detach)
 {
     pthread_mutex_lock(&lock);
     if (cur == t && att_owner == t) {
-        if (detach)
-            vau_dave_state(NULL, 0, 0);
+        if (detach) // keep the version: above 0 and not ready, the engine sends nothing in the clear
+            vau_dave_state(NULL, t->dave_version, 0);
         else
             vau_dave_state(t->dave, t->dave_version, t->dave_ready);
     }

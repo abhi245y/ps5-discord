@@ -21,6 +21,7 @@
 #include "notify.h"
 #include "prefs.h"
 #include "rp_pair.h"
+#include "stream.h"
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static char state[16] = "off", error[160];
@@ -347,8 +348,10 @@ static void *worker(void *arg)
     const char *why = run();
     LOG("broadcast: off%s%s", why ? ": " : "", why ? why : "");
     set_state(why ? "error" : "off", why ? why : "");
-    if (why)
+    if (why) {
+        stream_stop(); // the picture is gone: no frozen stream left in the call
         app_alert("Go Live stopped", why, NULL, 1); // the game is in front: say so there
+    }
     want = 0;
     running = 0;
     return NULL;

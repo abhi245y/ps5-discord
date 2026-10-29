@@ -144,7 +144,7 @@ static void use_user(int32_t user)
     FILE *f = fopen(path, "r"); // access() refuses payloads on the console
     if (f)
         fclose(f);
-    else
+    else if (user >= 0) // the legacy sign-in is for a real user, not "nobody on screen"
         rename(DATA_DIR "/token", path);
     prefs_load(DATA_DIR, user);
     notify_set_owner(user);
@@ -219,8 +219,6 @@ int main(void)
         LOG("already running");
         return 1;
     }
-    pthread_t t;
-    pthread_create(&t, NULL, control_loop, (void *)(intptr_t)control);
     srand((unsigned)time(NULL) ^ (unsigned)getpid());
     voice_init(DATA_DIR);
     cv_init();
@@ -232,6 +230,15 @@ int main(void)
         return 1;
     }
     LOG("starting, version %s", CORE_VERSION);
+    // Requests only once TLS, voice and Go Live are set up (the port is ours already).
+    pthread_t t;
+    pthread_create(&t, NULL, control_loop, (void *)(intptr_t)control);
+    // Started before anyone signed in to the console (elfldr at boot): wait for them, or
+    // their sign-in would be read from token-ffffffff. A minute, in case nobody ever shows.
+#ifdef __PROSPERO__
+    for (int i = 0; i < 60 && rp_foreground() < 0; i++)
+        sleep(1);
+#endif
     pthread_t watcher;
     if (pthread_create(&watcher, NULL, watch_user, NULL) == 0)
         pthread_detach(watcher);
@@ -249,10 +256,14 @@ int main(void)
             status_state("starting");
             continue;
         }
+        end_calls(); // a live broadcast holds the controller: give it back before waiting
         if (code != 4004) {
+            char note[128];
+            snprintf(note, sizeof note, "Discord closed the session (code %d). Quit and start the app again.", code);
+            status_note(note);
             status_state("stopped");
             LOG("stopped (%d)", code);
-            pause(); // keep the web UI up so the failure is visible; quit from there
+            pause(); // keep the control API up so the app can show why and quit
         }
         LOG("token rejected, logging in again");
         app_alert("Discord", "Signed out. Open the app to sign in again.", NULL, 1);

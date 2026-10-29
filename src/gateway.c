@@ -37,6 +37,7 @@ typedef struct {
     char session_id[128];
     char resume_url[256];
     int heartbeat_ms;
+    int ready; // READY or RESUMED on this connection: Discord took us
     int64_t next_heartbeat; // monotonic ms, 0 = not started
     int acked;
     int reconnect; // set by handlers: leave the read loop
@@ -131,12 +132,14 @@ static void on_dispatch(gateway *g, const char *t, cJSON *d)
                     cJSON_GetArraySize(cJSON_GetObjectItem(d, "private_channels")));
         status_state("ready");
         status_note(NULL);
+        g->ready = 1;
         LOG("gateway: READY as %s, %d guilds, %d DMs, resume via %s", name ? name : "?",
             cJSON_GetArraySize(cJSON_GetObjectItem(d, "guilds")),
             cJSON_GetArraySize(cJSON_GetObjectItem(d, "private_channels")), g->resume_url);
     } else if (strcmp(t, "RESUMED") == 0) {
         status_state("ready");
         status_note(NULL);
+        g->ready = 1;
         LOG("gateway: RESUMED");
     } else if (strcmp(t, "VOICE_STATE_UPDATE") == 0) {
         LOG("gateway: VOICE_STATE_UPDATE %s mute=%d", cJSON_GetObjectItem(d, "guild_id") &&
@@ -381,11 +384,14 @@ int gateway_run(const char *token)
             drop_session(&g);
             break;
         }
-        if (g.heartbeat_ms) // got HELLO this time: the network is fine
+        // Only a session Discord accepted resets the wait: a close after HELLO (rate limit,
+        // invalid session) must not turn into an identify every second.
+        if (g.ready)
             backoff = 1;
-        else if (backoff >= 2) // a second miss in a row: say why in the app
+        else if (!g.heartbeat_ms && backoff >= 2) // no HELLO a second time in a row: say why in the app
             note_unreachable();
         g.heartbeat_ms = 0;
+        g.ready = 0;
         LOG("gateway: connection ended (%d), retry in %d s", code, backoff);
         sleep((unsigned)backoff);
         backoff = backoff < 15 ? backoff * 2 : 15; // short cap: back soon once the network is
