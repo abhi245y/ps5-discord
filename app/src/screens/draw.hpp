@@ -113,6 +113,13 @@ void sticker_picture(DrawList &list, const Ink &ink, const discord::Sticker &sti
 void confirm_card(DrawList &list, const Ink &ink, const std::string &title, const std::string &text,
                   const char *yes);
 
+// A coral arc going round a quiet ring: something is under way (t: seconds, for the turn).
+void spinner(DrawList &list, float cx, float cy, float r, float t);
+// A card over a dimmed screen while something finishes: a spinner and title ("Joining Raid
+// Night"); with a note instead, it failed and says why. back labels Circle (null: no hint).
+void busy_card(DrawList &list, const Ink &ink, const std::string &title, const std::string &note, const char *back,
+               float t);
+
 // Up to 99, then "99+".
 std::string count_text(int count);
 

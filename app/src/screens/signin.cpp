@@ -19,12 +19,6 @@ using namespace style;
 namespace gfx = hui::gfx;
 namespace ui = hui::ui;
 
-void spinner(DrawList &list, float cx, float cy, float r, float t)
-{
-    list.ring(cx, cy, r, 7.0f, kRaisedHigh);
-    list.arc(cx, cy, r, 7.0f, t * 4.2f, 1.6f, kCoral);
-}
-
 } // namespace
 
 void draw_sign_in(DrawList &list, const Ink &ink, const discord::Snapshot &s, float time)
