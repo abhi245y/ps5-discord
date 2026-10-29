@@ -4,7 +4,7 @@
 #include <string.h>
 
 // A busy account's READY inflates to a few MB; past this a broken or hostile peer is talking.
-#define ZSTREAM_MAX (64u << 20)
+#define ZSTREAM_MAX (128u << 20)
 
 static int grow(void **buf, size_t *cap, size_t need)
 {

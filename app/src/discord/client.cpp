@@ -175,7 +175,12 @@ void start_core()
 
 std::atomic<bool> g_front{true}; // Client::set_front; every request tells the core
 
-Reply http(int port, const char *method, const std::string &path, const std::string &body = {})
+// Replies are capped (16 MiB: pictures from strangers pass through the core); the chat tree,
+// which grows with the account, gets more room (kChatMax).
+constexpr std::size_t kReplyMax = 16u << 20, kChatMax = 256u << 20;
+
+Reply http(int port, const char *method, const std::string &path, const std::string &body = {},
+           std::size_t max = kReplyMax)
 {
     Reply reply;
     const int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -212,8 +217,8 @@ Reply http(int port, const char *method, const std::string &path, const std::str
     for (ssize_t r; (r = recv(fd, buf, sizeof buf, 0)) > 0;)
     {
         raw.append(buf, static_cast<std::size_t>(r));
-        if (raw.size() > (16u << 20)) // the core caps its own replies the same
-            return failed(reply, "recv (over 16 MiB)", fd);
+        if (raw.size() > max)
+            return failed(reply, max == kReplyMax ? "recv (over 16 MiB)" : "recv (over 256 MiB)", fd);
     }
     close(fd);
     const std::size_t split = raw.find("\r\n\r\n");
@@ -1172,7 +1177,7 @@ void refresh_mentions(Snapshot &s);
 
 void Client::poll_chat()
 {
-    const Reply reply = http(port_, "GET", "/api/chat");
+    const Reply reply = http(port_, "GET", "/api/chat", {}, kChatMax);
     last_chat_ms_ = now_ms();
     if (reply.status != 200)
         return;
