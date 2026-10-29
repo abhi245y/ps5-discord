@@ -24,6 +24,7 @@ int voice_current(char guild_id[32], char channel_id[32], char user_id[32], char
 int voice_set_flags(int mute, int deaf);
 // Gateway thread, between reads: 1 with *out when op 4 must be sent now.
 int voice_take_request(voice_op4 *out);
+int voice_request_pending(void); // an op 4 waits for the gateway thread
 // Gateway dispatch: VOICE_STATE_UPDATE and VOICE_SERVER_UPDATE. Other users are ignored.
 void voice_on_state(cJSON *d);
 void voice_on_server(cJSON *d);

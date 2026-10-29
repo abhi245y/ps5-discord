@@ -74,7 +74,8 @@ void vau_lock(void);
 void vau_unlock(void);
 
 // A voice connection is up: UDP socket, transport key, our ssrc, our user id.
-void vau_attach(int udp, const uint8_t key[32], uint32_t ssrc, const char *self_id);
+// dave_version: the call's; above 0 nothing is sent until vau_dave_state says the group is ready.
+void vau_attach(int udp, const uint8_t key[32], uint32_t ssrc, const char *self_id, int dave_version);
 // The connection ended: stops the engine from using its socket, keys and session.
 void vau_detach(void);
 // The DAVE session and its state (protocol version 0 = plain Opus; ready = group keys exist).

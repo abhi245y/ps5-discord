@@ -136,6 +136,14 @@ static void gw_push(int op, cJSON *d)
         cJSON_Delete(m);
 }
 
+int stream_gateway_pending(void)
+{
+    pthread_mutex_lock(&lock);
+    int n = gw_count;
+    pthread_mutex_unlock(&lock);
+    return n;
+}
+
 cJSON *stream_take_gateway(void)
 {
     pthread_mutex_lock(&lock);

@@ -111,6 +111,10 @@ class Client
     std::uint64_t notice_seq_ = 0; // Notice::seq, under mutex_
     std::atomic<bool> quit_{false}; // a quit request went through: the app closes
     std::string browser_error_; // client thread only; retained across state polls
+    int state_failures_ = 0;   // /api/state polls in a row the core did not answer (client thread)
+    bool core_seen_ = false;   // it answered once: from then on a missed poll may be only slow
+    bool replaced_core_ = false; // an older running core was told to quit (once per launch)
+    bool voice_known_ = false;   // /api/voice answered once: "not in a call" is the core's word
     bool prefetched_ = false; // recent conversations' history asked for once after sign-in
     std::atomic<bool> ready_{false}; // read by the image thread too
 };

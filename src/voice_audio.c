@@ -782,9 +782,14 @@ void vau_unlock(void)
     pthread_mutex_unlock(&mu);
 }
 
-void vau_attach(int fd, const uint8_t k[32], uint32_t ssrc, const char *self)
+void vau_attach(int fd, const uint8_t k[32], uint32_t ssrc, const char *self, int version)
 {
     pthread_mutex_lock(&mu);
+    // No session from before (its owner may destroy it), and no frame in the clear before
+    // vau_dave_state hands over this connection's.
+    session = NULL;
+    dave_version = version;
+    dave_ready = 0;
     peers_clear();
     if (encryptor)
         daveEncryptorDestroy(encryptor);

@@ -24,6 +24,7 @@
 
 extern int32_t sceKernelSendNotificationRequest(int, void *, size_t, int);
 static atomic_int g_stop;
+static atomic_int rescue_fd = -1; // the device while its system drivers are detached
 static atomic_flag running = ATOMIC_FLAG_INIT;
 static struct {
     ds5_usb_config config;
@@ -320,6 +321,8 @@ static int run_usb(void)
     }
     if (!g.config.audio_only && ioctl(fd, USB_IFACE_DRIVER_DETACH, &hid))
         goto cleanup;
+    if (!g.config.audio_only)
+        atomic_store(&rescue_fd, fd); // audio-only: re-enumerating would drop the buttons too
     for (unsigned n = 0; n < 2; n++) {
         struct usb_alt_interface alt = {.uai_interface_index = formats[n].interface_index,
                                         .uai_alt_index = formats[n].alt_index};
@@ -495,6 +498,7 @@ cleanup:
         if (rc)
             result = 1;
     }
+    atomic_store(&rescue_fd, -1);
     if (fd >= 0)
         close(fd);
     if (!g.config.audio_only)
@@ -516,6 +520,15 @@ void ds5_usb_default_config(ds5_usb_config *config)
 void ds5_usb_request_stop(void)
 {
     atomic_store(&g_stop, 1);
+}
+
+void ds5_usb_rescue(void)
+{
+    int fd = atomic_exchange(&rescue_fd, -1);
+    if (fd >= 0) {
+        int zero = 0;
+        ioctl(fd, USB_DEVICEENUMERATE, &zero);
+    }
 }
 
 int ds5_usb_run(const ds5_usb_config *config, const ds5_usb_callbacks *callbacks,

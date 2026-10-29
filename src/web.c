@@ -816,8 +816,8 @@ static void *serve_one(void *arg)
 
 // Each connection on its own thread, so a slow one (an image from the CDN, a
 // history page) does not hold up the app's polling. Capped: past the cap the
-// accept loop serves it itself, which also slows accepting down.
-#define MAX_CONNECTIONS 8
+// request gets 503 at once, so the accept loop (and /api/state) never waits on one.
+#define MAX_CONNECTIONS 16
 
 
 void web_serve(int fd)
@@ -859,7 +859,7 @@ void web_serve(int fd)
         }
         pthread_attr_destroy(&attr);
         free(k);
-        handle(c, local);
+        reply(c, "503 Service Unavailable", "text/plain", "busy", 4);
         close(c);
     }
 }

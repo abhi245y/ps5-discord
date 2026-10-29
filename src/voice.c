@@ -279,6 +279,14 @@ int voice_set_flags(int m, int d)
     return in_call ? 0 : -1;
 }
 
+int voice_request_pending(void)
+{
+    pthread_mutex_lock(&lock);
+    int due = op4_due;
+    pthread_mutex_unlock(&lock);
+    return due;
+}
+
 int voice_take_request(voice_op4 *out)
 {
     pthread_mutex_lock(&lock);
@@ -353,7 +361,13 @@ char *voice_state_json(void)
     char ids[8][VAU_ID];
     int ns = vau_speaking(ids, 8); // before our lock: the engine never takes ours
     pthread_mutex_lock(&lock);
-    if (state == V_JOINING && mono_ms() - joined_ms > JOIN_TIMEOUT_MS) {
+    if (state == V_JOINING && mono_ms() - joined_ms > JOIN_TIMEOUT_MS && cur && channel[0]) {
+        // A switch Discord never confirmed: we are still in the old channel, so stay there.
+        LOG("voice: the switch was not confirmed, staying in the call");
+        copy(want_guild, sizeof want_guild, guild);
+        copy(want_channel, sizeof want_channel, channel);
+        set_state_locked(V_CONNECTED);
+    } else if (state == V_JOINING && mono_ms() - joined_ms > JOIN_TIMEOUT_MS) {
         // Discord never confirmed the channel (not a voice room, or no permission).
         copy(err_text, sizeof err_text, "Discord did not confirm the voice channel.");
         stop_locked();
@@ -412,7 +426,9 @@ static int fatal(vthread *t, const char *msg)
 static void audio_dave(vthread *t, int detach)
 {
     pthread_mutex_lock(&lock);
-    if (cur == t && att_owner == t) {
+    // The owner alone: a stopped thread (cur moved on) must still take its session back
+    // before destroying it.
+    if (att_owner == t && (detach || cur == t)) {
         if (detach) // keep the version: above 0 and not ready, the engine sends nothing in the clear
             vau_dave_state(NULL, t->dave_version, 0);
         else
@@ -562,6 +578,25 @@ static int on_ready(vthread *t, cJSON *d)
 
 static int send_key_package(vthread *t);
 
+// The audio engine takes this connection's socket and key; again after a resume (the
+// engine let go when the websocket dropped; the UDP socket and key live on). Then the state
+// and the DAVE session follow.
+static void attach_audio(vthread *t)
+{
+    t->healthy = 1;
+    pthread_mutex_lock(&lock);
+    if (cur == t) {
+        att_owner = t;
+        vau_attach(t->udp, t->key, t->ssrc, t->user_id, t->dave_version);
+        // op 11 (who is already here) arrives before this and attach starts a clean peer
+        // table: list them again so their audio can be matched to them.
+        for (int i = 0; i < t->n_users; i++)
+            vau_expect_user(t->users[i]);
+    }
+    pthread_mutex_unlock(&lock);
+    update_state(t);
+}
+
 // Opcode 4 (SESSION_DESCRIPTION): the transport key and the DAVE version to use.
 static int on_session(vthread *t, cJSON *d)
 {
@@ -573,19 +608,8 @@ static int on_session(vthread *t, cJSON *d)
         return fatal(t, "The voice server sent a bad encryption key.");
     for (int i = 0; i < 32; i++)
         t->key[i] = (uint8_t)cJSON_GetNumberValue(cJSON_GetArrayItem(k, i));
-    t->healthy = 1;
     dave_start(t, (int)num(d, "dave_protocol_version"));
-    pthread_mutex_lock(&lock);
-    if (cur == t) {
-        att_owner = t;
-        vau_attach(t->udp, t->key, t->ssrc, t->user_id);
-        // op 11 (who is already here) arrives before this and attach starts a clean peer
-        // table: list them again so their audio can be matched to them.
-        for (int i = 0; i < t->n_users; i++)
-            vau_expect_user(t->users[i]);
-    }
-    pthread_mutex_unlock(&lock);
-    update_state(t);
+    attach_audio(t);
     LOG("voice: session up, DAVE version %d", t->dave_version);
     return send_key_package(t) == 0 ? 0 : -1; // Discord's clients send it at once, not only on op 24
 }
@@ -782,7 +806,8 @@ static int on_text(vthread *t, const char *json)
         pthread_mutex_unlock(&lock);
         break;
     }
-    case 9:
+    case 9: // RESUMED: Discord sends no new op 4, so the engine comes back here
+        attach_audio(t);
         LOG("voice: resumed");
         break;
     case 11: { // CLIENTS_CONNECT
@@ -905,8 +930,7 @@ static void finish(vthread *t, enum vstate s, const char *msg, int rejoin)
         } else {
             guild[0] = channel[0] = session_id[0] = token[0] = endpoint[0] = 0;
             copy(err_text, sizeof err_text, msg);
-            if (s == V_IDLE)
-                want_guild[0] = want_channel[0] = 0;
+            want_guild[0] = want_channel[0] = 0; // an error too: READY must not rejoin it in a loop
             queue_leave_locked(); // keep the gateway's view in step: we are not in the channel
             set_state_locked(s);
         }
@@ -929,8 +953,8 @@ static void *voice_main(void *arg)
         int code = connect_once(t);
         if (t->stop)
             break;
-        if (t->healthy)
-            resumes = 0;
+        if (t->healthy) // it worked this time: the next drop starts the count again
+            resumes = 0, backoff = 1;
         char msg[160];
         if (code == -2) {
             finish(t, V_ERROR, t->err, 0);

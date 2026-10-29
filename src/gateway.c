@@ -393,7 +393,10 @@ int gateway_run(const char *token)
         g.heartbeat_ms = 0;
         g.ready = 0;
         LOG("gateway: connection ended (%d), retry in %d s", code, backoff);
-        sleep((unsigned)backoff);
+        for (int i = 0; i < backoff * 5 && !switching; i++) // another user on screen: go now
+            usleep(200000);
+        if (switching)
+            return GATEWAY_SWITCH;
         backoff = backoff < 15 ? backoff * 2 : 15; // short cap: back soon once the network is
     }
 }

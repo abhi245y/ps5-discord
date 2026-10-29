@@ -80,6 +80,10 @@ int bc_holds_controller(void)
     return 0;
 }
 
+void bc_rescue_controller(void)
+{
+}
+
 void bc_request_keyframe(void)
 {
 }
@@ -101,6 +105,10 @@ void bc_request_keyframe(void)
 static ChiakiSession session;
 static volatile int want, running, connected, quit, ds5_done, live, holding;
 static unsigned frames, audio_frames, keyframes;
+// bc_start's test-and-set of running, and the worker's way out: two presses on two request
+// threads must not both start a session on the one struct above.
+static pthread_mutex_t run_lock = PTHREAD_MUTEX_INITIALIZER;
+static int exiting; // the worker is past run(): a start now would find nothing to keep it
 
 static void rp_log(ChiakiLogLevel level, const char *msg, void *user)
 {
@@ -331,8 +339,21 @@ static const char *run(void)
             why = "Remote Play ended.";
     }
     if (usb_running) {
+        // The hand-back runs on the USB thread; a wedged ioctl must not keep the pad (and
+        // Quit) waiting for ever: after 10 s re-enumerate it from here.
         ds5_usb_request_stop();
-        pthread_join(usb, NULL);
+        for (int i = 0; i < 100 && !ds5_done; i++)
+            usleep(100000);
+        if (!ds5_done) {
+            LOG("broadcast: the controller's USB thread is stuck, re-enumerating it");
+            ds5_usb_rescue();
+            for (int i = 0; i < 20 && !ds5_done; i++)
+                usleep(100000);
+        }
+        if (ds5_done)
+            pthread_join(usb, NULL);
+        else
+            pthread_detach(usb);
         holding = 0;
     }
     vau_ext_set(0);
@@ -346,14 +367,20 @@ static void *worker(void *arg)
 {
     (void)arg;
     const char *why = run();
+    pthread_mutex_lock(&run_lock);
+    exiting = 1;
+    pthread_mutex_unlock(&run_lock);
     LOG("broadcast: off%s%s", why ? ": " : "", why ? why : "");
     set_state(why ? "error" : "off", why ? why : "");
     if (why) {
         stream_stop(); // the picture is gone: no frozen stream left in the call
         app_alert("Go Live stopped", why, NULL, 1); // the game is in front: say so there
     }
+    pthread_mutex_lock(&run_lock);
     want = 0;
     running = 0;
+    exiting = 0;
+    pthread_mutex_unlock(&run_lock);
     return NULL;
 }
 
@@ -367,9 +394,17 @@ int bc_start(void)
         set_state("error", "Remote Play is not paired with this console.");
         return -1;
     }
+    pthread_mutex_lock(&run_lock);
+    if (running && exiting) {
+        pthread_mutex_unlock(&run_lock);
+        set_state("error", "Go Live is stopping, try again.");
+        return -1;
+    }
     want = 1;
-    if (running)
+    if (running) {
+        pthread_mutex_unlock(&run_lock);
         return 0;
+    }
     running = 1;
     profile = prefs_get("golive_quality");
     set_state("starting", "");
@@ -377,8 +412,12 @@ int bc_start(void)
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-    if (pthread_create(&t, &attr, worker, NULL) != 0) {
-        running = 0;
+    int failed = pthread_create(&t, &attr, worker, NULL) != 0;
+    pthread_attr_destroy(&attr);
+    if (failed)
+        want = running = 0;
+    pthread_mutex_unlock(&run_lock);
+    if (failed) {
         set_state("error", "Broadcasting could not start.");
         return -1;
     }
@@ -393,5 +432,10 @@ void bc_stop(void)
 int bc_holds_controller(void)
 {
     return holding;
+}
+
+void bc_rescue_controller(void)
+{
+    ds5_usb_rescue();
 }
 #endif

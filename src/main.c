@@ -125,6 +125,10 @@ static void end_calls(void)
 void core_quit(int forget_token)
 {
     end_calls();
+    // The leave and the stream's end go out on the gateway thread (within a second): let
+    // them, or the others see us in the call until Discord times us out.
+    for (int i = 0; i < 20 && (voice_request_pending() || stream_gateway_pending()); i++)
+        usleep(100000);
     if (forget_token) {
         char path[64];
         token_path(path, sizeof path);
@@ -204,6 +208,13 @@ static void *control_loop(void *arg)
     return NULL;
 }
 
+static void on_crash(int sig)
+{
+    bc_rescue_controller();
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
 int main(void)
 {
 #ifdef __PROSPERO__
@@ -213,6 +224,9 @@ int main(void)
 #endif
     // A peer that hangs up mid-write (the app, a browser, Discord) must not kill the core.
     signal(SIGPIPE, SIG_IGN);
+    // A crash while Go Live holds the controller would leave it dead until a reboot.
+    for (int i = 0; i < 5; i++)
+        signal((int[]){SIGSEGV, SIGBUS, SIGABRT, SIGILL, SIGFPE}[i], on_crash);
     char token[256];
     int control = claim_instance();
     if (control < 0) {
