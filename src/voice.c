@@ -561,6 +561,7 @@ static void dave_reset(vthread *t, int version)
     }
     t->dave = NULL;
     t->dave_ready = 0;
+    t->readds = 0; // a new group gets its own re-adds
     dave_start(t, version);
     audio_dave(t, 0);
 }

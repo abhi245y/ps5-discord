@@ -522,8 +522,10 @@ cleanup:
         if (ioctl(fd, USB_GET_PLUGTIME, &plugged)) {
             log_line("plug time errno %d", errno);
             atomic_store(&plug_unknown, 1);
-        } else
+        } else {
             atomic_store(&handed_plug, plugged ? plugged : 1);
+            atomic_store(&plug_unknown, 0); // it answered this time
+        }
         int rc = -1;
         for (int i = 0; i < 3 && rc; i++) {
             int zero = 0;
