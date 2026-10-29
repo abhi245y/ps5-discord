@@ -917,7 +917,9 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
             return true;
         }
     }
-    // Browsing.
+    // Browsing. Where nothing can be sent the message bar takes no focus: the newest message has it.
+    if (focus_ < 0 && count > 0 && !can_send(s))
+        focus_ = count - 1;
     if (input.is_pressed(Action::west)) // Square: call the DM, or open the voice room you are in
         voice_ = true;
     if (input.is_pressed(Action::l3)) // emoji into the message bar, or a sticker sent
@@ -1035,7 +1037,7 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
     }
     else if (input.nav == Direction::down)
     {
-        if (focus_ < 0)
+        if (focus_ < 0 || (focus_ + 1 >= count && !can_send(s))) // no message bar to go down to
             feedback.play(hui::audio::Cue::error, 1.0f, 0.0f, 0.5f);
         else
         {
