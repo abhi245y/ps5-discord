@@ -46,9 +46,11 @@ void chat_reset(void)
     pthread_mutex_unlock(&lock);
 }
 
-const char *chat_token(void)
+void chat_token(char *out, size_t cap)
 {
-    return token; // written once per login before the gateway starts
+    pthread_mutex_lock(&lock); // chat_reset clears it from the main thread
+    snprintf(out, cap, "%s", token);
+    pthread_mutex_unlock(&lock);
 }
 
 static void copy(cJSON *dst, cJSON *src, const char *key)
@@ -869,7 +871,8 @@ void chat_dispatch(const char *type, cJSON *d)
     else if (strcmp(type, "CHANNEL_DELETE") == 0 && guild_of(str(d, "guild_id")))
     {
         cJSON *gone = cJSON_Duplicate(d, 1); // same id, nothing visible: put_channel only removes
-        cJSON_ReplaceItemInObject(gone, "permission_overwrites", cJSON_Parse("[]"));
+        cJSON_DeleteItemFromObject(gone, "permission_overwrites"); // replacing a missing key leaks
+        cJSON_AddArrayToObject(gone, "permission_overwrites");
         cJSON_DeleteItemFromObject(gone, "type");
         cJSON_AddNumberToObject(gone, "type", 99);
         put_channel(guild_of(str(d, "guild_id")), gone);

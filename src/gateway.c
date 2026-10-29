@@ -213,7 +213,7 @@ static int on_message(gateway *g, const char *json)
 
 static int send_pending(gateway *g);
 
-static volatile int switching; // gateway_switch: another console user's account is wanted
+static _Atomic int switching; // gateway_switch: another console user's account is wanted
 
 void gateway_switch(int on)
 {

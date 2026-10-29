@@ -4,7 +4,7 @@
 #include <cJSON.h>
 
 void chat_set_token(const char *token);
-const char *chat_token(void); // valid while the session lives
+void chat_token(char *out, size_t cap); // a copy: "" once the session is reset
 void chat_reset(void);        // the account is gone (another console user's is next)
 
 // Every gateway dispatch: READY builds the account, the rest keep it current

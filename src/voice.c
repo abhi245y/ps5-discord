@@ -38,7 +38,7 @@ static const char *state_names[] = {"idle", "joining", "connecting", "securing",
 typedef struct {
     // copied from the gateway when the thread starts
     char endpoint[256], token[128], session_id[64], server_id[IDS], channel_id[IDS], user_id[IDS];
-    volatile int stop;  // set (under lock) when a newer state replaces this connection
+    _Atomic int stop;   // set (under lock) when a newer state replaces this connection
     ws_conn ws;
     int udp;            // -1 until READY
     uint32_t ssrc;

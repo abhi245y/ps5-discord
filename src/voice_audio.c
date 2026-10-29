@@ -282,7 +282,7 @@ static size_t out_len;
 // The external device (vau_ext_*). Its thread must never wait on the engine, which
 // holds mu through Opus and DAVE, so the two meet only in these rings under ext_mu.
 static pthread_mutex_t ext_mu = PTHREAD_MUTEX_INITIALIZER;
-static volatile int ext_on;
+static _Atomic int ext_on;
 static int16_t ext_mic[MIC_CAP];
 static int ext_mic_head, ext_mic_count;
 static ds5_pcm_stream ext_out; // playback with a 60 ms prefill (tools/ds5-usb-bridge)

@@ -358,7 +358,7 @@ typedef struct {
     uint32_t pin;
 } pair_job;
 
-static volatile int regist_done;
+static _Atomic int regist_done;
 static ChiakiRegisteredHost regist_host;
 
 static void regist_cb(ChiakiRegistEvent *e, void *user)

@@ -86,13 +86,15 @@ static void reply_json(int c, char *j)
 // One REST call; a 429 is retried once after the wait Discord names, if short.
 static http_response rest(const char *method, const char *path, const char *json)
 {
-    http_response res = http_request(method, path, json, chat_token());
+    char token[256];
+    chat_token(token, sizeof token);
+    http_response res = http_request(method, path, json, token);
     const double wait = ratelimit_retry_after(&res, 5.0);
     if (wait > 0) {
         LOG("rate limited on %s %s, retrying in %.2f s", method, path, wait);
         free(res.body);
         usleep((useconds_t)(wait * 1e6) + 50000);
-        res = http_request(method, path, json, chat_token());
+        res = http_request(method, path, json, token);
     }
     return res;
 }
@@ -250,7 +252,9 @@ static void api_sticker_packs(int c)
     static pthread_mutex_t once = PTHREAD_MUTEX_INITIALIZER;
     pthread_mutex_lock(&once);
     if (!cached) {
-        http_response r = http_request("GET", "/sticker-packs", NULL, chat_token());
+        char token[256];
+        chat_token(token, sizeof token);
+        http_response r = http_request("GET", "/sticker-packs", NULL, token);
         cJSON *in = r.status == 200 ? cJSON_Parse(r.body) : NULL, *p, *s;
         free(r.body);
         cJSON *out = cJSON_CreateObject(), *packs = cJSON_AddArrayToObject(out, "packs");

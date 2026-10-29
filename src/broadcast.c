@@ -25,7 +25,7 @@
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static char state[16] = "off", error[160];
-static const bc_sink *volatile sink;
+static _Atomic(const bc_sink *) sink;
 
 static void set_state(const char *s, const char *why)
 {
@@ -55,7 +55,7 @@ void bc_set_sink(const bc_sink *s)
 static const struct {
     int w, h, fps;
 } profiles[] = {{1280, 720, 30}, {1280, 720, 60}, {1920, 1080, 30}, {1920, 1080, 60}};
-static volatile int profile;
+static _Atomic int profile;
 
 void bc_profile(int *w, int *h, int *fps)
 {
@@ -108,7 +108,7 @@ const char *bc_controller(void)
 #include "voice_audio.h"
 
 static ChiakiSession session;
-static volatile int want, running, connected, quit, ds5_done, live, holding;
+static _Atomic int want, running, connected, quit, ds5_done, live, holding;
 static unsigned frames, audio_frames, keyframes;
 // bc_start's test-and-set of running, and the worker's way out: two presses on two request
 // threads must not both start a session on the one struct above.
