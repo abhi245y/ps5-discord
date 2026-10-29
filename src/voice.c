@@ -23,6 +23,10 @@
 #define VOICE_QUERY "/?v=8"
 #define JOIN_TIMEOUT_MS 20000
 #define MAX_RESUMES 5
+// The voice server could not be reached at all (no network, no DNS): not the server's fault,
+// so it does not count against MAX_RESUMES; the call waits up to UNREACHABLE_MS for it.
+#define VOICE_UNREACHABLE -4
+#define UNREACHABLE_MS (10 * 60 * 1000)
 #define MAX_USERS 64
 #define IDS 32
 
@@ -65,6 +69,7 @@ static int ping_ms, secure;
 static char refused[160];
 static int64_t joined_ms, since_ms;
 static int op4_due;
+static char listed[32]; // the channel Discord last said we are in (our VOICE_STATE_UPDATE); "" none
 static voice_op4 op4;
 static vthread *cur; // the connection that may report; NULL when none
 static vthread *att_owner; // the connection the audio engine serves (voice_audio.c)
@@ -170,7 +175,7 @@ void voice_join(const char *guild_id, const char *channel_id)
     if (!here) { // already in it: nothing to send
         copy(want_guild, sizeof want_guild, guild_id);
         copy(want_channel, sizeof want_channel, channel_id);
-        op4 = (voice_op4){.mute = mute, .deaf = deaf};
+        op4 = (voice_op4){.mute = mute, .deaf = deaf, .leave_first = !cur && listed[0]};
         copy(op4.guild, sizeof op4.guild, guild_id);
         copy(op4.channel, sizeof op4.channel, channel_id);
         op4_due = 1;
@@ -306,6 +311,7 @@ void voice_on_state(cJSON *d)
         pthread_mutex_unlock(&lock);
         return;
     }
+    copy(listed, sizeof listed, cid);
     if (!cid) { // we left (or were moved out by the server)
         stop_locked();
         guild[0] = channel[0] = session_id[0] = token[0] = endpoint[0] = 0;
@@ -912,7 +918,7 @@ static int connect_once(vthread *t)
     snprintf(url, sizeof url, "wss://%s%s", t->endpoint, VOICE_QUERY);
     if (ws_open(&t->ws, url) != 0) {
         tls_close(&t->ws.tls);
-        return -1;
+        return VOICE_UNREACHABLE;
     }
     int code = run_session(t);
     audio_release(t);
@@ -928,7 +934,7 @@ static void finish(vthread *t, enum vstate s, const char *msg, int rejoin)
         cur = NULL;
         if (rejoin) { // the server dropped our session: ask again, it sends new details
             token[0] = endpoint[0] = 0;
-            op4 = (voice_op4){.mute = mute, .deaf = deaf};
+            op4 = (voice_op4){.mute = mute, .deaf = deaf, .leave_first = listed[0] != 0};
             copy(op4.guild, sizeof op4.guild, want_guild);
             copy(op4.channel, sizeof op4.channel, want_channel);
             op4_due = 1;
@@ -945,9 +951,17 @@ static void finish(vthread *t, enum vstate s, const char *msg, int rejoin)
     pthread_mutex_unlock(&lock);
 }
 
+static _Atomic int retry_now; // voice_retry: the app's Retry now
+
+void voice_retry(void)
+{
+    retry_now = 1;
+}
+
 static int sleep_unless_stopped(vthread *t, int seconds)
 {
-    for (int i = 0; i < seconds * 10 && !t->stop; i++)
+    retry_now = 0;
+    for (int i = 0; i < seconds * 10 && !t->stop && !retry_now; i++)
         usleep(100000);
     return !t->stop;
 }
@@ -956,6 +970,7 @@ static void *voice_main(void *arg)
 {
     vthread *t = arg;
     int resumes = 0, backoff = 1;
+    int64_t unreachable_since = 0;
     for (;;) {
         int code = connect_once(t);
         if (t->stop)
@@ -990,9 +1005,19 @@ static void *voice_main(void *arg)
         }
         // A dropped socket or 4015 (voice server crashed): resume, with a limit.
         LOG("voice: connection ended (%d), resume in %d s", code, backoff);
-        if (++resumes > MAX_RESUMES) {
-            finish(t, V_ERROR, "Lost the voice server.", 0);
-            break;
+        if (code == VOICE_UNREACHABLE) {
+            if (!unreachable_since)
+                unreachable_since = mono_ms();
+            if (mono_ms() - unreachable_since > UNREACHABLE_MS) {
+                finish(t, V_ERROR, "Lost the voice server.", 0);
+                break;
+            }
+        } else {
+            unreachable_since = 0;
+            if (++resumes > MAX_RESUMES) {
+                finish(t, V_ERROR, "Lost the voice server.", 0);
+                break;
+            }
         }
         pthread_mutex_lock(&lock);
         if (cur == t)

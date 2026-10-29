@@ -135,25 +135,18 @@ void draw_reconnecting(DrawList &list, const Ink &ink, const discord::Snapshot &
     list.rounded_rect(card, 28.0f, kRaised);
     spinner(list, card.cx(), card.y + 100.0f, 44.0f, time);
     ui::text(list, ink.fonts.display, "Reconnecting…", card.cx(), card.y + 222.0f, 50.0f, kText, gfx::Align::center);
-    // Why, when the core knows (no network, DNS down); else the plain fact and the try.
-    std::string line = !s.status_message.empty() ? s.status_message : s.login_note;
-    if (line.empty())
-        line = s.reconnect_attempt > 0
-                   ? "Lost connection to Discord. Trying again (attempt " + std::to_string(s.reconnect_attempt) + ")."
-                   : std::string("Lost connection to Discord. Trying again.");
-    ui::paragraph(list, ink.fonts.regular, line, card.cx(), card.y + 276.0f, 27.0f, card.w - 100.0f, 36.0f, kText, 2,
-                  gfx::Align::center);
-    std::string muted;
-    if (s.synced_ms > 0)
-    {
-        const std::string when = ago(s.now_ms, s.synced_ms);
-        muted = "Last synced " + (when == "now" ? std::string("just now") : when);
-    }
+    // One line of what is wrong, one quiet line of progress: nothing to read twice.
+    std::string line = !s.status_message.empty() ? s.status_message
+                       : !s.login_note.empty()   ? s.login_note
+                                                 : std::string("Connection to Discord lost.");
+    ui::text(list, ink.fonts.regular, fit(ink.fonts.regular, line, 28.0f, card.w - 100.0f), card.cx(),
+             card.y + 278.0f, 28.0f, kText, gfx::Align::center);
+    std::string muted = s.reconnect_attempt > 0 ? "Attempt " + std::to_string(s.reconnect_attempt) : std::string();
     if (s.voice.active())
-        muted += (muted.empty() ? "Your" : " · your") + std::string(" call reconnects by itself");
+        muted += (muted.empty() ? "" : " · ") + std::string("Your call will resume");
     if (!muted.empty())
         ui::text(list, ink.fonts.regular, fit(ink.fonts.regular, muted, 23.0f, card.w - 100.0f), card.cx(),
-                 card.y + 330.0f, 23.0f, kDim, gfx::Align::center);
+                 card.y + 326.0f, 23.0f, kDim, gfx::Align::center);
     // The focused button is the coral one (coral marks focus only).
     const char *labels[] = {"Retry now", "Settings"};
     for (int i = 0; i < 2; ++i)

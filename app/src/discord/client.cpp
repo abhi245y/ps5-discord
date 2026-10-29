@@ -1143,7 +1143,7 @@ void Client::poll_state()
         // Before the first sign-in this is the launch; after it, a drop like any other.
         snapshot_.connection = been_ready_ ? Connection::reconnecting : Connection::starting;
         snapshot_.status_message =
-            been_ready_ ? "The ps5-discord core stopped. Starting it again." : "Starting the ps5-discord core...";
+            been_ready_ ? "Restarting the ps5-discord core." : "Starting the ps5-discord core...";
         ready_ = false;
         publish();
         return;
@@ -1236,10 +1236,7 @@ void Client::poll_state()
     snapshot_.status_message.clear();
     snapshot_.reconnect_attempt = static_cast<int>(num(state, "attempt", 0.0));
     if (snapshot_.connection == Connection::ready)
-    {
-        snapshot_.synced_ms = now_ms();
         been_ready_ = true;
-    }
     const bool was_ready = ready_;
     ready_ = snapshot_.connection == Connection::ready;
     if (ready_ && !was_ready)

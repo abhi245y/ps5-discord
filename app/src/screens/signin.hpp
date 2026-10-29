@@ -12,8 +12,8 @@ namespace screens
 void draw_sign_in(DrawList &list, const Ink &ink, const discord::Snapshot &snapshot, float time);
 // Starting or connecting, with the reason.
 void draw_waiting(DrawList &list, const Ink &ink, const discord::Snapshot &snapshot, float time);
-// Reconnecting (framework frame 12): one card over the dimmed screen that was up, with the
-// attempt, when it last synced, and Retry now / Settings (focus 0 or 1).
+// Reconnecting (framework frame 12): one card over the dimmed screen that was up: what is
+// wrong, the attempt, and Retry now / Settings (focus 0 or 1).
 void draw_reconnecting(DrawList &list, const Ink &ink, const discord::Snapshot &snapshot, float time, int focus);
 
 } // namespace screens

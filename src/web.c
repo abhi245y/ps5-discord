@@ -770,6 +770,7 @@ static void handle(int c, int local)
         api_prefs(c, body);
     } else if (post && strcmp(path, "/api/reconnect") == 0) {
         gateway_retry();
+        voice_retry();
         reply(c, "202 Accepted", "application/json", "{}", 2);
     } else if (post && strcmp(path, "/api/signout") == 0) {
         LOG("sign out requested");
