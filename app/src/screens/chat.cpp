@@ -634,9 +634,14 @@ bool Chat::update(const discord::Snapshot &s, const hui::InputFrame &input, floa
         }
         return true;
     }
+    if (mode_ == Mode::actions && (focus_ < 0 || focus_ >= count)) // its message went (deleted elsewhere)
+    {
+        mode_ = Mode::browse;
+        return true;
+    }
     if (mode_ == Mode::actions)
     {
-        const discord::Message &fm = ms[static_cast<std::size_t>(std::max(0, focus_))];
+        const discord::Message &fm = ms[static_cast<std::size_t>(focus_)];
         const bool mine = focus_ >= 0 && fm.author_id == s.me.id;
         const std::vector<Action_> acts = actions_for(fm, mine);
         const int kActionCount = static_cast<int>(acts.size());

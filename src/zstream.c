@@ -3,10 +3,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+// A busy account's READY inflates to a few MB; past this a broken or hostile peer is talking.
+#define ZSTREAM_MAX (64u << 20)
+
 static int grow(void **buf, size_t *cap, size_t need)
 {
     if (need <= *cap)
         return 0;
+    if (need > ZSTREAM_MAX)
+        return -1;
     size_t c = *cap ? *cap : 65536;
     while (c < need)
         c *= 2;

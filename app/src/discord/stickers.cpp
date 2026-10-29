@@ -49,6 +49,8 @@ bool render_lottie(const std::string &json, int size, FrameSheet &out, int max_f
     // image threads are several.
     static std::mutex one;
     std::lock_guard<std::mutex> lock(one);
+    if (json.size() > (1u << 20)) // Discord's are tens of KB; ThorVG's parser is not for hostile input
+        return false;
     static const bool ready = tvg::Initializer::init(0) == tvg::Result::Success; // no threads of its own
     if (!ready)
         return false;
@@ -91,6 +93,12 @@ bool render_lottie(const std::string &json, int size, FrameSheet &out, int max_f
 bool decode_gif(const std::string &data, FrameSheet &out)
 {
     int *delays = nullptr, w = 0, h = 0, frames = 0, n = 0;
+    // stb decodes every frame at once: stickers are 320 px, so refuse big ones before that.
+    // ponytail: the frame count is known only after decoding; a cap needs stb's frame loop.
+    if (!stbi_info_from_memory(reinterpret_cast<const std::uint8_t *>(data.data()), static_cast<int>(data.size()), &w,
+                               &h, &n) ||
+        static_cast<long>(w) * h > 512 * 512)
+        return false;
     std::uint8_t *px = stbi_load_gif_from_memory(reinterpret_cast<const std::uint8_t *>(data.data()),
                                                  static_cast<int>(data.size()), &delays, &w, &h, &frames, &n, 4);
     if (!px)

@@ -9,6 +9,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <errno.h>
 #include <unistd.h>
 
 #include <cJSON.h>
@@ -154,7 +155,8 @@ static void api_image(int c, const char *query)
         return;
     }
     url_decode(url);
-    const char *rest = strncmp(url, "https://", 8) == 0 ? url + 8 : NULL;
+    // Decoded CR, LF or space would end the CDN request line early and add headers.
+    const char *rest = strncmp(url, "https://", 8) == 0 && !strpbrk(url, "\r\n ") ? url + 8 : NULL;
     char host[128];
     size_t hlen = rest ? strcspn(rest, "/") : 0;
     int allowed = 0;
@@ -162,7 +164,8 @@ static void api_image(int c, const char *query)
         memcpy(host, rest, hlen);
         host[hlen] = 0;
         allowed = strcmp(host, "cdn.discordapp.com") == 0 || strcmp(host, "media.discordapp.net") == 0 ||
-                  (strncmp(host, "images-ext-", 11) == 0 && strstr(host, ".discordapp.net") != NULL) ||
+                  (strncmp(host, "images-ext-", 11) == 0 && hlen > 26 &&
+                   strcmp(host + hlen - 15, ".discordapp.net") == 0) ||
                   // Colour emoji pictures (Twemoji, as Discord draws them), that project only.
                   (strcmp(host, "cdn.jsdelivr.net") == 0 &&
                    strncmp(rest + hlen, "/gh/jdecked/twemoji@", 20) == 0 && !strstr(rest + hlen, ".."));
@@ -823,8 +826,11 @@ void web_serve(int fd)
         struct sockaddr_in peer;
         socklen_t plen = sizeof peer;
         int c = accept(fd, (struct sockaddr *)&peer, &plen);
-        if (c < 0)
+        if (c < 0) {
+            if (errno != EINTR && errno != ECONNABORTED)
+                usleep(100000); // out of descriptors (EMFILE): no busy loop while they come back
             continue;
+        }
         int local = peer.sin_family == AF_INET && ntohl(peer.sin_addr.s_addr) >> 24 == 127;
         struct timeval tv = {.tv_sec = 5};
         setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);

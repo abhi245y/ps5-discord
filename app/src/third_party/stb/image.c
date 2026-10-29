@@ -7,4 +7,5 @@
 #define STBI_NO_STDIO
 #define STBI_NO_LINEAR
 #define STBI_NO_HDR
+#define STBI_MAX_DIMENSIONS 4096 // pictures come from other users: no 1 GB header claims (ps5-discord)
 #include "stb_image.h"
