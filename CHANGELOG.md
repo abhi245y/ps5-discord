@@ -16,7 +16,7 @@ All notable changes to this project are documented here. The format follows
   headphones, mute button).
 - Settings (Options on Home): sign out (ends the session with Discord too), quit, Go Live
   pairing per console user without typing a PIN, Go Live quality (720p or 1080p, 30 or 60
-  fps), input volume, notification choices, interface sounds and motion.
+  fps), mic gain, notification choices, interface sounds and motion.
 - Notifications: banners stack in the app; while it is not in front (home screen, a game,
   the PS menu) the PS5's own notifications show messages, rings and Go Live stopping, with
   the sender's avatar. Discord's own mutes and per-server levels are followed; quiet hours;
@@ -35,6 +35,10 @@ All notable changes to this project are documented here. The format follows
 - Stickers: shown in messages (Discord's animated Lottie ones through ThorVG, GIF and PNG
   ones too) and sent from the picker's Stickers tab (Square), Discord's packs and the
   servers' own.
+- Settings, Voice & audio: Call volume sets how loud the call plays.
+- One VERSION file names the core and the app (Settings, About shows it; the core's
+  /api/state reports it); `make release` builds both in release mode into dist/ with
+  SHA256SUMS.
 
 ### Changed
 - Chat: what you write waits in the message bar; the keyboard's R2 is Done, R2 in the chat

@@ -631,7 +631,8 @@ static void rx(void)
     }
 }
 
-// Mix every speaker's next frame, play it, and flush what the socket takes.
+// Mix every speaker's next frame at the call volume (prefs call_volume), play it, and
+// flush what the socket takes.
 static void play(void)
 {
     int32_t acc[2 * VAU_FRAME] = {0};
@@ -642,6 +643,10 @@ static void play(void)
             vau_mix_add(acc, f);
             any = 1;
         }
+    const int volume = prefs_get("call_volume"); // 5 = as received
+    if (any && volume != 5)
+        for (int i = 0; i < 2 * VAU_FRAME; i++)
+            acc[i] = acc[i] * volume / 5; // vau_mix_out clips
     if (any && ext_on) {
         vau_mix_out(acc, out);
         pthread_mutex_lock(&ext_mu);

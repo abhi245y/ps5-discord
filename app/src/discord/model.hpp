@@ -334,6 +334,7 @@ struct Prefs
 {
     int golive_quality = 0; // 0 720p30, 1 720p60, 2 1080p30, 3 1080p60
     int mic_gain = 5;       // 0..10, 5 = as captured
+    int call_volume = 5;    // 0..10, the voices heard: 5 = as received
     bool notify_dm = true;
     int notify_server = 1;     // 0 off, 1 as set in Discord, 2 every message
     bool notify_system = true; // PS5 alerts while the app is not on screen
@@ -346,6 +347,8 @@ struct Prefs
             golive_quality = value;
         else if (key == "mic_gain")
             mic_gain = value;
+        else if (key == "call_volume")
+            call_volume = value;
         else if (key == "notify_dm")
             notify_dm = value != 0;
         else if (key == "notify_server")

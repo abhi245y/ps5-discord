@@ -16,6 +16,7 @@ typedef struct {
 static pref prefs[] = {
     {"golive_quality", 0, 3, 0, 0}, // broadcast.h bc_profile: 720p30, 720p60, 1080p30, 1080p60
     {"mic_gain", 0, 10, 5, 5},      // 5 = as captured, 10 = twice
+    {"call_volume", 0, 10, 5, 5},   // the voices heard: 5 = as received, 10 = twice
     {"notify_dm", 0, 1, 1, 1},      // DMs and mentions (chat.c notify_kind)
     {"notify_server", 0, 2, 1, 1},  // server messages: 0 off, 1 as set in Discord, 2 every one
     {"notify_system", 0, 1, 1, 1},  // PS5 alerts while the app is not on screen

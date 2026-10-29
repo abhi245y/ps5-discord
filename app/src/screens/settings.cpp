@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <ctime>
 
+#include "core/save_file.hpp"
 #include "core/version.hpp"
 #include "screens/style.hpp"
 
@@ -144,13 +145,19 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
             pair.value = "Not paired";
             pair.desc = "Pair a console user once so Go Live can show your game.";
         }
-        Row mic{Kind::slider, "Input volume", "How loud you are in calls. Join one to see your level here.", "",
+        Row mic{Kind::slider, "Mic gain", "How loud you are in calls. Join one to see your level here.", "",
                 s.prefs.mic_gain, false, false, Act::pref};
         mic.key = "mic_gain";
         mic.percent = 20;
         mic.meter = v.active();
+        Row heard{Kind::slider, "Call volume",
+                  "How loud the others sound to you.", "",
+                  s.prefs.call_volume, false, false, Act::pref};
+        heard.key = "call_volume";
+        heard.percent = 20;
         return {
             mic,
+            heard,
             pair,
             choice_row("Go Live quality", "From the next Go Live on. Above 720p · 30 fps may need Nitro.",
                        "golive_quality", kQualities, s.prefs.golive_quality),
@@ -181,16 +188,15 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
         };
     case 4:
         return {
-            {Kind::info, "Your sign-in", "Kept on this console, encrypted: a copy of the file works nowhere else.", ""},
-            {Kind::info, "Network", "The core answers only this app, on this console; nothing on your network can reach it.",
-             ""},
+            {Kind::info, "Kept on this console",
+             "Your sign-in is encrypted to this console, and nothing on your network can reach the app.", ""},
         };
     default:
         return {
-            {Kind::value, "Version", "The app and its core.", version.empty() ? "development" : version},
-            {Kind::value, "License", "Free software: you may share and change it.", "AGPL-3.0"},
-            {Kind::value, "Source", "Where the code lives.", "github.com/abhi245y/ps5-discord"},
-            {Kind::value, "Emoji", "Twemoji graphics by Twitter and contributors.", "CC-BY 4.0"},
+            {Kind::value, "Version", "", version.empty() ? "development" : version},
+            {Kind::value, "License", "", "AGPL-3.0"},
+            {Kind::value, "Source", "", "github.com/abhi245y/ps5-discord"},
+            {Kind::value, "Emoji", "", "Twemoji, CC-BY 4.0"},
         };
     }
 }
@@ -276,7 +282,21 @@ void slider(DrawList &list, const Ink &ink, float right, float cy, int level, in
 
 } // namespace
 
-SettingsScreen::SettingsScreen(const Ink &ink) : ink_(ink), version_(hui::read_content_version("/app0/sce_sys/param.json")) {}
+// The release the build wrote (tools/build.sh version.txt), else param.json's content version.
+static std::string app_version()
+{
+    std::string text;
+    if (hui::save::read_file("/app0/version.txt", &text, 64))
+    {
+        while (!text.empty() && (text.back() == '\n' || text.back() == ' '))
+            text.pop_back();
+        if (!text.empty())
+            return text;
+    }
+    return hui::read_content_version("/app0/sce_sys/param.json");
+}
+
+SettingsScreen::SettingsScreen(const Ink &ink) : ink_(ink), version_(app_version()) {}
 
 void SettingsScreen::open()
 {
@@ -679,8 +699,9 @@ void SettingsScreen::draw(const discord::Snapshot &s, const hui::Settings &app, 
             list.rounded_rect(r, kCardRadius, kRaised);
         else
             list.rounded_rect({r.x + 28.0f, r.y + r.h + kRowGap * 0.5f - 1.0f, r.w - 56.0f, 1.0f}, 0.0f, kLine);
-        ui::text(list, ink_.fonts.semibold, row.title, r.x + 28.0f, r.y + 42.0f, 28.0f, kText);
         const std::string desc = row.soon ? "Coming in a later build." : row.desc;
+        const bool alone = desc.empty() && !row.meter; // no line under it: the title sits centred
+        ui::text(list, ink_.fonts.semibold, row.title, r.x + 28.0f, alone ? cy + 10.0f : r.y + 42.0f, 28.0f, kText);
         // The description gets the row's width, less the control at the right.
         const float control = row.kind == Kind::info     ? 0.0f
                               : row.kind == Kind::button ? 260.0f

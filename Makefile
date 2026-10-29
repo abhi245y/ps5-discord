@@ -81,17 +81,41 @@ export LLVM_CONFIG ?= $(or $(shell command -v llvm-config),$(abspath tools/llvm-
 PS5_CFLAGS := -std=gnu11 -O2 -Wall $(INCLUDES) $(OPUS_FLAGS) $(PS5_DAVE_INC) -D__unix__ $(CHIAKI_FLAGS) \
 	'-DMBEDTLS_USER_CONFIG_FILE="platform/mbedtls_config_ps5.h"' $(SQLITE_FLAGS)
 HOST_CFLAGS := -std=gnu11 -O1 -g -Wall $(INCLUDES) $(OPUS_FLAGS) $(HOST_DAVE_INC) $(SQLITE_FLAGS)
-# The core answers only the app on the console. CORE_LAN=1 (development: make stop, the
-# deploy's restart) also lets the LAN read /api/state and POST /api/quit. Switching it needs
-# a rebuild of src/main.c (make clean, or touch it).
+# build/build_config.h, rewritten only when it changes (so the files using it rebuild then):
+# - CORE_VERSION: VERSION, or VERSION-dev+g<commit> unless RELEASE=1 (GIT_COMMIT where the
+#   tree is no checkout, as on the build PC);
+# - CORE_LAN: the core answers only the app on the console; CORE_LAN=1 (development: make
+#   stop, the deploy's restart) also lets the LAN read /api/state and POST /api/quit.
+VERSION := $(shell cat VERSION)
+GIT_COMMIT ?= $(or $(shell git rev-parse --short HEAD 2>/dev/null),unknown)
+CORE_VERSION := $(if $(RELEASE),$(VERSION),$(VERSION)-dev+g$(GIT_COMMIT))
 CORE_LAN ?= 0
-PS5_CFLAGS += -DCORE_LAN=$(CORE_LAN)
-HOST_CFLAGS += -DCORE_LAN=$(CORE_LAN)
+PS5_CFLAGS += -Ibuild
+HOST_CFLAGS += -Ibuild
 
 PS5_OBJ = $(patsubst %.c,build/ps5/%.o,$(APP_SRC) $(PS5_ONLY_SRC) $(PS5_DAVE_SRC) src/platform/entropy_ps5.c build/ca_bundle.c $(DEP_SRC))
 HOST_OBJ = $(patsubst %.c,build/host/%.o,$(APP_SRC) $(HOST_DAVE_SRC) build/ca_bundle.c $(DEP_SRC))
 
-.PHONY: all deps dave host test deploy stop clean
+.PHONY: all deps dave host test deploy stop clean release FORCE
+.DEFAULT_GOAL := all
+
+build/build_config.h: FORCE
+	@mkdir -p $(@D)
+	@printf '#define CORE_VERSION "%s"\n#define CORE_LAN %s\n' '$(CORE_VERSION)' '$(CORE_LAN)' > $@.new
+	@cmp -s $@.new $@ && rm $@.new || mv $@.new $@
+build/ps5/src/main.o build/ps5/src/status.o build/host/src/main.o build/host/src/status.o: build/build_config.h
+
+# The files of a GitHub release (ROADMAP.md), from a clean tree: the core built for release
+# (no LAN, no -dev), the self-checks, the app with that core inside, and their checksums.
+release:
+	$(MAKE) clean
+	$(MAKE) RELEASE=1 CORE_LAN=0 all
+	$(MAKE) test
+	cd app && RELEASE=1 $(MAKE)
+	rm -rf dist && mkdir -p dist
+	cp build/ps5-discord.elf dist/ps5-discord-core-v$(VERSION).elf
+	cp app/dist/PPSA99072.zip dist/ps5-discord-app-v$(VERSION).zip
+	cd dist && sha256sum ps5-discord-* > SHA256SUMS && cat SHA256SUMS
 all: build/ps5-discord.elf
 
 deps:

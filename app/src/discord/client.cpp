@@ -1214,6 +1214,7 @@ void Client::poll_voice()
             Prefs &prefs = snapshot_.prefs;
             prefs.golive_quality = std::clamp(static_cast<int>(p.value("golive_quality", 0.0)), 0, 3);
             prefs.mic_gain = std::clamp(static_cast<int>(p.value("mic_gain", 5.0)), 0, 10);
+            prefs.call_volume = std::clamp(static_cast<int>(p.value("call_volume", 5.0)), 0, 10);
             prefs.notify_dm = p.value("notify_dm", 1.0) != 0.0;
             prefs.notify_server = std::clamp(static_cast<int>(p.value("notify_server", 1.0)), 0, 2);
             prefs.notify_system = p.value("notify_system", 1.0) != 0.0;

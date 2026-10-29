@@ -35,3 +35,6 @@ design/
 .claude/
 .grok/
 compile_flags.txt
+
+# release files (make release)
+/dist/
