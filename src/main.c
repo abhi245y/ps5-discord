@@ -52,8 +52,8 @@ static void token_path(char *out, size_t cap)
     snprintf(out, cap, "%s/%s", DATA_DIR, token_name);
     pthread_mutex_unlock(&name_lock);
 }
-// Control port: keeps one instance alive and serves the status web UI
-// (http://<ps5>:9041, POST /api/quit for make stop). Future UI app IPC goes here too.
+// Control port: keeps one instance alive and serves the app's API (web.c; loopback only,
+// CORE_LAN=1 opens it to the LAN for make stop).
 #define CONTROL_PORT 9041
 
 static int read_token(char *out, size_t cap)

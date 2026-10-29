@@ -30,9 +30,12 @@ make dave                        # OpenSSL + mlspp + libdave into .deps/dave (sl
 make                             # build/ps5-discord.elf
 make test                        # host self-checks
 cd app && make                   # app folder in app/dist/PPSA99072, core bundled (build it first)
-make deploy PS5_HOST=<ps5-ip>    # stop the running copy, send the new one to elfldr (9021)
+make deploy PS5_HOST=<ps5-ip>    # stop the running copy, send a development core (CORE_LAN=1) to elfldr (9021)
 make stop PS5_HOST=<ps5-ip>
 ```
+
+`make deploy` always sends a development core, which also answers `make stop` and
+`/api/state` from the LAN; the core inside a release (`make release`) answers only the app.
 
 `make host` builds the same core for Linux (state in the current directory) for
 testing against Discord without the console.

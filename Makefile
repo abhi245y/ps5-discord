@@ -220,9 +220,9 @@ build/host/selftest: $(patsubst %.c,build/host/%.o,$(SELFTEST_SRC)) | build/buil
 deploy: CORE_LAN = 1
 deploy: build/ps5-discord.elf stop
 	bash -c 'cat $< > /dev/tcp/$(PS5_HOST)/$(ELFLDR_PORT)'
-	@sleep 5
-	@curl -s -m 3 http://$(PS5_HOST):9041/api/state | grep -q '"version":"$(CORE_VERSION)"' || \
-		{ echo "deploy: $(PS5_HOST) does not run $(CORE_VERSION): another core holds port 9041 (quit it from the app)"; exit 1; }
+	@for i in 1 2 3 4 5 6 7 8 9 10; do sleep 2; \
+		curl -s -m 3 http://$(PS5_HOST):9041/api/state | grep -q '"version":"$(CORE_VERSION)"' && exit 0; done; \
+		echo "deploy: $(PS5_HOST) does not run $(CORE_VERSION) after 20 s: another core holds port 9041 (quit it from the app)"; exit 1
 
 stop:
 	@test -n "$(PS5_HOST)" || { echo "usage: make $@ PS5_HOST=<ip>"; exit 2; }

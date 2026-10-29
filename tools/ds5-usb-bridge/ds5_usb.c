@@ -516,7 +516,7 @@ cleanup:
         // ponytail: the console's audio driver stays off this controller until it is
         // replugged; re-enumerating would disconnect the buttons too (press PS).
         log_line("audio released; the console's controller audio returns on replug");
-    } else if ((detached || detaching) && fd >= 0) {
+    } else if (!g.config.audio_only && (detached || detaching) && fd >= 0) {
         // Also when a detach failed: the pad may have been left detached by a crash before.
         uint32_t plugged = 0;
         if (ioctl(fd, USB_GET_PLUGTIME, &plugged)) {

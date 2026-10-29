@@ -71,8 +71,14 @@ All notable changes to this project are documented here. The format follows
 - Build: `-Wextra` everywhere, our sources build with `-Werror` in the tests, stack
   protection and format checks in the core and the app; CI runs `make test` on every push.
   `make deploy` checks that the console then runs the new core.
+- Not yet (carried to the next pass): the app still copies its whole snapshot on each
+  change (audit M26, deferred: changes are now rarer); the call audio link on port 9042
+  takes the newest client without a secret (M27, a decision before beta); tests for
+  gateway resume versus identify, the heartbeat timeout and Go Live teardown.
 
 ### Security
+- Voice: the account joining voice on another device (a phone) ends the call here instead
+  of being taken for a join of this console's.
 - The core trusts one pinned set of root certificates (curl's extract of Mozilla's,
   2026-10-20), the same on every build machine.
 - A sign-in file cut short or holding junk is refused instead of read as an old plain one.

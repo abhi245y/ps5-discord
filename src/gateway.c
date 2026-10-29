@@ -174,7 +174,9 @@ static int on_message(gateway *g, const char *json)
     int r = 0;
     switch (op) {
     case OP_HELLO:
-        g->heartbeat_ms = (int)json_int(d, "heartbeat_interval", 0);
+        g->heartbeat_ms = (int)json_int(d, "heartbeat_interval", 41250);
+        if (g->heartbeat_ms < 1000) // 0 would be a heartbeat on every turn of the loop
+            g->heartbeat_ms = 1000;
         g->next_heartbeat = now_ms() + (int64_t)(g->heartbeat_ms * (rand() / (RAND_MAX + 1.0)));
         g->acked = 1;
         LOG("gateway: HELLO, heartbeat %d ms", g->heartbeat_ms);

@@ -812,7 +812,9 @@ static void message_created(cJSON *d)
         set_string(r, "last_read", id); // your own message reads the channel
         return;
     }
-    if (!str(d, "guild_id") || mentions_me(d, me)) // every DM message counts, as in Discord
+    const int t = (int)json_int(d, "type", 0); // 1, 2, 4-6: a group DM's members, name, icon, pins
+    const int notice = t == 1 || t == 2 || (t >= 4 && t <= 6);
+    if ((!str(d, "guild_id") && !notice) || mentions_me(d, me)) // every DM message counts, as in Discord
     {
         const double n = (double)json_int(r, "mentions", 0);
         cJSON_DeleteItemFromObject(r, "mentions");

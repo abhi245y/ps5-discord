@@ -213,7 +213,7 @@ int remote_auth_login(char *out, size_t cap)
         }
         if (strcmp(op, "hello") == 0) {
             interval = (int)json_int(m, "heartbeat_interval", 0);
-            deadline = now_ms() + (int64_t)json_int(m, "timeout_ms", 0);
+            deadline = now_ms() + (int64_t)json_int(m, "timeout_ms", 120000); // missing: Discord's 2 min
             next_beat = now_ms() + (int64_t)(interval * (rand() / (RAND_MAX + 1.0)));
             send_op(&ws, "init", "encoded_public_key", pub_b64);
         } else if (strcmp(op, "nonce_proof") == 0) {

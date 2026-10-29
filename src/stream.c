@@ -498,7 +498,7 @@ static void update_media(conn *c)
             daveEncryptorSetKeyRatchet(c->enc, r);
             daveKeyRatchetDestroy(r);
         }
-        // A new epoch or a failed commit clears dave_ready: the old key must not be used.
+        // A new group (op 24, epoch 1) clears dave_ready: the old key must not be used.
         ok = c->dave_ready && (r != NULL || daveEncryptorHasKeyRatchet(c->enc));
     }
     if (!c->enc)
