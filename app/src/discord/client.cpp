@@ -1004,6 +1004,9 @@ void Client::fetch_images()
             else
                 image.w = image.h = 0;
         }
+        if (image.rgba.empty()) // shown as its stand-in for good: say why
+            hui::sys::log("[CLIENT] image failed (%d, %zu bytes, starts %.8s): %s", reply.status, reply.body.size(),
+                          reply.body.c_str(), image.url.c_str());
         std::lock_guard<std::mutex> lock(mutex_);
         images_.push_back(std::move(image));
     }

@@ -41,6 +41,10 @@ All notable changes to this project are documented here. The format follows
   sends it. Triangle edits it again; a reply shows above the bar meanwhile. The quick replies
   are gone, and the bar's plus (it did nothing) is an emoji face for L3.
 - Pictures (avatars, emoji, stickers) download four at a time.
+- Server chat: the channel list stays at the left as a card (server icon and name, unread
+  counts), with the call's dock under it while in voice (who is in it, Mute, Deafen,
+  Leave); the channel chips are gone. Left or Options moves into the list, Right or Circle
+  back to the chat. A read-only channel focuses its newest message.
 - The core keeps running when the app is closed with the PS button (for notifications and
   calls); Quit (Circle on Home) stops it.
 - License: ps5-discord's own code is now AGPL-3.0-or-later (was GPL-3.0-or-later), so

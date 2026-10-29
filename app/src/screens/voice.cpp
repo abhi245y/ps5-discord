@@ -166,49 +166,6 @@ void badge(DrawList &list, float cx, float cy, float r, Icon icon)
     icon(list, cx, cy, r * 1.25f);
 }
 
-// A curve of the circle round (cx, cy) from angle a0 to a1 (radians, anticlockwise on screen), in short lines.
-void curve(DrawList &list, float cx, float cy, float r, float a0, float a1, float thickness, Color c)
-{
-    constexpr int kSteps = 16;
-    float px = cx + r * std::cos(a0);
-    float py = cy - r * std::sin(a0);
-    for (int i = 1; i <= kSteps; ++i)
-    {
-        const float a = a0 + (a1 - a0) * static_cast<float>(i) / kSteps;
-        const float x = cx + r * std::cos(a);
-        const float y = cy - r * std::sin(a);
-        list.line(px, py, x, y, thickness, c);
-        px = x;
-        py = y;
-    }
-}
-
-// Headphones: a band over the top and a cup each side; slashed when off.
-void headphones(DrawList &list, float cx, float cy, float s, Color c, bool slash)
-{
-    curve(list, cx, cy + s * 0.05f, s * 0.42f, 0.0f, 3.14159f, s * 0.08f, c);
-    list.rounded_rect({cx - s * 0.48f, cy + s * 0.02f, s * 0.18f, s * 0.36f}, s * 0.08f, c);
-    list.rounded_rect({cx + s * 0.30f, cy + s * 0.02f, s * 0.18f, s * 0.36f}, s * 0.08f, c);
-    if (slash)
-        list.line(cx - s * 0.42f, cy - s * 0.5f, cx + s * 0.42f, cy + s * 0.42f, s * 0.08f, c);
-}
-
-// A microphone, the same shape mic_off slashes.
-void mic(DrawList &list, float cx, float cy, float s, Color c)
-{
-    list.rounded_rect({cx - s * 0.18f, cy - s * 0.5f, s * 0.36f, s * 0.62f}, s * 0.18f, c);
-    list.arc(cx, cy - s * 0.05f, s * 0.34f, s * 0.07f, 0.0f, 3.14159f, c);
-    list.line(cx, cy + s * 0.3f, cx, cy + s * 0.48f, s * 0.07f, c);
-}
-
-// The handset: an arch with its two ends turned down.
-void hang_up(DrawList &list, float cx, float cy, float s, Color c)
-{
-    curve(list, cx, cy + s * 0.12f, s * 0.42f, 0.0f, 3.14159f, s * 0.16f, c);
-    list.rounded_rect({cx - s * 0.56f, cy + s * 0.04f, s * 0.22f, s * 0.2f}, s * 0.08f, c);
-    list.rounded_rect({cx + s * 0.34f, cy + s * 0.04f, s * 0.22f, s * 0.2f}, s * 0.08f, c);
-}
-
 // A monitor with its stand: the screen share the milestone does not have yet.
 void monitor(DrawList &list, float cx, float cy, float s, Color c)
 {

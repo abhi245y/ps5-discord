@@ -110,6 +110,8 @@ class Chat
     int list_index_ = 0;        // focused row of the channel list
     hui::tween::Spring list_scroll_;
     void draw_channel_list(const discord::Snapshot &s, DrawList &list) const;
+    float left() const; // the chat's left edge: past the channel list in a server
+    void follow_list(const discord::Snapshot &s, float dt);
     std::string guild_id_;
     std::string channel_id_;
     Mode mode_ = Mode::browse;
