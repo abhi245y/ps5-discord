@@ -12,7 +12,8 @@ void chat_reset(void);        // the account is gone (another console user's is 
 void chat_dispatch(const char *type, cJSON *d);
 
 // {"me", "guilds", "dms", "users", "friends", "presence", "voice", "reads", "calls", "my_voice"}; caller frees
-char *chat_tree_json(void);
+char *chat_tree_json(void); // with "version": chat_tree_version() when it was made
+long chat_tree_version(void); // -1 before READY
 // The account's id into out. 0 until READY: the "not signed in" check of the voice routes.
 int chat_me_id(char *out, size_t cap);
 // 1 when a call exists in this DM (ringing or running), from the calls entries.

@@ -23,6 +23,10 @@ static char token[256];
 //   voice{channel_id: [states]}, reads{channel_id: {last_read, mentions}},
 //   calls{channel_id: {ringing[ids], message_id}} (DM calls in progress or ringing)
 static cJSON *tree;
+// Bumped on every change to tree (/api/chat?v= answers 304 while it holds), seeded from the
+// clock at READY so a restarted core never repeats a number the app holds.
+static long tree_version;
+static time_t pruned; // when users was last cut down to the people still referenced
 static char *events[EVENT_RING];
 static long next_event; // sequence number of the next event
 
@@ -842,6 +846,7 @@ void chat_dispatch(const char *type, cJSON *d)
         cJSON_Delete(tree);
         tree = NULL;
         load_ready(d);
+        tree_version = (long)time(NULL) << 16;
     }
     else if (!tree)
     {
@@ -907,6 +912,8 @@ void chat_dispatch(const char *type, cJSON *d)
     else if ((strcmp(type, "GUILD_EMOJIS_UPDATE") == 0 || strcmp(type, "GUILD_STICKERS_UPDATE") == 0) &&
              guild_of(str(d, "guild_id")))
         put_emojis(guild_of(str(d, "guild_id")), d, type[6] == 'E' ? "emojis" : "stickers");
+    if (tree) // ponytail: any dispatch counts as a change; a needless one costs one full reply
+        tree_version++;
     pthread_mutex_unlock(&lock);
     if (alert_title[0]) {
         alert_sink(alert_title, alert_body, alert_icon, alert_urgent);
@@ -948,10 +955,62 @@ void chat_key(int usage, int mods, int led)
     cJSON_Delete(d);
 }
 
+static int listed(cJSON *array, const char *id)
+{
+    cJSON *v;
+    cJSON_ArrayForEach(v, array)
+        if (cJSON_IsString(v) && strcmp(v->valuestring, id) == 0)
+            return 1;
+    return 0;
+}
+
+// Lock held. users gains everyone seen (authors, voice, presence) and would only grow: keep
+// me, friends, DM recipients, people in voice and ringing calls. Messages carry their
+// author themselves, so the app needs no others.
+static void prune_users(void)
+{
+    cJSON *users = cJSON_GetObjectItem(tree, "users"), *dms = cJSON_GetObjectItem(tree, "dms");
+    cJSON *voice = cJSON_GetObjectItem(tree, "voice"), *calls = cJSON_GetObjectItem(tree, "calls");
+    const char *me = str(cJSON_GetObjectItem(tree, "me"), "id");
+    cJSON *u = users ? users->child : NULL;
+    while (u) {
+        cJSON *next = u->next, *x, *y;
+        const char *id = u->string;
+        int keep = !id || (me && strcmp(id, me) == 0) || listed(cJSON_GetObjectItem(tree, "friends"), id);
+        cJSON_ArrayForEach(x, dms)
+            keep = keep || listed(cJSON_GetObjectItem(x, "recipient_ids"), id);
+        cJSON_ArrayForEach(x, voice)
+            cJSON_ArrayForEach(y, x)
+                keep = keep || (str(y, "user_id") && strcmp(str(y, "user_id"), id) == 0);
+        cJSON_ArrayForEach(x, calls)
+            keep = keep || listed(cJSON_GetObjectItem(x, "ringing"), id);
+        if (!keep)
+            cJSON_Delete(cJSON_DetachItemViaPointer(users, u));
+        u = next;
+    }
+}
+
+long chat_tree_version(void)
+{
+    pthread_mutex_lock(&lock);
+    long v = tree ? tree_version : -1;
+    pthread_mutex_unlock(&lock);
+    return v;
+}
+
 char *chat_tree_json(void)
 {
     pthread_mutex_lock(&lock);
-    char *s = tree ? cJSON_PrintUnformatted(tree) : NULL;
+    char *s = NULL;
+    if (tree) {
+        if (time(NULL) - pruned >= 60) { // ponytail: a full scan, once a minute at most
+            prune_users();
+            pruned = time(NULL);
+        }
+        cJSON_DeleteItemFromObject(tree, "version");
+        cJSON_AddNumberToObject(tree, "version", (double)tree_version);
+        s = cJSON_PrintUnformatted(tree);
+    }
     pthread_mutex_unlock(&lock);
     return s;
 }

@@ -98,7 +98,20 @@ static void test_chat(void)
         "{\"id\":\"14\",\"mention_count\":3}]}"));
     chat_dispatch("READY", ready);
     cJSON_Delete(ready);
+    // Someone passes through voice: remembered, then nobody refers to them any more.
+    const long v0 = chat_tree_version();
+    cJSON *vs = cJSON_Parse("{\"user_id\":\"7\",\"channel_id\":\"12\",\"guild_id\":\"10\","
+                            "\"member\":{\"user\":{\"id\":\"7\",\"username\":\"passerby\"}}}");
+    chat_dispatch("VOICE_STATE_UPDATE", vs);
+    cJSON_ReplaceItemInObject(vs, "channel_id", cJSON_CreateNull());
+    chat_dispatch("VOICE_STATE_UPDATE", vs);
+    cJSON_Delete(vs);
+    assert(v0 > 0 && chat_tree_version() == v0 + 2); // each change moves the version (/api/chat?v=)
     char *t = chat_tree_json();
+    assert(!strstr(t, "passerby")); // pruned: not a friend, DM recipient or in voice
+    char vs_text[48];
+    snprintf(vs_text, sizeof vs_text, "\"version\":%ld", v0 + 2);
+    assert(strstr(t, vs_text));
     assert(t && strstr(t, "\"name\":\"G\"") && strstr(t, "general"));
     assert(strstr(t, "\"rooms\":[{\"id\":\"12\"")); // voice channels become rooms
     assert(strstr(t, "\"global_name\":\"Bob\"")); // DM recipients land in users

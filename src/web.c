@@ -727,7 +727,12 @@ static void handle(int c, int local)
         browser_auth_cancel();
         reply(c, "200 OK", "application/json", "{\"ok\":true}", 11);
     } else if (get && strcmp(path, "/api/chat") == 0) {
-        reply_json(c, chat_tree_json());
+        // ?v=: the version the app holds; unchanged, nothing is sent.
+        char v[24] = "";
+        if (query_get(query, "v", v, sizeof v) == 0 && v[0] && strtol(v, NULL, 10) == chat_tree_version())
+            reply(c, "304 Not Modified", "application/json", "", 0);
+        else
+            reply_json(c, chat_tree_json());
     } else if (get && strcmp(path, "/api/events") == 0) {
         char since[24] = "0", wait[8] = "0";
         query_get(query, "since", since, sizeof since);
