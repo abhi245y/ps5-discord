@@ -41,6 +41,8 @@ All notable changes to this project are documented here. The format follows
   sends it. Triangle edits it again; a reply shows above the bar meanwhile. The quick replies
   are gone, and the bar's plus (it did nothing) is an emoji face for L3.
 - Pictures (avatars, emoji, stickers) download four at a time.
+- Button hints: L1, R1, L2 and R2 are plain bordered keys, all four alike, as the
+  framework draws them; the message bar's hints sit between dividers.
 - Server chat: the channel list stays at the left as a card (server icon and name, unread
   counts), with the call's dock under it while in voice (who is in it, Mute, Deafen,
   Leave); the channel chips are gone. Left or Options moves into the list, Right or Circle

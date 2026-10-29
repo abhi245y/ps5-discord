@@ -116,10 +116,9 @@ float button_width(Button button, float size)
     {
     case Button::l1:
     case Button::r1:
-        return size * 1.45f;
     case Button::l2:
     case Button::r2:
-        return size * 1.3f;
+        return size * 1.2f;
     case Button::options:
         return size * 1.05f;
     case Button::touchpad:
@@ -148,26 +147,15 @@ void draw_button(gfx::DrawList &list, const Fonts &fonts, const GlyphStyle &styl
         return;
     case Button::l1:
     case Button::r1:
-    {
-        // Bumper: a low, wide key with a bright top lip.
-        const float h = size * 0.74f;
-        const gfx::Rect r{x, cy - h * 0.5f, w, h};
-        list.bordered_rect(r, h * 0.34f, style.body, 1.5f, style.edge);
-        list.line(x + h * 0.45f, r.y + 3.0f, x + w - h * 0.45f, r.y + 3.0f, 2.0f,
-                  style.ink.with_alpha(0.5f));
-        label(list, fonts, style, button == Button::l1 ? "L1" : "R1", cx, cy + 1.0f, size * 0.4f);
-        return;
-    }
     case Button::l2:
     case Button::r2:
     {
-        // Trigger: taller, with a lit, rounded top like the DualSense trigger.
-        const float h = size * 0.92f;
+        // Shoulder buttons: a plain key with its name, the four alike.
+        const float h = size * 0.78f;
         const gfx::Rect r{x, cy - h * 0.5f, w, h};
-        list.bordered_rect(r, h * 0.32f, style.body, 1.5f, style.edge);
-        list.rounded_rect({x + 4, r.y + 4, w - 8, h * 0.24f}, h * 0.12f,
-                          style.ink.with_alpha(0.16f));
-        label(list, fonts, style, button == Button::l2 ? "L2" : "R2", cx, cy + 3.0f, size * 0.4f);
+        list.bordered_rect(r, h * 0.24f, style.body, 2.0f, style.edge);
+        const char *name = button == Button::l1 ? "L1" : button == Button::r1 ? "R1" : button == Button::l2 ? "L2" : "R2";
+        label(list, fonts, style, name, cx, cy + 1.0f, size * 0.42f);
         return;
     }
     case Button::options:

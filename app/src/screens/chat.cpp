@@ -1369,8 +1369,14 @@ void Chat::draw_composer(const discord::Snapshot &s, DrawList &list) const
     layout.text_size = 25.0f;
     layout.cy = bar.cy();
     layout.item_gap = 34.0f;
-    ui::draw_hints(list, ink_.fonts, glyphs, draft ? draft_hints : type_hint, draft ? 2 : 1, bar.x + bar.w - 30.0f,
-                   true, layout);
+    // Right to left, a divider before each, as the framework's bar has them.
+    float hx = bar.x + bar.w - 30.0f;
+    for (int i = (draft ? 2 : 1) - 1; i >= 0; --i)
+    {
+        hx -= ui::draw_hints(list, ink_.fonts, glyphs, &(draft ? draft_hints : type_hint)[i], 1, hx, true, layout);
+        list.rounded_rect({hx - 26.0f, bar.cy() - 20.0f, 2.0f, 40.0f}, 1.0f, kLine);
+        hx -= 52.0f;
+    }
 
     if (focus_ < 0 && mode_ != Mode::channels)
         focus_outline(list, bar, 22.0f, 1.0f);
