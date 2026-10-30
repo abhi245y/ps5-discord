@@ -127,10 +127,14 @@ PY
     exit 0
 fi
 
-echo "==> [deploy] Building the app folder"
-make -C "$root" --no-print-directory app
-
-artifact="$root/dist/$title_id"
+# DEPLOY_DIR: a finished app folder, uploaded as it is (no rebuild, which would relabel it).
+if [[ -n ${DEPLOY_DIR:-} ]]; then
+    artifact=$DEPLOY_DIR
+else
+    echo "==> [deploy] Building the app folder"
+    make -C "$root" --no-print-directory app
+    artifact="$root/dist/$title_id"
+fi
 [[ -d $artifact ]] || {
     echo "missing deployment folder: $artifact" >&2
     exit 2
