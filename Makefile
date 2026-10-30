@@ -11,6 +11,8 @@
 
 PS5_HOST ?=
 ELFLDR_PORT ?= 9021
+# The console's FTP server: make stop reads the core key (src/core_key.h) through it.
+PS5_FTP ?= anonymous:codex@$(PS5_HOST):2121
 # The trust store built in: curl's extract of Mozilla's roots, pinned in tools/deps.sh.
 CA_PEM := .deps/cacert-2026-10-20.pem
 HOST_CC ?= cc
@@ -30,7 +32,7 @@ OPUS_INCLUDES := -I$(OPUS)/include -I$(OPUS)/celt -I$(OPUS)/silk -I$(OPUS)/silk/
 
 DS5 := tools/ds5-usb-bridge
 APP_SRC := src/main.c src/log.c src/status.c src/web.c src/chat.c src/gateway.c src/remote_auth.c src/browser_auth.c src/browser_storage.c src/http.c src/props.c src/ws.c src/tls.c src/zstream.c src/ratelimit.c \
-	src/voice.c src/voice_proto.c src/voice_audio.c src/broadcast.c src/rp_pair.c src/prefs.c src/notify.c src/stream.c $(DS5)/pcm_stream.c
+	src/core_key.c src/voice.c src/voice_proto.c src/voice_audio.c src/broadcast.c src/rp_pair.c src/prefs.c src/notify.c src/stream.c $(DS5)/pcm_stream.c
 # Controller audio without Go Live (controller_voice.c) is parked: CONTROLLER_VOICE=1 builds it.
 ifneq ($(CONTROLLER_VOICE),)
 APP_SRC += src/controller_voice.c
@@ -95,7 +97,7 @@ HOST_CFLAGS := -std=gnu11 -O1 -g -Wall -Wextra $(HARDEN) $(INCLUDES) $(OPUS_FLAG
 # - CORE_VERSION: VERSION, or VERSION-dev+g<commit> unless RELEASE=1 (GIT_COMMIT where the
 #   tree is no checkout, as on the build PC);
 # - CORE_LAN: the core answers only the app on the console; CORE_LAN=1 (development: make
-#   stop, the deploy's restart) also lets the LAN read /api/state and POST /api/quit.
+#   stop, the deploy's restart) also lets the LAN read /api/state and POST /api/quit (with the key).
 VERSION := $(shell cat VERSION)
 GIT_COMMIT ?= $(or $(shell git rev-parse --short HEAD 2>/dev/null),unknown)
 CORE_VERSION := $(if $(RELEASE),$(VERSION),$(VERSION)-dev+g$(GIT_COMMIT))
@@ -161,10 +163,11 @@ build/host/%.o: %.c
 	@$(HOST_CC) $(if $(filter .deps/%,$<),-w) $(HOST_CFLAGS) $(if $(filter src/% tests/%,$<),-Werror) -MMD -MP -c $< -o $@
 
 test: build/host/selftest build/host/browser-storage-test build/host/client-read-state-test build/host/gif-frames-test \
-		build/host/ds5-usb-test build/host/web-test $(HOST_DAVE_TEST)
+		build/host/ds5-usb-test build/host/web-test build/host/gateway-test $(HOST_DAVE_TEST)
 	./build/host/selftest
 	./build/host/ds5-usb-test
 	./build/host/web-test
+	./build/host/gateway-test
 	./build/host/browser-storage-test
 	./build/host/client-read-state-test
 	./build/host/gif-frames-test
@@ -172,7 +175,7 @@ test: build/host/selftest build/host/browser-storage-test build/host/client-read
 
 # The external sender is libdave's test helper (C++, tests/dave): it signs the group's proposals.
 # The media leg links the engine's packet code, Opus and mbedTLS (GCM) as objects.
-DAVE_TEST_LIB = build/host/src/voice_audio.o build/host/src/prefs.o build/host/$(DS5)/pcm_stream.o build/host/src/voice_proto.o build/host/$(CJSON)/cJSON.o \
+DAVE_TEST_LIB = build/host/src/voice_audio.o build/host/src/core_key.o build/host/src/prefs.o build/host/$(DS5)/pcm_stream.o build/host/src/voice_proto.o build/host/$(CJSON)/cJSON.o \
 	$(patsubst %.c,build/host/%.o,$(OPUS_SRC) $(wildcard $(MBED)/library/*.c))
 build/host/dave-test: tests/dave_session.c tests/dave/external_sender.cpp tests/dave/external_sender_wrapper.cpp \
 		$(DAVE_TEST_LIB)
@@ -200,13 +203,20 @@ build/host/web-test: build/host/tests/web.o $(filter-out build/host/src/main.o b
 	@echo "  LD    $@"
 	@$(HOST_CC) -o $@ $^ $(HOST_DAVE_LINK)
 build/host/tests/web.o: src/web.c | build/build_config.h
+# gateway.c's session choices over a fake WebSocket (tests/gateway.c stands in for ws.c).
+build/host/gateway-test: build/host/tests/gateway.o \
+		$(filter-out build/host/src/main.o build/host/src/gateway.o build/host/src/ws.o,$(HOST_OBJ))
+	@mkdir -p $(@D)
+	@echo "  LD    $@"
+	@$(HOST_CC) -o $@ $^ $(HOST_DAVE_LINK)
+build/host/tests/gateway.o: src/gateway.c | build/build_config.h
 # The bridge's checks (tools/ds5-usb-bridge: make test there adds sanitizers).
 build/host/ds5-usb-test: $(DS5)/test_usb.c $(DS5)/pcm_stream.c $(wildcard $(DS5)/*.h)
 	@mkdir -p $(@D)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -g -o $@ $(DS5)/test_usb.c $(DS5)/pcm_stream.c
 # From the same objects as the host build: our sources with -Werror, the libraries quiet.
 SELFTEST_SRC := tests/selftest.c src/ws.c src/tls.c src/zstream.c src/log.c src/status.c src/chat.c src/ratelimit.c src/http.c src/props.c \
-	src/voice.c src/voice_proto.c src/voice_audio.c src/prefs.c src/notify.c $(DS5)/pcm_stream.c $(OPUS_SRC) \
+	src/core_key.c src/voice.c src/voice_proto.c src/voice_audio.c src/prefs.c src/notify.c $(DS5)/pcm_stream.c $(OPUS_SRC) \
 	$(HOST_DAVE_SRC) $(CJSON)/cJSON.c $(QRGEN)/qrcodegen.c $(ZLIB_SRC) $(ZLIB)/deflate.c $(ZLIB)/trees.c \
 	$(wildcard $(MBED)/library/*.c) build/ca_bundle.c
 build/host/selftest: $(patsubst %.c,build/host/%.o,$(SELFTEST_SRC)) | build/build_config.h
@@ -226,8 +236,9 @@ deploy: build/ps5-discord.elf stop
 
 stop:
 	@test -n "$(PS5_HOST)" || { echo "usage: make $@ PS5_HOST=<ip>"; exit 2; }
-	@if curl -s -m 3 -X POST http://$(PS5_HOST):9041/api/quit >/dev/null; then sleep 1; \
-	else echo "stop: no core answered on $(PS5_HOST):9041 (none running, or a release build that answers only the console)"; fi
+	@key=$$(curl -s -m 3 ftp://$(PS5_FTP)/data/homebrew/PPSA99072/control.key); \
+	if curl -sf -m 3 -X POST -H 'X-Discord-Native: 1' -H "X-Core-Key: $$key" http://$(PS5_HOST):9041/api/quit >/dev/null; \
+	then sleep 1; else echo "stop: no core quit on $(PS5_HOST):9041 (none running, a release build that answers only the console, or no key from ftp://$(PS5_FTP))"; fi
 
 clean:
 	rm -rf build

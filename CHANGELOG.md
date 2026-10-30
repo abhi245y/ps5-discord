@@ -71,12 +71,18 @@ All notable changes to this project are documented here. The format follows
 - Build: `-Wextra` everywhere, our sources build with `-Werror` in the tests, stack
   protection and format checks in the core and the app; CI runs `make test` on every push.
   `make deploy` checks that the console then runs the new core.
+- Tests: the gateway's identify or resume on HELLO, invalid sessions and the heartbeat
+  timeout run over a fake WebSocket; the core key is checked as a header and on disk.
 - Not yet (carried to the next pass): the app still copies its whole snapshot on each
-  change (audit M26, deferred: changes are now rarer); the call audio link on port 9042
-  takes the newest client without a secret (M27, a decision before beta); tests for
-  gateway resume versus identify, the heartbeat timeout and Go Live teardown.
+  change (audit M26, deferred: changes are now rarer); a host test of Go Live teardown
+  (it needs the console's Remote Play and USB, checked there).
 
 ### Security
+- The app and core share a key made at each core start (the app reads it from its own
+  install folder, which other homebrew and the console's browser do not see): every control
+  request and the call's audio link carry it, so another payload or a web page cannot read
+  chats, speak or listen in the call, or knock the app off it. `make stop` reads the key
+  over FTP. The control API is version 5.
 - Voice: the account joining voice on another device (a phone) ends the call here instead
   of being taken for a join of this console's.
 - The core trusts one pinned set of root certificates (curl's extract of Mozilla's,

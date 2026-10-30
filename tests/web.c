@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The control API's request helpers (src/web.c, included for its statics): ids, query
-// strings, %-decoding, the image proxy's allowlist and the REST reply wrapper.
+// strings, %-decoding, the image proxy's allowlist, the REST reply wrapper and the core key.
 #include "../src/web.c"
 
 #include <assert.h>
+#include <sys/stat.h>
 
 // main.c's, which this test does not link.
 int core_sign_out(void)
@@ -80,6 +81,56 @@ int main(void)
     assert(strstr(out, "{\"status\":502,\"body\":null}"));
     rest_reply(-1, NULL, out, sizeof out); // no answer at all
     assert(strstr(out, "{\"status\":-1,\"body\":null}"));
-    puts("web: ids, queries, decoding, image allowlist, REST replies passed");
+
+    // The key: none passes before the core made one, then only its 64 characters as a header.
+#define REQ_FMT "POST /api/send HTTP/1.0\r\nX-Core-Key: %s\r\nContent-Length: 0\r\n\r\n"
+    char req[256];
+    snprintf(req, sizeof req, REQ_FMT, "");
+    assert(!key_header_ok(req, strstr(req, "\r\n\r\n") + 4) && !core_key_ok("", 0));
+    unsigned char raw[32];
+    for (int i = 0; i < 32; i++)
+        raw[i] = (unsigned char)(i * 37 + 5);
+    char dir[] = "/tmp/web-test-XXXXXX";
+    assert(mkdtemp(dir));
+    assert(core_key_make(dir, raw) == 0);
+    char path[64], disk[CORE_KEY_LEN + 1] = "";
+    snprintf(path, sizeof path, "%s/control.key", dir);
+    struct stat st;
+    assert(stat(path, &st) == 0 && (st.st_mode & 0777) == 0644 && st.st_size == CORE_KEY_LEN);
+    FILE *f = fopen(path, "r");
+    assert(f && fread(disk, 1, CORE_KEY_LEN, f) == CORE_KEY_LEN);
+    fclose(f);
+    unlink(path);
+    core_key_keep(); // a reinstall took the file: written again
+    assert(stat(path, &st) == 0 && st.st_size == CORE_KEY_LEN);
+    unlink(path);
+    rmdir(dir);
+    assert(strncmp(disk, "05", 2) == 0); // hex of raw[0]
+    snprintf(req, sizeof req, REQ_FMT, disk);
+    assert(key_header_ok(req, strstr(req, "\r\n\r\n") + 4));
+    char wrong[CORE_KEY_LEN + 1];
+    memcpy(wrong, disk, sizeof wrong);
+    wrong[CORE_KEY_LEN - 1] ^= 1;
+    snprintf(req, sizeof req, REQ_FMT, wrong);
+    assert(!key_header_ok(req, strstr(req, "\r\n\r\n") + 4));
+    wrong[CORE_KEY_LEN - 1] = 0; // one short
+    snprintf(req, sizeof req, REQ_FMT, wrong);
+    assert(!key_header_ok(req, strstr(req, "\r\n\r\n") + 4));
+    snprintf(req, sizeof req, "POST /api/send HTTP/1.0\r\nX-Core-Key: %sx\r\n\r\n", disk); // one long
+    assert(!key_header_ok(req, strstr(req, "\r\n\r\n") + 4));
+    snprintf(req, sizeof req, "POST /api/send HTTP/1.0\r\nContent-Length: 77\r\n\r\n\r\nX-Core-Key: %s\r\n", disk);
+    assert(!key_header_ok(req, strstr(req, "\r\n\r\n") + 4)); // in the body: not a header
+    assert(core_key_ok(disk, CORE_KEY_LEN) && !core_key_ok(disk, CORE_KEY_LEN - 1));
+
+    // /api/state is open: the login QR only goes to the key holder.
+    status_state("login");
+    status_qr("https://discord.com/ra/test");
+    char *state = status_json(0);
+    assert(!strstr(state, "\"qr"));
+    free(state);
+    state = status_json(1);
+    assert(strstr(state, "\"qr_url\":\"https://discord.com/ra/test\""));
+    free(state);
+    puts("web: ids, queries, decoding, image allowlist, REST replies, core key passed");
     return 0;
 }

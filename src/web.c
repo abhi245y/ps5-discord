@@ -16,6 +16,7 @@
 #include <cJSON.h>
 
 #include "chat.h"
+#include "core_key.h"
 #include "gateway.h"
 #include "http.h"
 #include "log.h"
@@ -691,6 +692,17 @@ static int host_ok(int c, const char *req, const char *body)
            (n == strlen(self) && strncmp(h, self, n) == 0);
 }
 
+// X-Core-Key: the per-boot key (core_key.h), which only the app can read.
+static int key_header_ok(const char *req, const char *body)
+{
+    const char *h = header_line(req, body, "\r\nX-Core-Key: ");
+    if (!h)
+        return 0;
+    h += 14;
+    size_t n = strcspn(h, "\r\n");
+    return h[n] == '\r' && core_key_ok(h, n);
+}
+
 // local: the peer is on this console (the native app). Chat data is only served to it.
 static void handle(int c, int local)
 {
@@ -724,17 +736,23 @@ static void handle(int c, int local)
     int get = strcmp(method, "GET") == 0, post = strcmp(method, "POST") == 0;
     // A page in the console's own browser connects from 127.x too. Browsers always
     // send Host, so a name other than ours is DNS rebinding. The custom header makes
-    // a cross-origin request need a preflight, which this server never grants.
+    // a cross-origin request need a preflight, which this server never grants. The key
+    // keeps out what is no browser: another payload or app on the console, or the LAN.
+    // /api/state stays open: it is how the app finds a core, and which one, before it has the key.
     if (!host_ok(c, req, body)) {
         reply(c, "403 Forbidden", "text/plain", "host", 4);
         return;
     }
-    if (strncmp(path, "/api/", 5) == 0 && !(get && strcmp(path, "/api/state") == 0) &&
-        !header_line(req, body, "\r\nX-Discord-Native: 1\r\n")) {
+    int open_path = strncmp(path, "/api/", 5) != 0 || (get && strcmp(path, "/api/state") == 0);
+    if (!open_path && !header_line(req, body, "\r\nX-Discord-Native: 1\r\n")) {
         reply(c, "403 Forbidden", "text/plain", "native app only", 15);
         return;
     }
-    if (local && header_line(req, body, "\r\nX-Discord-Native: 1\r\n")) {
+    if (!open_path && !key_header_ok(req, body)) {
+        reply(c, "403 Forbidden", "text/plain", "key", 3);
+        return;
+    }
+    if (local && header_line(req, body, "\r\nX-Discord-Native: 1\r\n") && key_header_ok(req, body)) {
         app_seen = time(NULL);
         app_front = !header_line(req, body, "\r\nX-App-Front: 0\r\n");
     }
@@ -745,7 +763,8 @@ static void handle(int c, int local)
     }
 
     if (get && strcmp(path, "/api/state") == 0) {
-        reply_json(c, status_json());
+        core_key_keep(); // the app polls this first; a reinstall may have taken its key file
+        reply_json(c, status_json(key_header_ok(req, body)));
     } else if (post && strcmp(path, "/api/browser-login") == 0) {
         if (browser_auth_request() == 0)
             reply(c, "202 Accepted", "application/json", "{\"ok\":true}", 11);

@@ -13,6 +13,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "core_key.h"
 #include "log.h"
 #include "pcm_stream.h"
 #include "prefs.h"
@@ -388,9 +389,56 @@ static void client_drop(void)
     out_len = 0;
 }
 
+// A new connection first sends the core key (core_key.h); until then it is only a
+// candidate, and the app on the link keeps it. One candidate at a time, 2 s to show it.
+static int pending_fd = -1;
+static char pending_key[CORE_KEY_LEN];
+static size_t pending_len;
+static int64_t pending_ms;
+
+static void pending_drop(void)
+{
+    if (pending_fd >= 0)
+        close(pending_fd);
+    pending_fd = -1;
+    pending_len = 0;
+}
+
+static void check_pending(void)
+{
+    if (pending_fd < 0)
+        return;
+    ssize_t r = recv(pending_fd, pending_key + pending_len, sizeof pending_key - pending_len, MSG_DONTWAIT);
+    if (r > 0)
+        pending_len += (size_t)r;
+    else if (r == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
+        pending_drop();
+        return;
+    }
+    if (pending_len < sizeof pending_key) {
+        if (now_ms() - pending_ms > 2000) {
+            LOG("voice audio: refused a connection that sent no key");
+            pending_drop();
+        }
+        return;
+    }
+    if (!core_key_ok(pending_key, pending_len)) {
+        LOG("voice audio: refused a connection with the wrong key");
+        pending_drop();
+        return;
+    }
+    client_drop(); // one app at a time: the newest replaces the old (a restarted app)
+    int one = 1;
+    setsockopt(pending_fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+    client_fd = pending_fd; // what follows the key is mic audio, read by read_mic
+    pending_fd = -1;
+    pending_len = 0;
+    LOG("voice audio: app connected");
+}
+
 static void accept_client(void)
 {
-    if (listen_fd < 0)
+    if (listen_fd < 0 || pending_fd >= 0) // the next waits in the backlog
         return;
     struct sockaddr_in a;
     socklen_t l = sizeof a;
@@ -401,12 +449,9 @@ static void accept_client(void)
         close(fd);
         return;
     }
-    client_drop(); // one app at a time: the newest replaces the old
     fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
-    int one = 1;
-    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
-    client_fd = fd;
-    LOG("voice audio: app connected");
+    pending_fd = fd;
+    pending_ms = now_ms();
 }
 
 static void read_mic(void)
@@ -723,6 +768,7 @@ static void read_ext_mic(void)
 static void tick(void)
 {
     accept_client();
+    check_pending();
     read_mic();
     read_ext_mic();
     if (!attached) { // no call: the mic is not wanted
