@@ -4,7 +4,7 @@
 
 // Discord application whose image proxy shows game covers, and whose icon shows when a
 // game has none. "" = name only, no pictures.
-#define PLAYING_APP_ID "1565829739241807882" // ps5-discord on discord.com/developers
+#define PLAYING_APP_ID "1565829739241807882" // the project's, on discord.com/developers (unverified: no bot)
 
 // The running game: its title id (10 bytes) and name, or "" (none, this app, a system app,
 // or no name found). Gateway thread only: it keeps the last title's name.
