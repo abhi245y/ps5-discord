@@ -74,8 +74,9 @@ verification challenge.
   a development build (`CORE_LAN=1`) also lets the LAN read its status and stop it with the
   key. The app proves itself with a key the core writes at each start to
   `/data/homebrew/PPSA99072/control.key`; `GET /api/state` (version and sign-in state) needs
-  none. A payload with kernel access, or anyone on the console's FTP server, can still
-  read that file: the key keeps out the browser and ordinary programs, not a jailbreak.
+  none. The file is readable by any user (the app runs as another user than the core), so
+  another payload, homebrew app or anyone on the console's FTP server can read it: the key
+  keeps out the browser and the LAN, not other homebrew.
 - Third-party clients break Discord's ToS and can get an account banned.
 - Go Live needs the DualSense on USB (a Bluetooth controller is dropped by Remote Play) and a
   Remote Play pairing, made once in Settings, Voice & audio. Above 720p30 needs Nitro or a

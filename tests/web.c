@@ -96,7 +96,7 @@ int main(void)
     char path[64], disk[CORE_KEY_LEN + 1] = "";
     snprintf(path, sizeof path, "%s/control.key", dir);
     struct stat st;
-    assert(stat(path, &st) == 0 && (st.st_mode & 0777) == 0600 && st.st_size == CORE_KEY_LEN);
+    assert(stat(path, &st) == 0 && (st.st_mode & 0777) == 0644 && st.st_size == CORE_KEY_LEN);
     FILE *f = fopen(path, "r");
     assert(f && fread(disk, 1, CORE_KEY_LEN, f) == CORE_KEY_LEN);
     fclose(f);

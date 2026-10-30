@@ -17,8 +17,9 @@ static int write_key(void)
     char tmp[264];
     snprintf(tmp, sizeof tmp, "%s.new", path);
     pthread_mutex_lock(&write_lock);
-    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    int ok = fd >= 0 && write(fd, key, CORE_KEY_LEN) == CORE_KEY_LEN;
+    // 0644: the app runs as another user than this payload; the browser has no /data at all.
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int ok = fd >= 0 && fchmod(fd, 0644) == 0 && write(fd, key, CORE_KEY_LEN) == CORE_KEY_LEN;
     ok = fd >= 0 && close(fd) == 0 && ok && rename(tmp, path) == 0;
     pthread_mutex_unlock(&write_lock);
     return ok ? 0 : -1;

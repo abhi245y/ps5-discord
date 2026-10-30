@@ -10,7 +10,7 @@
 
 #define CORE_KEY_LEN 64 // hex characters
 
-// From 32 random bytes: kept in memory and written to dir/control.key (0600). 0 on success;
+// From 32 random bytes: kept in memory and written to dir/control.key (0644). 0 on success;
 // the key is set either way, so a failed write only locks the app out, never opens the core.
 int core_key_make(const char *dir, const unsigned char raw[32]);
 // Writes the file again if it is gone (the app was reinstalled while the core ran).
