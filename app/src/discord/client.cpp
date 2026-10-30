@@ -1926,6 +1926,12 @@ void Client::handle(const Request &request)
         quit_ = true;
         break;
     case Request::Kind::update_check: {
+        if (request.on) // Settings: "Checking..." at once, not after the next poll
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            snapshot_.update.state = "checking";
+            publish();
+        }
         const Reply reply = http(port_, "POST", "/api/update/check", request.on ? "{\"force\":true}" : "");
         hui::sys::log("[CLIENT] /api/update/check answered %d", reply.status);
         break;

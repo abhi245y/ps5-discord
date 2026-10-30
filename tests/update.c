@@ -219,7 +219,7 @@ static void zips(void)
     make_zip(zip, names, data, 3, 0);
     snprintf(out, sizeof out, "%s/out", tmp);
     mkdir(out, 0777);
-    assert(update_unzip(zip, out, 1 << 20, why, sizeof why) == 0);
+    assert(update_unzip(zip, out, 1 << 20, NULL, why, sizeof why) == 0);
     snprintf(path, sizeof path, "%s/assets/a.txt", out);
     assert(has(path, "art"));
     remove_tree(out);
@@ -227,19 +227,19 @@ static void zips(void)
     for (int i = 0; i < 4; i++) {
         mkdir(out, 0777);
         make_zip(zip, bad[i], data + 1, 1, 0);
-        assert(update_unzip(zip, out, 1 << 20, why, sizeof why) != 0);
+        assert(update_unzip(zip, out, 1 << 20, NULL, why, sizeof why) != 0);
         remove_tree(out);
     }
     const char *twice[] = {"PPSA99072/a", "PPSA99072/a"};
     mkdir(out, 0777);
     make_zip(zip, twice, data + 1, 2, 0);
-    assert(update_unzip(zip, out, 1 << 20, why, sizeof why) != 0 && strcmp(why, "zip entry twice") == 0);
+    assert(update_unzip(zip, out, 1 << 20, NULL, why, sizeof why) != 0 && strcmp(why, "zip entry twice") == 0);
     remove_tree(out);
     // Deflated, as tools/build.sh writes most entries: unpacked and checked.
     const char *text[] = {"boot boot boot boot boot boot boot boot boot boot", "art"};
     mkdir(out, 0777);
     make_zip(zip, names + 1, text, 2, 8);
-    assert(update_unzip(zip, out, 1 << 20, why, sizeof why) == 0);
+    assert(update_unzip(zip, out, 1 << 20, NULL, why, sizeof why) == 0);
     snprintf(path, sizeof path, "%s/eboot.bin", out);
     assert(has(path, text[0]));
     remove_tree(out);
@@ -248,15 +248,15 @@ static void zips(void)
     assert(z && fseek(z, 30 + (long)strlen(names[1]) + 2, SEEK_SET) == 0 && fputc(0xff, z) != EOF);
     fclose(z);
     mkdir(out, 0777);
-    assert(update_unzip(zip, out, 1 << 20, why, sizeof why) != 0);
+    assert(update_unzip(zip, out, 1 << 20, NULL, why, sizeof why) != 0);
     remove_tree(out);
     mkdir(out, 0777);
     make_zip(zip, names + 1, data + 1, 1, 12); // bzip2: refused
-    assert(update_unzip(zip, out, 1 << 20, why, sizeof why) != 0);
+    assert(update_unzip(zip, out, 1 << 20, NULL, why, sizeof why) != 0);
     remove_tree(out);
     mkdir(out, 0777);
     make_zip(zip, names + 1, data + 1, 1, 0);
-    assert(update_unzip(zip, out, 2, why, sizeof why) != 0 && strcmp(why, "zip too big") == 0);
+    assert(update_unzip(zip, out, 2, NULL, why, sizeof why) != 0 && strcmp(why, "zip too big") == 0);
     remove_tree(out);
     unlink(zip);
 }
@@ -431,6 +431,35 @@ static void applies(void)
     remove_tree(work);
 }
 
+// The update thread's work on a stack as small as a console thread's default: copying the
+// old core once put a 64 KB buffer there, and the core froze.
+static void *copy_small(void *arg)
+{
+    char *paths = arg;
+    return (void *)(intptr_t)copy_file(paths, paths + 300);
+}
+
+static void small_stack(void)
+{
+    char paths[600];
+    snprintf(paths, 300, "%s/big", tmp);
+    snprintf(paths + 300, 300, "%s/big.copy", tmp);
+    FILE *f = fopen(paths, "wb");
+    for (int i = 0; f && i < 300000; i++)
+        fputc(i & 0xff, f);
+    fclose(f);
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 64 * 1024);
+    pthread_t t;
+    void *r = (void *)1;
+    assert(pthread_create(&t, &attr, copy_small, paths) == 0 && pthread_join(t, &r) == 0 && r == NULL);
+    pthread_attr_destroy(&attr);
+    struct stat st;
+    assert(stat(paths + 300, &st) == 0 && st.st_size == 300000);
+    unlink(paths), unlink(paths + 300);
+}
+
 static void notes_and_urls(void)
 {
     char body[16400];
@@ -469,6 +498,7 @@ int main(void)
     watches();
     applies();
     notes_and_urls();
+    small_stack();
     remove_tree(tmp);
     puts("update: versions, manifest, signature, zip, swap and undo, apply, watch, restore, notes, URLs passed");
     return 0;

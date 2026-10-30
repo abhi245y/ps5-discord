@@ -186,11 +186,12 @@ static int open_modes(const char *path, int check)
 static int copy_file(const char *from, const char *to)
 {
     int in = open(from, O_RDONLY), out = in >= 0 ? open(to, O_WRONLY | O_CREAT | O_TRUNC, 0777) : -1;
-    char buf[65536];
-    ssize_t n = 0;
-    while (out >= 0 && (n = read(in, buf, sizeof buf)) > 0)
+    char *buf = malloc(1 << 20); // not on the stack: a thread's is small on the console
+    ssize_t n = buf ? 0 : -1;
+    while (buf && out >= 0 && (n = read(in, buf, 1 << 20)) > 0)
         if (write(out, buf, (size_t)n) != n)
             n = -1;
+    free(buf);
     int ok = in >= 0 && out >= 0 && n == 0 && fsync(out) == 0;
     if (in >= 0)
         close(in);
@@ -575,6 +576,13 @@ static int to_file(void *user, const void *data, size_t len)
     return write(d->fd, data, len) == (ssize_t)len;
 }
 
+static void unpacked(uint64_t done, uint64_t total)
+{
+    pthread_mutex_lock(&lock);
+    u.done = done, u.total = total;
+    pthread_mutex_unlock(&lock);
+}
+
 static int stage(void)
 {
     update_manifest m;
@@ -610,7 +618,7 @@ static int stage(void)
     set_state("unpacking", NULL);
     snprintf(staged, sizeof staged, "%s/staged", work);
     char from[600], to[600], v[64] = "";
-    ok = mkdir(staged, 0777) == 0 && update_unzip(path, staged, MAX_UNPACKED, why, sizeof why) == 0;
+    ok = mkdir(staged, 0777) == 0 && update_unzip(path, staged, MAX_UNPACKED, unpacked, why, sizeof why) == 0;
     unlink(path);
     const char *need[] = {"eboot.bin", "sce_sys/param.json", "assets/ps5-discord.elf"};
     for (int i = 0; ok && i < 3; i++) {
@@ -848,9 +856,15 @@ void update_init(const char *app, const char *work_dir, const char *bad, const c
         pthread_mutex_unlock(&lock);
     }
     installed_version(u.installed, sizeof u.installed);
+    // A stack of its own size: the console's default is small (a 64 KB buffer overflowed it).
     pthread_t t;
-    if (pthread_create(&t, NULL, run, NULL) == 0)
-        pthread_detach(t);
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    pthread_attr_setstacksize(&attr, 512 * 1024);
+    if (pthread_create(&t, &attr, run, NULL) != 0)
+        LOG("update: no thread");
+    pthread_attr_destroy(&attr);
 }
 
 void update_check(int force)
@@ -860,6 +874,8 @@ void update_check(int force)
         u.state = "none"; // the app has shown it
     u.want_check = 1;
     u.force |= force;
+    if (force && (strcmp(u.state, "none") == 0 || strcmp(u.state, "failed") == 0))
+        u.state = "checking"; // at once: the next /api/state says so
     pthread_cond_signal(&wake);
     pthread_mutex_unlock(&lock);
 }

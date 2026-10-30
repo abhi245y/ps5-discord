@@ -143,10 +143,12 @@ void UpdateDialog::draw(const discord::Snapshot &s, DrawList &list) const
     case Card::progress: {
         const bool unpacking = u.state == "unpacking";
         title = unpacking ? "Unpacking" : "Downloading";
-        progress = unpacking || u.total <= 0 ? 1.0f : std::clamp(static_cast<float>(u.done) / static_cast<float>(u.total), 0.0f, 1.0f);
-        body = u.total > 0 && !unpacking
-                   ? std::to_string(u.done >> 20) + " of " + std::to_string(u.total >> 20) + " MB"
-                   : "Just a moment.";
+        // Both report bytes: downloaded of the zip, then unpacked of the app's files.
+        const bool known = u.total > 0 && !(started_ && u.state == "available");
+        progress = known ? std::clamp(static_cast<float>(u.done) / static_cast<float>(u.total), 0.0f, 1.0f) : 0.0f;
+        body = known ? std::to_string(u.done >> 20) + " of " + std::to_string(u.total >> 20) + " MB" +
+                           (unpacking ? ". Then you restart to finish." : "")
+                     : "Starting...";
         hints = {{ui::Button::circle, "Hide"}};
         break;
     }

@@ -296,7 +296,8 @@ static int unpack(FILE *f, int out, unsigned method, uint32_t csize, uint32_t us
     return r;
 }
 
-int update_unzip(const char *zip_path, const char *dir, uint64_t max_total, char *why, size_t cap)
+int update_unzip(const char *zip_path, const char *dir, uint64_t max_total, void (*progress)(uint64_t done, uint64_t total),
+                 char *why, size_t cap)
 {
     FILE *f = fopen(zip_path, "rb");
     if (!f)
@@ -314,6 +315,11 @@ int update_unzip(const char *zip_path, const char *dir, uint64_t max_total, char
         free(cd);
         fclose(f);
         return fail(why, cap, "bad zip directory");
+    }
+    uint64_t all = 0, unpacked = 0; // for progress: the sizes the directory states
+    for (size_t at = 0, i = 0; i < count && at + 46 <= cd_size && u32(cd + at) == 0x02014b50; i++) {
+        all += u32(cd + at + 24);
+        at += 46 + u16(cd + at + 28) + u16(cd + at + 30) + u16(cd + at + 32);
     }
     char **seen = calloc(count, sizeof *seen);
     int r = seen ? 0 : fail(why, cap, "out of memory");
@@ -379,6 +385,8 @@ int update_unzip(const char *zip_path, const char *dir, uint64_t max_total, char
             r = fail(why, cap, out < 0 ? "cannot write" : "zip entry damaged");
         if (out >= 0)
             close(out);
+        if (!r && progress)
+            progress(unpacked += usize, all);
     }
     for (unsigned k = 0; seen && k < count; k++)
         free(seen[k]);
