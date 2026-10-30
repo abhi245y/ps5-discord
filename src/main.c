@@ -2,6 +2,7 @@
 // Signs in (QR or the console's browser), keeps each console user's sign-in encrypted
 // (browser_storage.c), runs the gateway, calls and Go Live, and serves the app on 9041.
 #include <arpa/inet.h>
+#include <errno.h>
 #include <netinet/in.h>
 #include <pthread.h>
 #include <signal.h>
@@ -27,6 +28,7 @@
 #include "controller_voice.h"
 #include "broadcast.h"
 #include "http.h"
+#include "core_key.h"
 #include "notify.h"
 #include "prefs.h"
 #include "rp_pair.h"
@@ -35,9 +37,11 @@
 
 #ifdef __PROSPERO__
 #define DATA_DIR "/data/ps5-discord"
+#define APP_DIR "/data/homebrew/PPSA99072" // the app's /app0: where it reads the core key
 int sceKernelSetProcessName(const char *name);
 #else
 #define DATA_DIR "."
+#define APP_DIR "."
 #endif
 // The session is kept encrypted to this console (browser_storage.c session_save).
 // One per console user (token-<user>): each signs in to their own Discord account, and the
@@ -264,6 +268,13 @@ int main(void)
         return 1;
     }
     LOG("starting, version %s", CORE_VERSION);
+    unsigned char raw[32];
+    if (tls_random(NULL, raw, sizeof raw) != 0) {
+        LOG("control: no random bytes for the key");
+        return 1;
+    }
+    if (core_key_make(APP_DIR, raw) != 0)
+        LOG("control: cannot write %s/control.key (errno %d): the app cannot reach the core", APP_DIR, errno);
     // Requests only once TLS, voice and Go Live are set up (the port is ours already).
     pthread_t t;
     pthread_create(&t, NULL, control_loop, (void *)(intptr_t)control);

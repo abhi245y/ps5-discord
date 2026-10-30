@@ -24,8 +24,8 @@ namespace discord
 {
 
 // The core API versions this app understands (ROADMAP.md, "Core API version").
-inline constexpr int kApiVersionMin = 4;
-inline constexpr int kApiVersionMax = 4;
+inline constexpr int kApiVersionMin = 5;
+inline constexpr int kApiVersionMax = 5;
 
 // A Discord image fetched through the core, decoded to RGBA (w 0: it failed).
 struct Image

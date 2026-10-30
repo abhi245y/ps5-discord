@@ -77,6 +77,11 @@ All notable changes to this project are documented here. The format follows
   gateway resume versus identify, the heartbeat timeout and Go Live teardown.
 
 ### Security
+- The app and core share a key made at each core start (the app reads it from its own
+  install folder, which other homebrew and the console's browser do not see): every control
+  request and the call's audio link carry it, so another payload or a web page cannot read
+  chats, speak or listen in the call, or knock the app off it. `make stop` reads the key
+  over FTP. The control API is version 5.
 - Voice: the account joining voice on another device (a phone) ends the call here instead
   of being taken for a join of this console's.
 - The core trusts one pinned set of root certificates (curl's extract of Mozilla's,

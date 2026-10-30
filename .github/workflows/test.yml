@@ -6,9 +6,9 @@ jobs:
   test:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Cache the pinned sources
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .deps
           key: deps-${{ hashFiles('tools/deps.sh') }}

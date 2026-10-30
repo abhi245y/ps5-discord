@@ -25,6 +25,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "platform/ps5/sce_module.hpp"
 #include "platform/ps5/system.hpp"
 
 // A failed internal check is logged instead of aborting the app. The one seen
@@ -222,13 +223,11 @@ Reply http(int port, const char *method, const std::string &path, const std::str
     to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     if (connect(fd, reinterpret_cast<sockaddr *>(&to), sizeof to) != 0)
         return failed(reply, "connect", fd);
-    char head[512];
-    const int n = std::snprintf(head, sizeof head,
-                                "%s %s HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
-                                "X-Discord-Native: 1\r\nX-App-Front: %d\r\nContent-Length: %zu\r\n\r\n",
-                                method, path.c_str(), g_front ? 1 : 0, body.size());
-    std::string request(head, static_cast<std::size_t>(n));
-    request += body;
+    std::string request = std::string(method) + " " + path +
+                          " HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
+                          "X-Discord-Native: 1\r\nX-Core-Key: " + hui::ps5::core_key() +
+                          "\r\nX-App-Front: " + (g_front ? "1" : "0") +
+                          "\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
     for (std::size_t sent = 0; sent < request.size();)
     {
         const ssize_t w = send(fd, request.data() + sent, request.size() - sent, 0);

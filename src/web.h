@@ -1,4 +1,5 @@
-// Control port HTTP API.
+// Control port HTTP API. Every /api/ request but GET /api/state carries X-Discord-Native: 1
+// and X-Core-Key: the per-boot key (core_key.h).
 // LAN:        GET / (status page), GET /api/state, POST /api/quit (the app's Quit too)
 // Local only: GET /api/chat, /api/events?since=N, /api/messages?channel=&guild=&before=,
 //             POST /api/send {"channel","content","nonce"}, GET /api/mentions,
