@@ -24,8 +24,8 @@ namespace discord
 {
 
 // The core API versions this app understands (ROADMAP.md, "Core API version").
-inline constexpr int kApiVersionMin = 3;
-inline constexpr int kApiVersionMax = 3;
+inline constexpr int kApiVersionMin = 4;
+inline constexpr int kApiVersionMax = 4;
 
 // A Discord image fetched through the core, decoded to RGBA (w 0: it failed).
 struct Image
@@ -40,13 +40,6 @@ struct Image
 
 // A key from the console's keyboard, as the core read it (USB HID usage code,
 // modifier bits, lock lights).
-struct KeyPress
-{
-    std::uint16_t usage = 0;
-    std::uint32_t mods = 0;
-    std::uint32_t led = 0;
-};
-
 class Client
 {
   public:
@@ -64,7 +57,6 @@ class Client
     void want_image(const std::string &url);
     std::vector<Image> take_images();
     // Keys typed on the console's keyboard since the last call, oldest first.
-    std::vector<KeyPress> take_keys();
     // Development: raises a notice as if a DM had arrived (the toast's path, from the PC).
     void test_notice(const std::string &text);
     // The app is the one on screen (not minimised to the home screen, not under the PS
@@ -105,9 +97,12 @@ class Client
     std::atomic<unsigned> account_{0}; // grows when the account's data is reset
     std::deque<std::string> image_queue_; // guarded by mutex_
     std::vector<Image> images_;           // guarded by mutex_
-    std::vector<KeyPress> keys_;          // guarded by mutex_
     std::atomic<long> events_next_{-1}; // -1: skip the backlog on first contact
-    std::atomic<std::int64_t> last_chat_ms_{0}; // the events thread zeroes it to ask for a refresh
+    std::atomic<std::int64_t> last_chat_ms_{0}; // zeroed for a refresh now
+    std::atomic<bool> chat_dirty_{false};        // an event changed the tree: refresh within a second
+    // The tree's version the snapshot was built from (/api/chat?v=, 304 while it holds); -1
+    // whenever the snapshot's account part was dropped, so the next poll gets it whole.
+    std::atomic<long long> chat_version_{-1};
     std::int64_t last_mentions_ms_ = 0;
     std::int64_t last_voice_ms_ = 0; // a voice command zeroes it: the state comes back at once
     std::uint64_t notice_seq_ = 0; // Notice::seq, under mutex_

@@ -30,9 +30,12 @@ make dave                        # OpenSSL + mlspp + libdave into .deps/dave (sl
 make                             # build/ps5-discord.elf
 make test                        # host self-checks
 cd app && make                   # app folder in app/dist/PPSA99072, core bundled (build it first)
-make deploy PS5_HOST=<ps5-ip>    # stop the running copy, send the new one to elfldr (9021)
+make deploy PS5_HOST=<ps5-ip>    # stop the running copy, send a development core (CORE_LAN=1) to elfldr (9021)
 make stop PS5_HOST=<ps5-ip>
 ```
+
+`make deploy` always sends a development core, which also answers `make stop` and
+`/api/state` from the LAN; the core inside a release (`make release`) answers only the app.
 
 `make host` builds the same core for Linux (state in the current directory) for
 testing against Discord without the console.
@@ -56,7 +59,9 @@ the tests still pass, but it links a no-DAVE stub and every voice join fails (cl
    validates the active console user's browser session automatically, including an
    existing signed-in session. Closed the browser too soon? Cross opens it again; Square
    cancels and returns to QR login.
-5. The session token is kept in `/data/ps5-discord/token`; later runs skip the QR.
+5. The sign-in is kept in `/data/ps5-discord/token-<console user>`, encrypted with a key
+   tied to this console; later runs skip the QR. Each console user signs in to their own
+   Discord account.
 
 Browser login is experimental on this branch. It waits up to ten minutes, reads
 WebKit storage without modifying it, and saves the validated session atomically
@@ -65,13 +70,13 @@ verification challenge.
 
 ## Known limitations
 
-- The token is stored unencrypted. Use a throwaway account until it is encrypted at rest.
-- The status UI has no authentication; anyone on the LAN can view it or stop the payload.
-  It never shows the token.
+- The core's control API (port 9041) answers only the app on the console (127.0.0.1);
+  a development build (`CORE_LAN=1`) also lets the LAN read its status and stop it. The
+  app and core talk without a secret, so other homebrew on the same console could use it.
 - Third-party clients break Discord's ToS and can get an account banned.
 - Go Live needs the DualSense on USB (a Bluetooth controller is dropped by Remote Play) and a
-  Remote Play pairing in `/data/ps5-discord/remoteplay.bin`, which the app cannot make yet.
-  The quality is fixed at 720p30. Press PS after going off live to give the controller back.
+  Remote Play pairing, made once in Settings, Voice & audio. Above 720p30 needs Nitro or a
+  boosted server. After a Go Live, replug the controller before the next one (the app asks).
 - During a game the mic is only available through Go Live (the console refuses payloads the
   mic); outside it, voice needs the app on screen.
 

@@ -1,6 +1,6 @@
-// ps5-discord core: background payload holding the Discord gateway session.
-// PoC: logs in by QR code (printed to klog), keeps the token in a file,
-// logs session state to klog.
+// ps5-discord core: the background payload that holds the Discord session for the app.
+// Signs in (QR or the console's browser), keeps each console user's sign-in encrypted
+// (browser_storage.c), runs the gateway, calls and Go Live, and serves the app on 9041.
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <pthread.h>
@@ -42,15 +42,18 @@ int sceKernelSetProcessName(const char *name);
 // The session is kept encrypted to this console (browser_storage.c session_save).
 // One per console user (token-<user>): each signs in to their own Discord account, and the
 // core runs the account of the user on screen.
-static char token_name[32] = "token";
-static volatile int32_t session_user = -1;
+static char token_name[32] = "token"; // the main thread's; others read it through token_path
+static pthread_mutex_t name_lock = PTHREAD_MUTEX_INITIALIZER; // core_quit runs on a request thread
+static _Atomic int32_t session_user = -1;
 
 static void token_path(char *out, size_t cap)
 {
+    pthread_mutex_lock(&name_lock);
     snprintf(out, cap, "%s/%s", DATA_DIR, token_name);
+    pthread_mutex_unlock(&name_lock);
 }
-// Control port: keeps one instance alive and serves the status web UI
-// (http://<ps5>:9041, POST /api/quit for make stop). Future UI app IPC goes here too.
+// Control port: keeps one instance alive and serves the app's API (web.c; loopback only,
+// CORE_LAN=1 opens it to the LAN for make stop).
 #define CONTROL_PORT 9041
 
 static int read_token(char *out, size_t cap)
@@ -96,7 +99,9 @@ static int login(char *token, size_t cap)
 // be told: the session stays, so the sign-in is never left alive but unknown here.
 int core_sign_out(void)
 {
-    http_response r = http_post_json("/auth/logout", "{\"provider\":null,\"voip_provider\":null}", chat_token());
+    char token[256];
+    chat_token(token, sizeof token);
+    http_response r = http_post_json("/auth/logout", "{\"provider\":null,\"voip_provider\":null}", token);
     free(r.body);
     LOG("sign out: Discord answered %d", r.status);
     // 401: the token was dead already.
@@ -142,7 +147,9 @@ void core_quit(int forget_token)
 static void use_user(int32_t user)
 {
     session_user = user;
+    pthread_mutex_lock(&name_lock);
     snprintf(token_name, sizeof token_name, "token-%08x", (unsigned)user);
+    pthread_mutex_unlock(&name_lock);
     char path[64];
     token_path(path, sizeof path);
     FILE *f = fopen(path, "r"); // access() refuses payloads on the console

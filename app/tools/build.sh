@@ -162,7 +162,9 @@ for source in "${sources[@]}"; do
     object="$build/obj/$source.o"
     mkdir -p "$(dirname "$object")"
     if [[ $source == *.c ]]; then standard=-std=c11; else standard=-std=c++20; fi
-    args=("$standard" -O2 -Wall -Wextra -ffunction-sections -fdata-sections)
+    # Hardening as the core's (Makefile HARDEN): the SDK's libkernel has __stack_chk_fail.
+    args=("$standard" -O2 -Wall -Wextra -fstack-protector-strong -Wformat=2 -Wformat-security
+          -ffunction-sections -fdata-sections)
     # spot5: C++ is built with exceptions and RTTI (bell and cspot throw;
     # the exception probe proved unwinding works on the console).
     [[ $source == *.c ]] || args+=(-fexceptions -frtti)

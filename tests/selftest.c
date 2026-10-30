@@ -13,6 +13,8 @@
 #include <cJSON.h>
 
 #include "../src/chat.h"
+#include "../src/gateway.h"
+#include "../src/http.h"
 #include "../src/ratelimit.h"
 #include "../src/voice.h"
 #include "../src/voice_audio.h"
@@ -98,7 +100,25 @@ static void test_chat(void)
         "{\"id\":\"14\",\"mention_count\":3}]}"));
     chat_dispatch("READY", ready);
     cJSON_Delete(ready);
+    // Someone passes through voice: remembered, then nobody refers to them any more.
+    const long v0 = chat_tree_version();
+    cJSON *vs = cJSON_Parse("{\"user_id\":\"7\",\"channel_id\":\"12\",\"guild_id\":\"10\","
+                            "\"member\":{\"user\":{\"id\":\"7\",\"username\":\"passerby\"}}}");
+    chat_dispatch("VOICE_STATE_UPDATE", vs);
+    cJSON_ReplaceItemInObject(vs, "channel_id", cJSON_CreateNull());
+    chat_dispatch("VOICE_STATE_UPDATE", vs);
+    cJSON_Delete(vs);
+    assert(v0 > 0 && chat_tree_version() == v0 + 2); // each change moves the version (/api/chat?v=)
+    cJSON *typing = cJSON_Parse("{\"channel_id\":\"11\",\"guild_id\":\"10\",\"user_id\":\"2\"}");
+    chat_dispatch("TYPING_START", typing);    // nothing the tree holds: no new version
+    chat_dispatch("PRESENCE_UPDATE", typing); // a server member's status: not kept either
+    cJSON_Delete(typing);
+    assert(chat_tree_version() == v0 + 2);
     char *t = chat_tree_json();
+    assert(!strstr(t, "passerby")); // pruned: not a friend, DM recipient or in voice
+    char vs_text[48];
+    snprintf(vs_text, sizeof vs_text, "\"version\":%ld", v0 + 2);
+    assert(strstr(t, vs_text));
     assert(t && strstr(t, "\"name\":\"G\"") && strstr(t, "general"));
     assert(strstr(t, "\"rooms\":[{\"id\":\"12\"")); // voice channels become rooms
     assert(strstr(t, "\"global_name\":\"Bob\"")); // DM recipients land in users
@@ -577,8 +597,106 @@ static void test_audio(void)
     cJSON_Delete(j);
 }
 
+// The gateway's reading of close codes and its wait between connections (gateway_run).
+static void test_gateway_rules(void)
+{
+    assert(gateway_close_action(4004) == GATEWAY_STOP); // signed out
+    for (int code = 4010; code <= 4014; code++)
+        assert(gateway_close_action(code) == GATEWAY_STOP);
+    assert(gateway_close_action(4007) == GATEWAY_FRESH && gateway_close_action(4009) == GATEWAY_FRESH);
+    assert(gateway_close_action(1000) == GATEWAY_KEEP && gateway_close_action(4000) == GATEWAY_KEEP);
+    assert(gateway_close_action(-1) == GATEWAY_KEEP); // dropped: resume
+    const int waits[] = {1, 2, 4, 8, 15, 15};
+    for (int i = 1; i < 6; i++)
+        assert(gateway_next_wait(waits[i - 1]) == waits[i]); // never above 15 s
+}
+
+static char *dup_text(const char *s, size_t n)
+{
+    char *b = malloc(n + 1);
+    memcpy(b, s, n);
+    b[n] = 0;
+    return b;
+}
+
+// HTTP/1.0 replies as exchange() collects them (reads until close, in any pieces).
+static void test_http_parse(void)
+{
+    const char ok[] = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"a\":\"x\\r\\n\\r\\ny\"}";
+    http_response r = http_parse_reply(dup_text(ok, sizeof ok - 1), sizeof ok - 1);
+    assert(r.status == 200 && r.body && strcmp(r.body, "{\"a\":\"x\\r\\n\\r\\ny\"}") == 0);
+    free(r.body);
+    const char bin[] = "HTTP/1.0 200 OK\r\n\r\n\x89PNG\0\0\x01"; // a picture: body_len, not strlen
+    r = http_parse_reply(dup_text(bin, sizeof bin - 1), sizeof bin - 1);
+    assert(r.status == 200 && r.body_len == 7 && memcmp(r.body, "\x89PNG\0\0\x01", 7) == 0);
+    free(r.body);
+    const char empty[] = "HTTP/1.1 204 No Content\r\n\r\n";
+    r = http_parse_reply(dup_text(empty, sizeof empty - 1), sizeof empty - 1);
+    assert(r.status == 204 && r.body_len == 0 && r.body && !r.body[0]);
+    free(r.body);
+    const char cut[] = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n"; // the connection ended in the head
+    r = http_parse_reply(dup_text(cut, sizeof cut - 1), sizeof cut - 1);
+    assert(r.status == -1 && !r.body);
+    const char junk[] = "<html>no status line</html>\r\n\r\n";
+    r = http_parse_reply(dup_text(junk, sizeof junk - 1), sizeof junk - 1);
+    assert(r.status == -1 && !r.body);
+}
+
+struct rtp_seen {
+    size_t count, bytes;
+    int markers, fu_starts, fu_ends;
+    uint8_t first[4];
+};
+
+static void seen_payload(void *user, const uint8_t *p, size_t len, int marker)
+{
+    struct rtp_seen *s = user;
+    assert(len <= 102); // mtu 100, + the FU indicator and header
+    if (s->count == 0)
+        memcpy(s->first, p, 4);
+    s->count++;
+    s->bytes += len;
+    s->markers += marker;
+    if ((p[0] & 0x1f) == 28) {
+        s->fu_starts += !!(p[1] & 0x80);
+        s->fu_ends += !!(p[1] & 0x40);
+        assert((p[1] & 0x1f) == 5); // the fragmented NAL's own type (IDR)
+    }
+}
+
+// Go Live's packetiser: SPS whole, a 250-byte IDR in three FU-A fragments, one marker.
+static void test_h264_packetize(void)
+{
+    uint8_t au[4 + 8 + 3 + 250];
+    size_t n = 0;
+    memcpy(au + n, "\0\0\0\1", 4), n += 4;
+    memcpy(au + n, "\x67\x42\0\x1f\xaa\xbb\xcc\xdd", 8), n += 8; // SPS (type 7), 4-byte start code
+    memcpy(au + n, "\0\0\1", 3), n += 3;                            // 3-byte between slices
+    au[n] = 0x65; // IDR (type 5), NRI 3
+    for (int i = 1; i < 250; i++)
+        au[n + i] = (uint8_t)(i | 1); // no start code inside
+    n += 250;
+    size_t pos = 0, len;
+    const uint8_t *nal = h264_next_nal(au, n, &pos, &len);
+    assert(nal == au + 4 && len == 8);
+    nal = h264_next_nal(au, n, &pos, &len);
+    assert(nal == au + 15 && len == 250);
+    assert(!h264_next_nal(au, n, &pos, &len));
+    struct rtp_seen s = {0};
+    h264_packetize(au, n, 100, seen_payload, &s);
+    assert(s.count == 1 + 3 && s.markers == 1 && s.fu_starts == 1 && s.fu_ends == 1);
+    assert(s.first[0] == 0x67);                 // the SPS went whole
+    assert(s.bytes == 8 + 249 + 3 * 2);         // the IDR's header byte becomes the FU bytes
+    struct rtp_seen none = {0};
+    h264_packetize((const uint8_t *)"\1\2\3", 3, 100, seen_payload, &none); // no start code: nothing
+    assert(none.count == 0);
+}
+
 int main(void)
 {
+    test_gateway_rules();
+    test_http_parse();
+    test_h264_packetize();
     test_chat();
     test_notify();
     test_ratelimit();

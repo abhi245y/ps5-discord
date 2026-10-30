@@ -86,13 +86,15 @@ static void reply_json(int c, char *j)
 // One REST call; a 429 is retried once after the wait Discord names, if short.
 static http_response rest(const char *method, const char *path, const char *json)
 {
-    http_response res = http_request(method, path, json, chat_token());
+    char token[256];
+    chat_token(token, sizeof token);
+    http_response res = http_request(method, path, json, token);
     const double wait = ratelimit_retry_after(&res, 5.0);
     if (wait > 0) {
         LOG("rate limited on %s %s, retrying in %.2f s", method, path, wait);
         free(res.body);
         usleep((useconds_t)(wait * 1e6) + 50000);
-        res = http_request(method, path, json, chat_token());
+        res = http_request(method, path, json, token);
     }
     return res;
 }
@@ -151,7 +153,26 @@ static void api_mentions(int c)
 }
 
 // Avatars, icons and attachments for the app, which speaks no TLS. Only
-// Discord's CDN hosts: the console must not become a general web proxy.
+// Discord's CDN hosts: the console must not become a general web proxy. The path to fetch
+// from host (written there), or NULL when the URL is not one of them.
+static const char *image_target(const char *url, char host[128])
+{
+    // Decoded CR, LF or space would end the CDN request line early and add headers.
+    const char *rest = strncmp(url, "https://", 8) == 0 && !strpbrk(url, "\r\n ") ? url + 8 : NULL;
+    size_t hlen = rest ? strcspn(rest, "/") : 0;
+    if (!rest || hlen == 0 || hlen >= 128)
+        return NULL;
+    memcpy(host, rest, hlen);
+    host[hlen] = 0;
+    int allowed = strcmp(host, "cdn.discordapp.com") == 0 || strcmp(host, "media.discordapp.net") == 0 ||
+                  (strncmp(host, "images-ext-", 11) == 0 && hlen > 26 &&
+                   strcmp(host + hlen - 15, ".discordapp.net") == 0) ||
+                  // Colour emoji pictures (Twemoji, as Discord draws them), that project only.
+                  (strcmp(host, "cdn.jsdelivr.net") == 0 &&
+                   strncmp(rest + hlen, "/gh/jdecked/twemoji@", 20) == 0 && !strstr(rest + hlen, ".."));
+    return allowed ? rest + hlen : NULL;
+}
+
 static void api_image(int c, const char *query)
 {
     char url[1024];
@@ -160,26 +181,13 @@ static void api_image(int c, const char *query)
         return;
     }
     url_decode(url);
-    // Decoded CR, LF or space would end the CDN request line early and add headers.
-    const char *rest = strncmp(url, "https://", 8) == 0 && !strpbrk(url, "\r\n ") ? url + 8 : NULL;
     char host[128];
-    size_t hlen = rest ? strcspn(rest, "/") : 0;
-    int allowed = 0;
-    if (rest && hlen > 0 && hlen < sizeof host) {
-        memcpy(host, rest, hlen);
-        host[hlen] = 0;
-        allowed = strcmp(host, "cdn.discordapp.com") == 0 || strcmp(host, "media.discordapp.net") == 0 ||
-                  (strncmp(host, "images-ext-", 11) == 0 && hlen > 26 &&
-                   strcmp(host + hlen - 15, ".discordapp.net") == 0) ||
-                  // Colour emoji pictures (Twemoji, as Discord draws them), that project only.
-                  (strcmp(host, "cdn.jsdelivr.net") == 0 &&
-                   strncmp(rest + hlen, "/gh/jdecked/twemoji@", 20) == 0 && !strstr(rest + hlen, ".."));
-    }
-    if (!allowed) {
+    const char *path = image_target(url, host);
+    if (!path) {
         reply(c, "403 Forbidden", "text/plain", "host", 4);
         return;
     }
-    http_response res = http_get(host, rest + hlen);
+    http_response res = http_get(host, path);
     if (res.status != 200 || !res.body)
         reply(c, "502 Bad Gateway", "text/plain", "fetch", 5);
     else
@@ -250,7 +258,9 @@ static void api_sticker_packs(int c)
     static pthread_mutex_t once = PTHREAD_MUTEX_INITIALIZER;
     pthread_mutex_lock(&once);
     if (!cached) {
-        http_response r = http_request("GET", "/sticker-packs", NULL, chat_token());
+        char token[256];
+        chat_token(token, sizeof token);
+        http_response r = http_request("GET", "/sticker-packs", NULL, token);
         cJSON *in = r.status == 200 ? cJSON_Parse(r.body) : NULL, *p, *s;
         free(r.body);
         cJSON *out = cJSON_CreateObject(), *packs = cJSON_AddArrayToObject(out, "packs");
@@ -399,22 +409,40 @@ static void api_voice_join(int c, const char *body)
 
 // Join a DM call: {channel}. With no call running, rings the other side first (answer is the
 // same: the ring is already on, so no new ring is sent).
+// Rings the others once we are in the call (arg: the channel, freed here). Discord rings
+// only for a call its caller is in: rung before the join, nobody saw it (the official
+// client joins, then rings).
+static void *ring_when_joined(void *arg)
+{
+    char *channel = arg, g[32], ch[32], me[32], sess[64];
+    for (int i = 0; i < 150 && voice_wanted(); i++) { // 15 s, while the call is still wanted
+        if (voice_current(g, ch, me, sess) && strcmp(ch, channel) == 0) {
+            char path[96];
+            snprintf(path, sizeof path, "/channels/%s/call/ring", channel);
+            http_response res = rest("POST", path, "{\"recipients\":null}");
+            LOG("voice: ringing the call in %s: Discord answered %d", channel, res.status);
+            free(res.body);
+            break;
+        }
+        usleep(100000);
+    }
+    free(channel);
+    return NULL;
+}
+
 static void api_voice_call(int c, const char *body)
 {
     cJSON *in = cJSON_Parse(body ? body : "");
     const char *channel = body_channel(c, in);
-    if (channel && !chat_call_active(channel)) {
-        char path[96];
-        snprintf(path, sizeof path, "/channels/%s/call/ring", channel);
-        http_response res = rest("POST", path, "{\"recipients\":null}");
-        free(res.body);
-        if (res.status < 200 || res.status > 299) {
-            refuse(c, "409 Conflict", "Discord would not ring that call.");
-            channel = NULL;
-        }
-    }
     if (channel) {
+        const int ring = !chat_call_active(channel); // a call already there (they rang us): join it
         voice_join(NULL, channel);
+        pthread_t t;
+        char *arg = ring ? strdup(channel) : NULL;
+        if (arg && pthread_create(&t, NULL, ring_when_joined, arg) == 0)
+            pthread_detach(t);
+        else
+            free(arg);
         reply_ok(c);
     }
     cJSON_Delete(in);
@@ -727,7 +755,12 @@ static void handle(int c, int local)
         browser_auth_cancel();
         reply(c, "200 OK", "application/json", "{\"ok\":true}", 11);
     } else if (get && strcmp(path, "/api/chat") == 0) {
-        reply_json(c, chat_tree_json());
+        // ?v=: the version the app holds; unchanged, nothing is sent.
+        char v[24] = "";
+        if (query_get(query, "v", v, sizeof v) == 0 && v[0] && strtol(v, NULL, 10) == chat_tree_version())
+            reply(c, "304 Not Modified", "application/json", "", 0);
+        else
+            reply_json(c, chat_tree_json());
     } else if (get && strcmp(path, "/api/events") == 0) {
         char since[24] = "0", wait[8] = "0";
         query_get(query, "since", since, sizeof since);
@@ -803,8 +836,8 @@ static void handle(int c, int local)
     }
 }
 
-// ponytail: one connection at a time; an image fetch (~0.3 s) holds the next request.
-// Threads need mbedTLS threading (shared DRBG) first.
+// A thread per connection, MAX_CONNECTIONS at most (503 past that): an image fetch or a
+// long poll does not hold the others. mbedTLS threading covers the shared DRBG.
 struct conn {
     int c, local;
 };

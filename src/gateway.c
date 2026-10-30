@@ -174,7 +174,9 @@ static int on_message(gateway *g, const char *json)
     int r = 0;
     switch (op) {
     case OP_HELLO:
-        g->heartbeat_ms = (int)json_int(d, "heartbeat_interval", 0);
+        g->heartbeat_ms = (int)json_int(d, "heartbeat_interval", 41250);
+        if (g->heartbeat_ms < 1000) // 0 would be a heartbeat on every turn of the loop
+            g->heartbeat_ms = 1000;
         g->next_heartbeat = now_ms() + (int64_t)(g->heartbeat_ms * (rand() / (RAND_MAX + 1.0)));
         g->acked = 1;
         LOG("gateway: HELLO, heartbeat %d ms", g->heartbeat_ms);
@@ -213,7 +215,7 @@ static int on_message(gateway *g, const char *json)
 
 static int send_pending(gateway *g);
 
-static volatile int switching; // gateway_switch: another console user's account is wanted
+static _Atomic int switching; // gateway_switch: another console user's account is wanted
 
 void gateway_switch(int on)
 {
@@ -395,16 +397,13 @@ int gateway_run(const char *token)
         int code = run_connection(&g);
         if (code == GATEWAY_SWITCH)
             return code;
-        switch (code) {
-        case 4004: // authentication failed
-        case 4010: case 4011: case 4012: case 4013: case 4014:
+        const int action = gateway_close_action(code);
+        if (action == GATEWAY_STOP) {
             LOG("gateway: fatal close %d, stopping", code);
             return code;
-        case 4007: // invalid seq
-        case 4009: // session timed out
-            drop_session(&g);
-            break;
         }
+        if (action == GATEWAY_FRESH)
+            drop_session(&g);
         // Only a session Discord accepted resets the wait: a close after HELLO (rate limit,
         // invalid session) must not turn into an identify every second.
         if (g.ready)
@@ -420,6 +419,6 @@ int gateway_run(const char *token)
             usleep(200000);
         if (switching)
             return GATEWAY_SWITCH;
-        backoff = backoff < 15 ? backoff * 2 : 15; // short cap: back soon once the network is
+        backoff = gateway_next_wait(backoff);
     }
 }

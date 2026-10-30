@@ -15,3 +15,6 @@ http_response http_request(const char *method, const char *path, const char *jso
 
 // GET https://host/path with no Discord headers (CDN images). Body may be binary.
 http_response http_get(const char *host, const char *path);
+// A whole HTTP/1.0 reply (len bytes, buf[len] == 0) into status and body; takes buf (freed
+// when it is not a reply: status -1, no header end).
+http_response http_parse_reply(char *buf, size_t len);

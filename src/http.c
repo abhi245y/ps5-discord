@@ -47,10 +47,17 @@ static http_response exchange(const char *host, const char *head, size_t head_le
     if (!buf)
         return res;
     buf[len] = 0;
+    res = http_parse_reply(buf, len);
+    if (res.status < 0)
+        LOG("http: bad response from %s", host);
+    return res;
+}
 
+http_response http_parse_reply(char *buf, size_t len)
+{
+    http_response res = {.status = -1};
     char *start = strstr(buf, "\r\n\r\n");
     if (sscanf(buf, "HTTP/%*s %d", &res.status) != 1 || !start) {
-        LOG("http: bad response from %s", host);
         free(buf);
         res.status = -1;
         return res;

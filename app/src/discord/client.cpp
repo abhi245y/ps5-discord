@@ -993,13 +993,6 @@ void Client::want_image(const std::string &url)
     image_queue_.push_back(url);
 }
 
-std::vector<KeyPress> Client::take_keys()
-{
-    std::lock_guard<std::mutex> lock(mutex_);
-    std::vector<KeyPress> out;
-    out.swap(keys_);
-    return out;
-}
 
 std::vector<Image> Client::take_images()
 {
@@ -1098,7 +1091,8 @@ void Client::run()
             }
             if (ready_)
             {
-                if (now - last_chat_ms_ >= 3000)
+                // ponytail: 3 s cadence, 1 s after an event; a 304 makes either cheap.
+                if (now - last_chat_ms_ >= 3000 || (chat_dirty_ && now - last_chat_ms_ >= 1000))
                     poll_chat();
                 if (now - last_mentions_ms_ >= 30000)
                     poll_mentions();
@@ -1219,6 +1213,7 @@ void Client::poll_state()
     {
         snapshot_ = Snapshot{};
         events_next_ = -1;
+        chat_version_ = -1;
         prefetched_ = false;
         last_voice_ms_ = 0;
         been_ready_ = false;
@@ -1248,7 +1243,10 @@ void Client::poll_state()
     const bool was_ready = ready_;
     ready_ = snapshot_.connection == Connection::ready;
     if (ready_ && !was_ready)
+    {
         last_chat_ms_ = last_mentions_ms_ = 0; // fetch everything now
+        chat_version_ = -1;
+    }
     publish();
 }
 
@@ -1256,9 +1254,12 @@ void refresh_mentions(Snapshot &s);
 
 void Client::poll_chat()
 {
-    const Reply reply = http(port_, "GET", "/api/chat", {}, kChatMax);
+    chat_dirty_ = false; // before asking: an event during the request asks again
+    const long long held = chat_version_;
+    const Reply reply = http(port_, "GET", held >= 0 ? "/api/chat?v=" + std::to_string(held) : "/api/chat", {},
+                             kChatMax);
     last_chat_ms_ = now_ms();
-    if (reply.status != 200)
+    if (reply.status != 200) // 304: what the snapshot holds is current
         return;
     const json tree = json::parse(reply.body, nullptr, false);
     if (tree.is_discarded() || !tree.is_object())
@@ -1284,6 +1285,7 @@ void Client::poll_chat()
             ++account_;
         }
         next = snapshot_;
+        chat_version_ = static_cast<long long>(num(tree, "version", -1.0));
     }
     apply_tree(next, tree);
     refresh_mentions(next);
@@ -1446,14 +1448,7 @@ bool Client::poll_events()
         const std::string channel = text(ev, "channel_id");
         if (type == "CALL") // a DM call changed: its calls come with the tree
         {
-            last_chat_ms_ = 0;
-            continue;
-        }
-        if (type == "KEY")
-        {
-            keys_.push_back({static_cast<std::uint16_t>(num(ev, "usage", 0.0)),
-                             static_cast<std::uint32_t>(num(ev, "mods", 0.0)),
-                             static_cast<std::uint32_t>(num(ev, "led", 0.0))});
+            chat_dirty_ = true;
             continue;
         }
         if (type == "MESSAGE_CREATE")
@@ -1494,7 +1489,7 @@ bool Client::poll_events()
         }
         if (snapshot_.messages.find(channel) == snapshot_.messages.end())
         {
-            last_chat_ms_ = 0; // not open: its history loads when it is; refresh unread counts now
+            chat_dirty_ = true; // not open: its history loads when it is; refresh unread counts soon
             continue;
         }
         std::vector<Message> &ms = edit_messages(snapshot_, channel);
@@ -1882,6 +1877,7 @@ void Client::handle(const Request &request)
         snapshot_.status_message = "Signing out...";
         ready_ = false;
         events_next_ = -1; // the new core counts its events from the start
+        chat_version_ = -1;
         publish();
         break;
     }

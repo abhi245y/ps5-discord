@@ -23,6 +23,10 @@ static char token[256];
 //   voice{channel_id: [states]}, reads{channel_id: {last_read, mentions}},
 //   calls{channel_id: {ringing[ids], message_id}} (DM calls in progress or ringing)
 static cJSON *tree;
+// Bumped on every change to tree (/api/chat?v= answers 304 while it holds), seeded from the
+// clock at READY so a restarted core never repeats a number the app holds.
+static long tree_version;
+static time_t pruned; // when users was last cut down to the people still referenced
 static char *events[EVENT_RING];
 static long next_event; // sequence number of the next event
 
@@ -42,9 +46,11 @@ void chat_reset(void)
     pthread_mutex_unlock(&lock);
 }
 
-const char *chat_token(void)
+void chat_token(char *out, size_t cap)
 {
-    return token; // written once per login before the gateway starts
+    pthread_mutex_lock(&lock); // chat_reset clears it from the main thread
+    snprintf(out, cap, "%s", token);
+    pthread_mutex_unlock(&lock);
 }
 
 static void copy(cJSON *dst, cJSON *src, const char *key)
@@ -502,12 +508,7 @@ static void push_event(const char *type, cJSON *d)
     copy(e, d, "id");
     copy(e, d, "channel_id");
     copy(e, d, "guild_id");
-    if (strcmp(type, "KEY") == 0) {
-        copy(e, d, "usage");
-        copy(e, d, "mods");
-        copy(e, d, "led");
-    }
-    else if (strncmp(type, "MESSAGE_REACTION_", 17) == 0) {
+    if (strncmp(type, "MESSAGE_REACTION_", 17) == 0) {
         copy(e, d, "message_id");
         copy(e, d, "user_id");
         cJSON *em = cJSON_GetObjectItem(d, "emoji");
@@ -811,7 +812,9 @@ static void message_created(cJSON *d)
         set_string(r, "last_read", id); // your own message reads the channel
         return;
     }
-    if (!str(d, "guild_id") || mentions_me(d, me)) // every DM message counts, as in Discord
+    const int t = (int)json_int(d, "type", 0); // 1, 2, 4-6: a group DM's members, name, icon, pins
+    const int notice = t == 1 || t == 2 || (t >= 4 && t <= 6);
+    if ((!str(d, "guild_id") && !notice) || mentions_me(d, me)) // every DM message counts, as in Discord
     {
         const double n = (double)json_int(r, "mentions", 0);
         cJSON_DeleteItemFromObject(r, "mentions");
@@ -836,12 +839,14 @@ static int dm_listed(const char *id)
 
 void chat_dispatch(const char *type, cJSON *d)
 {
+    int changed = 1; // the tree changed (tree_version): not for typing, edits, reactions and the rest
     pthread_mutex_lock(&lock);
     if (strcmp(type, "READY") == 0)
     {
         cJSON_Delete(tree);
         tree = NULL;
         load_ready(d);
+        tree_version = (long)time(NULL) << 16;
     }
     else if (!tree)
     {
@@ -864,7 +869,8 @@ void chat_dispatch(const char *type, cJSON *d)
     else if (strcmp(type, "CHANNEL_DELETE") == 0 && guild_of(str(d, "guild_id")))
     {
         cJSON *gone = cJSON_Duplicate(d, 1); // same id, nothing visible: put_channel only removes
-        cJSON_ReplaceItemInObject(gone, "permission_overwrites", cJSON_Parse("[]"));
+        cJSON_DeleteItemFromObject(gone, "permission_overwrites"); // replacing a missing key leaks
+        cJSON_AddArrayToObject(gone, "permission_overwrites");
         cJSON_DeleteItemFromObject(gone, "type");
         cJSON_AddNumberToObject(gone, "type", 99);
         put_channel(guild_of(str(d, "guild_id")), gone);
@@ -898,7 +904,8 @@ void chat_dispatch(const char *type, cJSON *d)
              (strcmp(type + 8, "CREATE") == 0 || strcmp(type + 8, "UPDATE") == 0 || strcmp(type + 8, "DELETE") == 0 ||
               strcmp(type + 8, "REACTION_ADD") == 0 || strcmp(type + 8, "REACTION_REMOVE") == 0))
     {
-        if (strcmp(type, "MESSAGE_CREATE") == 0)
+        changed = strcmp(type, "MESSAGE_CREATE") == 0; // a new last message, unread counts
+        if (changed)
             message_created(d);
         push_event(type, d);
     }
@@ -907,6 +914,10 @@ void chat_dispatch(const char *type, cJSON *d)
     else if ((strcmp(type, "GUILD_EMOJIS_UPDATE") == 0 || strcmp(type, "GUILD_STICKERS_UPDATE") == 0) &&
              guild_of(str(d, "guild_id")))
         put_emojis(guild_of(str(d, "guild_id")), d, type[6] == 'E' ? "emojis" : "stickers");
+    else
+        changed = 0;
+    if (tree && changed)
+        tree_version++;
     pthread_mutex_unlock(&lock);
     if (alert_title[0]) {
         alert_sink(alert_title, alert_body, alert_icon, alert_urgent);
@@ -936,22 +947,62 @@ int chat_call_active(const char *channel_id)
     return on;
 }
 
-void chat_key(int usage, int mods, int led)
+static int listed(cJSON *array, const char *id)
 {
-    cJSON *d = cJSON_CreateObject();
-    cJSON_AddNumberToObject(d, "usage", usage);
-    cJSON_AddNumberToObject(d, "mods", mods);
-    cJSON_AddNumberToObject(d, "led", led);
+    cJSON *v;
+    cJSON_ArrayForEach(v, array)
+        if (cJSON_IsString(v) && strcmp(v->valuestring, id) == 0)
+            return 1;
+    return 0;
+}
+
+// Lock held. users gains everyone seen (authors, voice, presence) and would only grow: keep
+// me, friends, DM recipients, people in voice and ringing calls. Messages carry their
+// author themselves, so the app needs no others.
+static void prune_users(void)
+{
+    cJSON *users = cJSON_GetObjectItem(tree, "users"), *dms = cJSON_GetObjectItem(tree, "dms");
+    cJSON *voice = cJSON_GetObjectItem(tree, "voice"), *calls = cJSON_GetObjectItem(tree, "calls");
+    const char *me = str(cJSON_GetObjectItem(tree, "me"), "id");
+    cJSON *u = users ? users->child : NULL;
+    while (u) {
+        cJSON *next = u->next, *x, *y;
+        const char *id = u->string;
+        int keep = !id || (me && strcmp(id, me) == 0) || listed(cJSON_GetObjectItem(tree, "friends"), id);
+        cJSON_ArrayForEach(x, dms)
+            keep = keep || listed(cJSON_GetObjectItem(x, "recipient_ids"), id);
+        cJSON_ArrayForEach(x, voice)
+            cJSON_ArrayForEach(y, x)
+                keep = keep || (str(y, "user_id") && strcmp(str(y, "user_id"), id) == 0);
+        cJSON_ArrayForEach(x, calls)
+            keep = keep || listed(cJSON_GetObjectItem(x, "ringing"), id);
+        if (!keep)
+            cJSON_Delete(cJSON_DetachItemViaPointer(users, u));
+        u = next;
+    }
+}
+
+long chat_tree_version(void)
+{
     pthread_mutex_lock(&lock);
-    push_event("KEY", d);
+    long v = tree ? tree_version : -1;
     pthread_mutex_unlock(&lock);
-    cJSON_Delete(d);
+    return v;
 }
 
 char *chat_tree_json(void)
 {
     pthread_mutex_lock(&lock);
-    char *s = tree ? cJSON_PrintUnformatted(tree) : NULL;
+    char *s = NULL;
+    if (tree) {
+        if (time(NULL) - pruned >= 60) { // ponytail: a full scan, once a minute at most
+            prune_users();
+            pruned = time(NULL);
+        }
+        cJSON_DeleteItemFromObject(tree, "version");
+        cJSON_AddNumberToObject(tree, "version", (double)tree_version);
+        s = cJSON_PrintUnformatted(tree);
+    }
     pthread_mutex_unlock(&lock);
     return s;
 }

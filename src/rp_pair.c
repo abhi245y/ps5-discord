@@ -46,7 +46,7 @@ static void path(char *out, size_t cap, int32_t user, const char *ext)
     snprintf(out, cap, "%s/remoteplay-%08x.%s", dir, (unsigned)user, ext);
 }
 
-static int exists(const char *p)
+__attribute__((unused)) static int exists(const char *p) // the console's half only
 {
     FILE *f = fopen(p, "rb"); // access() refuses payloads on the console
     if (f)
@@ -55,7 +55,7 @@ static int exists(const char *p)
 }
 
 // The .txt beside a pairing: console name, user name, time.
-static void read_info(const char *p, char console[64], char user[64], long long *since)
+__attribute__((unused)) static void read_info(const char *p, char console[64], char user[64], long long *since)
 {
     console[0] = user[0] = 0;
     *since = 0;
@@ -358,7 +358,7 @@ typedef struct {
     uint32_t pin;
 } pair_job;
 
-static volatile int regist_done;
+static _Atomic int regist_done;
 static ChiakiRegisteredHost regist_host;
 
 static void regist_cb(ChiakiRegistEvent *e, void *user)

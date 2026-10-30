@@ -25,7 +25,6 @@
 #include "platform/ps5/audio_out.hpp"
 #include "platform/ps5/display_egl.hpp"
 #include "platform/ps5/ime.hpp"
-#include "platform/ps5/usb_keyboard.hpp"
 #include "screens/emoji_picker.hpp"
 #include "platform/ps5/voice_audio.hpp"
 #include "platform/ps5/pad.hpp"
@@ -472,10 +471,6 @@ int main()
         const std::size_t count = pad.read(samples);
         InputFrame input = tracker.update(std::span<const PadSample>(samples, count),
                                           static_cast<std::uint64_t>(now));
-        // A keyboard plugged into the console types and navigates (read by the core).
-        if (!tour)
-            for (const discord::KeyPress &k : client.take_keys())
-                ps5::apply_key(input, {k.usage, k.mods, k.led});
         if (!remote_typed.empty())
         {
             // One key a frame, as typing would arrive.

@@ -55,7 +55,7 @@ static uint64_t now_ms(void)
     return (uint64_t)t.tv_sec * 1000u + (uint64_t)t.tv_nsec / 1000000u;
 }
 
-static void log_line(const char *fmt, ...)
+__attribute__((format(printf, 1, 2))) static void log_line(const char *fmt, ...)
 {
     char line[512];
     va_list ap;
@@ -516,7 +516,7 @@ cleanup:
         // ponytail: the console's audio driver stays off this controller until it is
         // replugged; re-enumerating would disconnect the buttons too (press PS).
         log_line("audio released; the console's controller audio returns on replug");
-    } else if ((detached || detaching) && fd >= 0) {
+    } else if (!g.config.audio_only && (detached || detaching) && fd >= 0) {
         // Also when a detach failed: the pad may have been left detached by a crash before.
         uint32_t plugged = 0;
         if (ioctl(fd, USB_GET_PLUGTIME, &plugged)) {

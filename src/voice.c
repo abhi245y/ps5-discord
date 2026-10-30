@@ -38,7 +38,7 @@ static const char *state_names[] = {"idle", "joining", "connecting", "securing",
 typedef struct {
     // copied from the gateway when the thread starts
     char endpoint[256], token[128], session_id[64], server_id[IDS], channel_id[IDS], user_id[IDS];
-    volatile int stop;  // set (under lock) when a newer state replaces this connection
+    _Atomic int stop;   // set (under lock) when a newer state replaces this connection
     ws_conn ws;
     int udp;            // -1 until READY
     uint32_t ssrc;
@@ -61,6 +61,7 @@ typedef struct {
 // Everything below is guarded by lock. Other threads only read or queue requests.
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static char self_id[IDS];
+static char gw_session[64]; // this gateway session's id (READY): voice states of ours carry it
 static enum vstate state = V_IDLE;
 static char err_text[256];
 static char want_guild[IDS], want_channel[IDS]; // the call asked for (or current)
@@ -235,6 +236,7 @@ void voice_on_ready(cJSON *ready)
     const char *ghost = prev[0] ? ghost_guild(ready, prev) : NULL;
     stop_locked();
     session_id[0] = token[0] = endpoint[0] = channel[0] = guild[0] = 0;
+    copy(gw_session, sizeof gw_session, sid);
     if (want_channel[0] || ghost) {
         op4 = (voice_op4){.mute = mute, .deaf = deaf};
         copy(op4.guild, sizeof op4.guild, want_channel[0] ? want_guild : ghost);
@@ -319,8 +321,14 @@ void voice_on_state(cJSON *d)
         pthread_mutex_unlock(&lock);
         return;
     }
-    copy(listed, sizeof listed, cid);
-    if (!cid) { // we left (or were moved out by the server)
+    const char *sid = str(d, "session_id");
+    // Our account in voice from another client (a phone): Discord moved the call there, so
+    // ours ended; it is not a call to join here.
+    const int elsewhere = cid && sid && gw_session[0] && strcmp(sid, gw_session) != 0;
+    if (elsewhere)
+        LOG("voice: this account joined voice on another device");
+    copy(listed, sizeof listed, elsewhere ? NULL : cid);
+    if (!cid || elsewhere) { // we left (or were moved out by the server, or to another device)
         stop_locked();
         guild[0] = channel[0] = session_id[0] = token[0] = endpoint[0] = 0;
         if (state != V_JOINING && state != V_ERROR) { // a join we just sent stays pending
@@ -328,7 +336,7 @@ void voice_on_state(cJSON *d)
             set_state_locked(V_IDLE);
         }
     } else {
-        const char *sid = str(d, "session_id"), *gid = str(d, "guild_id");
+        const char *gid = str(d, "guild_id");
         if (strcmp(channel, cid) != 0 || strcmp(session_id, sid ? sid : "") != 0) {
             stop_locked();
             if (session_id[0]) // server details of the old call; on a first join Discord may
