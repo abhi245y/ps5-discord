@@ -111,6 +111,26 @@ static void signatures(void)
     assert(!update_signature_ok(manifest, len, sig, 69, (const unsigned char(*)[65])keys, 2));
     sign(manifest, &k, 0x00, sig); // not touched
     assert(!update_signature_ok(manifest, len, sig, 69, (const unsigned char(*)[65])keys, 2));
+    // A real one: the sample release's manifest, signed by the ZUKEY with ssh-keygen -Y sign and
+    // turned into update.sig by tools/sign-release.sh, checked against the project's keys.
+    char text[512];
+    unsigned char real[80];
+    FILE *f = fopen("tests/data/fido-update.txt", "rb");
+    size_t text_len = f ? fread(text, 1, sizeof text, f) : 0;
+    if (f)
+        fclose(f);
+    f = fopen("tests/data/fido-update.sig", "rb");
+    size_t real_len = f ? fread(real, 1, sizeof real, f) : 0;
+    if (f)
+        fclose(f);
+    assert(text_len > 0 && real_len == 69);
+    const int count = (int)(sizeof update_keys / sizeof *update_keys);
+    assert(update_signature_ok(text, text_len, real, real_len, update_keys, count));
+    real[68] ^= 1;
+    assert(!update_signature_ok(text, text_len, real, real_len, update_keys, count));
+    real[68] ^= 1;
+    text[10] ^= 1;
+    assert(!update_signature_ok(text, text_len, real, real_len, update_keys, count));
     // The project's own keys parse as P-256 points.
     mbedtls_ecp_group grp;
     mbedtls_ecp_point q;

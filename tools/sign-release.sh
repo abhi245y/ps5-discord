@@ -68,7 +68,7 @@ printf 'ps5-discord-update 1\nversion %s\nasset %s\nsize %s\nsha256 %s\nmin_from
 rm -f "$out/update.txt.sig"
 echo "sign-release: touch the key to sign"
 ssh-keygen -Y sign -n ps5-discord-release -f "$key" "$out/update.txt"
-ssh-keygen -Y check-novalidate -n ps5-discord-release -f "$out/update.txt.sig" < "$out/update.txt"
+ssh-keygen -Y check-novalidate -n ps5-discord-release -s "$out/update.txt.sig" < "$out/update.txt"
 
 # update.sig: flags (1), counter (4), r (32), s (32), from the SSHSIG's signature.
 python3 -I - "$out/update.txt.sig" "$out/update.sig" <<'EOF'
