@@ -148,8 +148,10 @@ std::atomic<bool> g_fallback{false}; // the previous version's core was sent: ev
 
 // The core ships inside the app: when nothing answers on its port, hand the
 // bundled payload to elfldr on this console. A core that finds the port taken
-// exits, so a retry while one is starting does no harm. The fourth send and later
-// are the previous version's core (if the update left one): the new one does not run.
+// exits, so a retry while one is starting does no harm. The fourth send in a row with
+// no answer between is the previous version's core (if the update left one): the new
+// one does not run. A sign-out or a core replacement that starts one is no such row.
+static int sends = 0; // since a core last answered
 void start_core()
 {
     static auto last = std::chrono::steady_clock::time_point{};
@@ -157,7 +159,6 @@ void start_core()
     if (last != decltype(last){} && now - last < std::chrono::seconds(20))
         return;
     last = now;
-    static int sends = 0;
     FILE *f = ++sends >= 4 ? std::fopen("/app0/assets/ps5-discord.prev.elf", "rb") : nullptr;
     g_fallback = f != nullptr;
     if (!f)
@@ -1147,6 +1148,8 @@ void Client::poll_state()
     // without the lock, which the UI thread needs every frame.
     state_failures_ = reply.status == 200 ? 0 : state_failures_ + 1;
     core_seen_ |= reply.status == 200;
+    if (reply.status == 200)
+        sends = 0;
     if (state_failures_ >= 3 || (!core_seen_ && reply.status != 200)) // at launch: no need to wait
         start_core();
     std::unique_lock<std::mutex> lock(mutex_);
@@ -1156,8 +1159,9 @@ void Client::poll_state()
             return;
         // Before the first sign-in this is the launch; after it, a drop like any other.
         snapshot_.connection = been_ready_ ? Connection::reconnecting : Connection::starting;
-        snapshot_.status_message =
-            been_ready_ ? "Restarting the ps5-discord core." : "Starting the ps5-discord core...";
+        snapshot_.status_message = signing_out_ ? "Signing out..."
+                                   : been_ready_ ? "Restarting the ps5-discord core."
+                                                 : "Starting the ps5-discord core...";
         ready_ = false;
         publish();
         return;
@@ -1253,6 +1257,15 @@ void Client::poll_state()
         return;
     }
     const Connection before = snapshot_.connection;
+    if (signing_out_ && s != "login" && s != "scanned" && s != "browser")
+    {
+        // The old core still ending its calls; the new one not at the QR yet.
+        snapshot_.connection = Connection::starting;
+        snapshot_.status_message = "Signing out...";
+        publish();
+        return;
+    }
+    signing_out_ = false;
     // Signed in before, signing in now: another console user's turn, or signed out. The
     // last account's servers, chats and DMs go.
     const bool signing_in = s == "login" || s == "scanned" || s == "browser";
@@ -1949,6 +1962,8 @@ void Client::handle(const Request &request)
         snapshot_ = Snapshot{};
         snapshot_.status_message = "Signing out...";
         ready_ = false;
+        been_ready_ = false; // the core going away is the sign-out, not a drop
+        signing_out_ = true;
         events_next_ = -1; // the new core counts its events from the start
         chat_version_ = -1;
         publish();

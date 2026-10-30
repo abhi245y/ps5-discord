@@ -112,6 +112,7 @@ class Client
     std::string browser_error_; // client thread only; retained across state polls
     int state_failures_ = 0;   // /api/state polls in a row the core did not answer (client thread)
     bool been_ready_ = false;  // signed in and connected once this launch (same account)
+    bool signing_out_ = false; // signed out: "Signing out..." until the next core is at the QR
     bool core_seen_ = false;   // it answered once: from then on a missed poll may be only slow
     std::string start_error_;     // why /api/update/start was refused (client thread)
     bool update_checked_ = false; // the launch-time check was queued (once)

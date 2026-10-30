@@ -846,9 +846,14 @@ static void handle(int c, int local)
         reply(c, "202 Accepted", "application/json", "{}", 2);
     } else if (post && strcmp(path, "/api/signout") == 0) {
         LOG("sign out requested");
-        if (core_sign_out() != 0) {
+        char token[256];
+        chat_token(token, sizeof token);
+        if (!token[0]) { // nobody signed in (a second press): nothing to end, no restart
+            reply(c, "200 OK", "application/json", "{\"ok\":true}", 11);
+        } else if (core_sign_out() != 0) {
             refuse(c, "502 Bad Gateway", "Could not reach Discord to sign out. Try again.");
         } else {
+            status_state("signing_out"); // not "ready" while the calls end: the app would go back
             reply(c, "200 OK", "application/json", "{\"ok\":true}", 11);
             close(c);
             core_quit(1);
