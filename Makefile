@@ -163,10 +163,11 @@ build/host/%.o: %.c
 	@$(HOST_CC) $(if $(filter .deps/%,$<),-w) $(HOST_CFLAGS) $(if $(filter src/% tests/%,$<),-Werror) -MMD -MP -c $< -o $@
 
 test: build/host/selftest build/host/browser-storage-test build/host/client-read-state-test build/host/gif-frames-test \
-		build/host/ds5-usb-test build/host/web-test $(HOST_DAVE_TEST)
+		build/host/ds5-usb-test build/host/web-test build/host/gateway-test $(HOST_DAVE_TEST)
 	./build/host/selftest
 	./build/host/ds5-usb-test
 	./build/host/web-test
+	./build/host/gateway-test
 	./build/host/browser-storage-test
 	./build/host/client-read-state-test
 	./build/host/gif-frames-test
@@ -202,6 +203,13 @@ build/host/web-test: build/host/tests/web.o $(filter-out build/host/src/main.o b
 	@echo "  LD    $@"
 	@$(HOST_CC) -o $@ $^ $(HOST_DAVE_LINK)
 build/host/tests/web.o: src/web.c | build/build_config.h
+# gateway.c's session choices over a fake WebSocket (tests/gateway.c stands in for ws.c).
+build/host/gateway-test: build/host/tests/gateway.o \
+		$(filter-out build/host/src/main.o build/host/src/gateway.o build/host/src/ws.o,$(HOST_OBJ))
+	@mkdir -p $(@D)
+	@echo "  LD    $@"
+	@$(HOST_CC) -o $@ $^ $(HOST_DAVE_LINK)
+build/host/tests/gateway.o: src/gateway.c | build/build_config.h
 # The bridge's checks (tools/ds5-usb-bridge: make test there adds sanitizers).
 build/host/ds5-usb-test: $(DS5)/test_usb.c $(DS5)/pcm_stream.c $(wildcard $(DS5)/*.h)
 	@mkdir -p $(@D)
