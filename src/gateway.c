@@ -45,6 +45,7 @@ typedef struct {
     int acked;
     int reconnect; // set by handlers: leave the read loop
     char game[128]; // the game Discord shows for this session ("" none)
+    char cover[512]; // ... and its picture (playing_cover)
     int64_t game_check; // monotonic ms of the next look at the console's game
 } gateway;
 
@@ -142,7 +143,7 @@ static void on_dispatch(gateway *g, const char *t, cJSON *d)
         cJSON_ArrayForEach(acct, cJSON_GetObjectItem(d, "connected_accounts"))
             sony_shows_game |= strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(acct, "type")) ?: "", "playstation") == 0 &&
                                cJSON_IsTrue(cJSON_GetObjectItem(acct, "show_activity"));
-        g->game[0] = 0; // IDENTIFY sent no activities
+        g->game[0] = g->cover[0] = 0; // IDENTIFY sent no activities
         g->game_check = 0;
         status_user(name, cJSON_GetArraySize(cJSON_GetObjectItem(d, "guilds")),
                     cJSON_GetArraySize(cJSON_GetObjectItem(d, "private_channels")));
@@ -358,6 +359,7 @@ static int send_voice_state(gateway *g, const voice_op4 *v)
 
 // Discord's "Playing <game>": a look every 15 s, op 3 only on a change (Discord allows
 // about 5 presence updates a minute). A RESUME keeps the session's presence; READY starts none.
+// The cover arrives a look or two after the name, and is sent then.
 static int send_game(gateway *g)
 {
     static char seen[128];
@@ -366,16 +368,19 @@ static int send_game(gateway *g)
     if (now < g->game_check)
         return 0;
     g->game_check = now + 15000;
-    char name[128] = "";
+    char title[16], name[128] = "", cover[512] = "";
     if (prefs_get("share_game") && !sony_shows_game)
-        playing_now(name, sizeof name);
+        playing_now(title, name, sizeof name);
+    if (name[0])
+        playing_cover(title, g->token, cover, sizeof cover);
     if (strcmp(name, seen) != 0) {
         snprintf(seen, sizeof seen, "%s", name);
         since = (int64_t)time(NULL) * 1000;
     }
-    if (strcmp(name, g->game) == 0)
+    if (strcmp(name, g->game) == 0 && strcmp(cover, g->cover) == 0)
         return 0;
     snprintf(g->game, sizeof g->game, "%s", name);
+    snprintf(g->cover, sizeof g->cover, "%s", cover);
     cJSON *d = cJSON_CreateObject();
     cJSON_AddStringToObject(d, "status", "unknown"); // as IDENTIFY: the status set elsewhere stays
     cJSON_AddNumberToObject(d, "since", 0);
@@ -385,6 +390,13 @@ static int send_game(gateway *g)
         cJSON_AddNumberToObject(a, "type", 0);
         cJSON_AddStringToObject(a, "name", name);
         cJSON_AddNumberToObject(cJSON_AddObjectToObject(a, "timestamps"), "start", (double)since);
+        if (PLAYING_APP_ID[0]) // its icon when there is no cover
+            cJSON_AddStringToObject(a, "application_id", PLAYING_APP_ID);
+        if (cover[0]) {
+            cJSON *assets = cJSON_AddObjectToObject(a, "assets");
+            cJSON_AddStringToObject(assets, "large_image", cover);
+            cJSON_AddStringToObject(assets, "large_text", name);
+        }
         cJSON_AddItemToArray(acts, a);
     }
     cJSON_AddFalseToObject(d, "afk");

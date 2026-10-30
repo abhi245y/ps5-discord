@@ -188,7 +188,7 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
         };
     case 4:
         return {
-            toggle_row("Show what I'm playing", "Your Discord status shows the game you are in on this PS5.",
+            toggle_row("Show what I'm playing", "Your Discord status shows the PS5 game you are in. Covers come from prosperopatches.com.",
                        "share_game", s.prefs.share_game),
             {Kind::info, "Kept on this console",
              "Your sign-in is encrypted to this console, and nothing on your network can reach the app.", ""},

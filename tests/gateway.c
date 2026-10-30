@@ -174,6 +174,15 @@ int main(void)
     assert(heartbeats == 1 && elapsed_since(t) >= 1000 && elapsed_since(t) < 4000);
 
     title_names();
-    puts("gateway: identify or resume on HELLO, invalid sessions, heartbeat timeout, title names passed");
+    char out[512];
+    assert(playing_icon_url("{\"success\":true,\"metadata\":{\"icon\":\"https://cdn.example/x.png\"}}", out, sizeof out) == 0 &&
+           strcmp(out, "https://cdn.example/x.png") == 0);
+    assert(playing_icon_url("{\"success\":false,\"metadata\":{\"icon\":\"https://cdn.example/x.png\"}}", out, sizeof out) != 0);
+    assert(playing_icon_url("{\"success\":true,\"metadata\":{\"icon\":\"http://cdn.example/x.png\"}}", out, sizeof out) != 0);
+    assert(playing_icon_url("not json", out, sizeof out) != 0);
+    assert(playing_asset("[{\"url\":\"https://cdn.example/x.png\",\"external_asset_path\":\"external/ab/https/cdn.example/x.png\"}]", out,
+                         sizeof out) == 0 && strcmp(out, "mp:external/ab/https/cdn.example/x.png") == 0);
+    assert(playing_asset("[]", out, sizeof out) != 0 && playing_asset("{}", out, sizeof out) != 0);
+    puts("gateway: identify or resume on HELLO, invalid sessions, heartbeat timeout, title names, covers passed");
     return 0;
 }

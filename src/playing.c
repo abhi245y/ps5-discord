@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #include "playing.h"
 
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include <cJSON.h>
+
+#include "http.h"
+#include "log.h"
 
 #define APPMETA "/system_data/priv/appmeta" // the console's copy of each title's param file
 #define OWN_TITLE "PPSA99072"
@@ -86,16 +90,18 @@ int sceSystemServiceGetAppIdOfRunningBigApp(void);
 int sceSystemServiceGetAppTitleId(int app_id, char *title_id);
 #endif
 
-void playing_now(char *name, size_t cap)
+void playing_now(char title[16], char *name, size_t cap)
 {
     name[0] = 0;
+    title[0] = 0;
 #ifdef __PROSPERO__
     static char last_title[16], last_name[128];
-    char title[16] = "";
     int id = sceSystemServiceGetAppIdOfRunningBigApp();
     if (id < 0 || sceSystemServiceGetAppTitleId(id, title) != 0 || strcmp(title, OWN_TITLE) == 0 ||
-        strncmp(title, "NPXS", 4) == 0)
+        strncmp(title, "NPXS", 4) == 0) {
+        title[0] = 0;
         return;
+    }
     if (strcmp(title, last_title) != 0) {
         snprintf(last_title, sizeof last_title, "%s", title);
         if (playing_title_name(APPMETA, title, last_name, sizeof last_name) != 0)
@@ -105,4 +111,91 @@ void playing_now(char *name, size_t cap)
 #else
     (void)cap;
 #endif
+}
+
+int playing_icon_url(const char *lookup_json, char *out, size_t cap)
+{
+    cJSON *j = cJSON_Parse(lookup_json);
+    const char *url = cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetObjectItem(j, "metadata"), "icon"));
+    int ok = cJSON_IsTrue(cJSON_GetObjectItem(j, "success")) && url && strncmp(url, "https://", 8) == 0;
+    if (ok)
+        snprintf(out, cap, "%s", url);
+    cJSON_Delete(j);
+    return ok ? 0 : -1;
+}
+
+int playing_asset(const char *assets_json, char *out, size_t cap)
+{
+    cJSON *j = cJSON_Parse(assets_json);
+    const char *path = cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetArrayItem(j, 0), "external_asset_path"));
+    int ok = path && path[0] && (size_t)snprintf(out, cap, "mp:%s", path) < cap;
+    cJSON_Delete(j);
+    return ok ? 0 : -1;
+}
+
+static pthread_mutex_t cover_lock = PTHREAD_MUTEX_INITIALIZER;
+static char cover_title[16], cover[512]; // cover_title set: looked up or being looked up
+
+typedef struct {
+    char title[16];
+    char *token;
+} lookup;
+
+static void *look_up(void *arg)
+{
+    lookup *l = arg;
+    char path[64], icon[400] = "", asset[512] = "";
+    // PS5 titles on prosperopatches, PS4 (CUSA) on orbispatches: the same API.
+    const char *host = strncmp(l->title, "CUSA", 4) == 0 ? "orbispatches.com" : "prosperopatches.com";
+    snprintf(path, sizeof path, "/api/lookup?titleid=%s", l->title);
+    http_response r = http_get(host, path);
+    if (r.status == 200 && playing_icon_url(r.body, icon, sizeof icon) == 0) {
+        cJSON *urls = cJSON_CreateObject();
+        cJSON_AddItemToArray(cJSON_AddArrayToObject(urls, "urls"), cJSON_CreateString(icon));
+        char *body = cJSON_PrintUnformatted(urls);
+        cJSON_Delete(urls);
+        http_response a = http_post_json("/applications/" PLAYING_APP_ID "/external-assets", body, l->token);
+        if (a.status != 200 || playing_asset(a.body, asset, sizeof asset) != 0)
+            LOG("playing: no cover from Discord (%d)", a.status);
+        free(a.body);
+        free(body);
+    } else {
+        LOG("playing: no cover for %s (%d)", l->title, r.status);
+    }
+    free(r.body);
+    pthread_mutex_lock(&cover_lock);
+    if (strcmp(cover_title, l->title) == 0)
+        snprintf(cover, sizeof cover, "%s", asset);
+    pthread_mutex_unlock(&cover_lock);
+    free(l->token);
+    free(l);
+    return NULL;
+}
+
+void playing_cover(const char *title, const char *token, char *out, size_t cap)
+{
+    out[0] = 0;
+    if (!PLAYING_APP_ID[0] || !title[0])
+        return;
+    pthread_mutex_lock(&cover_lock);
+    int start = strcmp(cover_title, title) != 0;
+    if (start) { // ponytail: the last title only; a cache per title if people switch games a lot
+        snprintf(cover_title, sizeof cover_title, "%s", title);
+        cover[0] = 0;
+    } else {
+        snprintf(out, cap, "%s", cover);
+    }
+    pthread_mutex_unlock(&cover_lock);
+    lookup *l = start ? malloc(sizeof *l) : NULL;
+    if (!l)
+        return;
+    snprintf(l->title, sizeof l->title, "%s", title);
+    l->token = strdup(token);
+    pthread_t t;
+    if (!l->token || pthread_create(&t, NULL, look_up, l) != 0) {
+        free(l->token);
+        free(l);
+        return;
+    }
+    pthread_detach(t);
 }
