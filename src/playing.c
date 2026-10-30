@@ -29,6 +29,21 @@ static char *slurp(const char *path, size_t *len)
     return buf;
 }
 
+// A name cut at cap bytes may end inside a UTF-8 character, and Discord drops a frame with
+// broken UTF-8: drop the partial character.
+static void utf8_cut(char *s)
+{
+    size_t n = strlen(s), i = n;
+    while (i > 0 && ((unsigned char)s[i - 1] & 0xC0) == 0x80)
+        i--;
+    if (i == 0)
+        return;
+    unsigned char lead = (unsigned char)s[i - 1];
+    size_t want = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+    if (n - (i - 1) < want)
+        s[i - 1] = 0;
+}
+
 static int from_json(const char *data, char *name, size_t cap)
 {
     cJSON *j = cJSON_Parse(data);
@@ -82,6 +97,8 @@ int playing_title_name(const char *dir, const char *title, char *name, size_t ca
             r = from_sfo((const unsigned char *)buf, len, name, cap);
     }
     free(buf);
+    if (r == 0)
+        utf8_cut(name);
     return r;
 }
 
@@ -117,9 +134,8 @@ int playing_icon_url(const char *lookup_json, char *out, size_t cap)
 {
     cJSON *j = cJSON_Parse(lookup_json);
     const char *url = cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetObjectItem(j, "metadata"), "icon"));
-    int ok = cJSON_IsTrue(cJSON_GetObjectItem(j, "success")) && url && strncmp(url, "https://", 8) == 0;
-    if (ok)
-        snprintf(out, cap, "%s", url);
+    int ok = cJSON_IsTrue(cJSON_GetObjectItem(j, "success")) && url && strncmp(url, "https://", 8) == 0 &&
+             (size_t)snprintf(out, cap, "%s", url) < cap;
     cJSON_Delete(j);
     return ok ? 0 : -1;
 }

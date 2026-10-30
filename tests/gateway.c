@@ -74,6 +74,16 @@ static void title_names(void)
     put(dir, "CUSA00002", "param.sfo", sfo, 52);
     assert(playing_title_name(dir, "CUSA00002", name, sizeof name) != 0);
     assert(playing_title_name(dir, "PPSA09999", name, sizeof name) != 0);
+    // 42 three-byte characters: 126 bytes fit in 128 with the NUL, the 43rd is cut whole.
+    char json[400] = "{\"localizedParameters\":{\"defaultLanguage\":\"ja-JP\",\"ja-JP\":{\"titleName\":\"";
+    for (int i = 0; i < 43; i++)
+        strcat(json, "\xe3\x81\x82");
+    strcat(json, "\"}}}");
+    put(dir, "PPSA00004", "param.json", json, strlen(json));
+    assert(playing_title_name(dir, "PPSA00004", name, sizeof name) == 0 && strlen(name) == 126);
+    char small[5];
+    assert(playing_title_name(dir, "PPSA00004", small, sizeof small) == 0 && strlen(small) == 3); // 4 bytes: one character
+    unput(dir, "PPSA00004", "param.json");
     unput(dir, "PPSA00001", "param.json");
     unput(dir, "PPSA00002", "param.json");
     unput(dir, "PPSA00003", "param.json");
@@ -180,6 +190,7 @@ int main(void)
     assert(playing_icon_url("{\"success\":false,\"metadata\":{\"icon\":\"https://cdn.example/x.png\"}}", out, sizeof out) != 0);
     assert(playing_icon_url("{\"success\":true,\"metadata\":{\"icon\":\"http://cdn.example/x.png\"}}", out, sizeof out) != 0);
     assert(playing_icon_url("not json", out, sizeof out) != 0);
+    assert(playing_icon_url("{\"success\":true,\"metadata\":{\"icon\":\"https://cdn.example/x.png\"}}", out, 10) != 0);
     assert(playing_asset("[{\"url\":\"https://cdn.example/x.png\",\"external_asset_path\":\"external/ab/https/cdn.example/x.png\"}]", out,
                          sizeof out) == 0 && strcmp(out, "mp:external/ab/https/cdn.example/x.png") == 0);
     assert(playing_asset("[]", out, sizeof out) != 0 && playing_asset("{}", out, sizeof out) != 0);
