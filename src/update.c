@@ -811,13 +811,15 @@ static void *run(void *unused)
             pthread_cond_timedwait(&wake, &lock, &t);
         int do_check = u.want_check, do_start = u.want_start, do_apply = u.want_apply, force = u.force;
         u.want_check = u.want_start = u.want_apply = u.force = 0;
-        int busy = strcmp(u.state, "checking") == 0;
+        int showing = strcmp(u.state, "checking") == 0;
         time_t since = time(NULL) - u.checked;
         pthread_mutex_unlock(&lock);
         char state[16], version[64], extra[64];
         int journal = journal_read(state, version, extra) == 0;
-        if (do_check && !busy && !journal && (force || since >= 3600))
+        if (do_check && !journal && (force || since >= 3600))
             check(force);
+        else if (do_check && showing)
+            set_state("none", NULL); // Check shows "checking" at once; nothing to do this time
         if (do_start)
             stage();
         if (do_apply) {
