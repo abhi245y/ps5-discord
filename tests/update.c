@@ -137,22 +137,34 @@ static void make_zip(const char *path, const char *const *names, const char *con
 {
     FILE *f = fopen(path, "wb");
     assert(f);
-    uint32_t offs[16], crcs[16];
+    uint32_t offs[16], crcs[16], csizes[16];
     for (int i = 0; i < n; i++) {
         offs[i] = (uint32_t)ftell(f);
         size_t len = strlen(data[i]);
         crcs[i] = (uint32_t)crc32(0, (const Bytef *)data[i], (uInt)len);
+        unsigned char packed[4096];
+        uint32_t clen = (uint32_t)len;
+        if (method == 8) { // raw deflate, as zip writes it
+            z_stream z = {0};
+            assert(deflateInit2(&z, 9, Z_DEFLATED, -MAX_WBITS, 8, Z_DEFAULT_STRATEGY) == Z_OK);
+            z.next_in = (Bytef *)data[i], z.avail_in = (uInt)len;
+            z.next_out = packed, z.avail_out = sizeof packed;
+            assert(deflate(&z, Z_FINISH) == Z_STREAM_END);
+            clen = (uint32_t)z.total_out;
+            deflateEnd(&z);
+        }
+        csizes[i] = clen;
         le(f, 0x04034b50, 4), le(f, 10, 2), le(f, 0, 2), le(f, (uint32_t)method, 2), le(f, 0, 4);
-        le(f, crcs[i], 4), le(f, (uint32_t)len, 4), le(f, (uint32_t)len, 4);
+        le(f, crcs[i], 4), le(f, clen, 4), le(f, (uint32_t)len, 4);
         le(f, (uint32_t)strlen(names[i]), 2), le(f, 0, 2);
         fputs(names[i], f);
-        fwrite(data[i], 1, len, f);
+        fwrite(method == 8 ? (const void *)packed : data[i], 1, clen, f);
     }
     uint32_t cd = (uint32_t)ftell(f);
     for (int i = 0; i < n; i++) {
         size_t len = strlen(data[i]);
         le(f, 0x02014b50, 4), le(f, 0x031e, 2), le(f, 10, 2), le(f, 0, 2), le(f, (uint32_t)method, 2), le(f, 0, 4);
-        le(f, crcs[i], 4), le(f, (uint32_t)len, 4), le(f, (uint32_t)len, 4);
+        le(f, crcs[i], 4), le(f, csizes[i], 4), le(f, (uint32_t)len, 4);
         le(f, (uint32_t)strlen(names[i]), 2), le(f, 0, 2), le(f, 0, 2), le(f, 0, 2), le(f, 0, 2);
         le(f, 0x81ff0000u, 4), le(f, offs[i], 4);
         fputs(names[i], f);
@@ -203,8 +215,23 @@ static void zips(void)
     make_zip(zip, twice, data + 1, 2, 0);
     assert(update_unzip(zip, out, 1 << 20, why, sizeof why) != 0 && strcmp(why, "zip entry twice") == 0);
     remove_tree(out);
+    // Deflated, as tools/build.sh writes most entries: unpacked and checked.
+    const char *text[] = {"boot boot boot boot boot boot boot boot boot boot", "art"};
     mkdir(out, 0777);
-    make_zip(zip, names + 1, data + 1, 1, 8); // deflated: refused
+    make_zip(zip, names + 1, text, 2, 8);
+    assert(update_unzip(zip, out, 1 << 20, why, sizeof why) == 0);
+    snprintf(path, sizeof path, "%s/eboot.bin", out);
+    assert(has(path, text[0]));
+    remove_tree(out);
+    // A damaged deflate stream: refused.
+    FILE *z = fopen(zip, "r+b");
+    assert(z && fseek(z, 30 + (long)strlen(names[1]) + 2, SEEK_SET) == 0 && fputc(0xff, z) != EOF);
+    fclose(z);
+    mkdir(out, 0777);
+    assert(update_unzip(zip, out, 1 << 20, why, sizeof why) != 0);
+    remove_tree(out);
+    mkdir(out, 0777);
+    make_zip(zip, names + 1, data + 1, 1, 12); // bzip2: refused
     assert(update_unzip(zip, out, 1 << 20, why, sizeof why) != 0);
     remove_tree(out);
     mkdir(out, 0777);

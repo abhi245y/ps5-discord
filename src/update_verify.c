@@ -255,6 +255,47 @@ static int make_dirs(char *path) // every parent of path
     return 0;
 }
 
+// One entry's data (csize bytes at f's position) to out: stored as is, or deflated (raw
+// deflate, as zip writes it). buf: 2 MiB, half for each side. 0 on success.
+static int unpack(FILE *f, int out, unsigned method, uint32_t csize, uint32_t usize, unsigned char *buf,
+                  uLong *sum, uint64_t *wrote)
+{
+    const size_t half = 1u << 20;
+    z_stream z = {0};
+    if (method == 8 && inflateInit2(&z, -MAX_WBITS) != Z_OK)
+        return -1;
+    int r = 0, zr = Z_OK;
+    for (uint32_t left = csize; !r && (left || (method == 8 && zr != Z_STREAM_END));) {
+        size_t n = left < half ? left : half;
+        if (n && fread(buf, 1, n, f) != n) {
+            r = -1;
+            break;
+        }
+        left -= (uint32_t)n;
+        if (method == 0) {
+            r = write(out, buf, n) == (ssize_t)n ? 0 : -1;
+            *sum = crc32(*sum, buf, (uInt)n);
+            *wrote += n;
+            continue;
+        }
+        z.next_in = buf, z.avail_in = (uInt)n;
+        do { // all the output this input gives
+            z.next_out = buf + half, z.avail_out = (uInt)half;
+            zr = inflate(&z, Z_NO_FLUSH);
+            size_t got = half - z.avail_out;
+            if ((zr != Z_OK && zr != Z_STREAM_END && zr != Z_BUF_ERROR) || (*wrote += got) > usize ||
+                write(out, buf + half, got) != (ssize_t)got)
+                r = -1;
+            *sum = crc32(*sum, buf + half, (uInt)got);
+        } while (!r && z.avail_out == 0 && zr != Z_STREAM_END);
+        if (!r && !left && zr != Z_STREAM_END)
+            r = -1; // the input ended before the stream did
+    }
+    if (method == 8)
+        inflateEnd(&z);
+    return r;
+}
+
 int update_unzip(const char *zip_path, const char *dir, uint64_t max_total, char *why, size_t cap)
 {
     FILE *f = fopen(zip_path, "rb");
@@ -277,7 +318,7 @@ int update_unzip(const char *zip_path, const char *dir, uint64_t max_total, char
     char **seen = calloc(count, sizeof *seen);
     int r = seen ? 0 : fail(why, cap, "out of memory");
     uint64_t total = 0;
-    unsigned char *buf = malloc(1 << 20);
+    unsigned char *buf = malloc(2u << 20);
     if (!buf && !r)
         r = fail(why, cap, "out of memory");
     size_t at = 0;
@@ -298,7 +339,8 @@ int update_unzip(const char *zip_path, const char *dir, uint64_t max_total, char
         name[name_len] = 0;
         at += 46 + name_len + u16(e + 30) + u16(e + 32);
         const char *rest = inside(name);
-        if (!rest || memchr(name, 0, name_len) || method != 0 || csize != usize || csize == 0xffffffffu ||
+        if (!rest || memchr(name, 0, name_len) || (method != 0 && method != 8) || (method == 0 && csize != usize) ||
+            csize == 0xffffffffu || usize == 0xffffffffu ||
             local == 0xffffffffu) {
             r = fail(why, cap, "zip entry not allowed");
             break;
@@ -329,14 +371,11 @@ int update_unzip(const char *zip_path, const char *dir, uint64_t max_total, char
         }
         int out = open(path, O_WRONLY | O_CREAT | O_EXCL, 0777);
         uLong sum = crc32(0, Z_NULL, 0);
-        for (uint32_t left = usize; out >= 0 && left && !r;) {
-            size_t n = left < (1u << 20) ? left : (1u << 20);
-            if (fread(buf, 1, n, f) != n || write(out, buf, n) != (ssize_t)n)
-                r = fail(why, cap, "cannot unpack");
-            sum = crc32(sum, buf, (uInt)n);
-            left -= (uint32_t)n;
-        }
-        if (out < 0 || (!r && (sum != crc || fsync(out) != 0)))
+        uint64_t wrote = 0;
+        r = out >= 0 ? unpack(f, out, method, csize, usize, buf, &sum, &wrote) : r;
+        if (r)
+            fail(why, cap, "cannot unpack");
+        if (out < 0 || (!r && (sum != crc || wrote != usize || fsync(out) != 0)))
             r = fail(why, cap, out < 0 ? "cannot write" : "zip entry damaged");
         if (out >= 0)
             close(out);

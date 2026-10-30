@@ -211,8 +211,9 @@ build/host/gateway-test: build/host/tests/gateway.o \
 	@echo "  LD    $@"
 	@$(HOST_CC) -o $@ $^ $(HOST_DAVE_LINK)
 build/host/tests/gateway.o: src/gateway.c | build/build_config.h
-# The updater's checks, swap, watch and restore on temporary folders (tests/update.c).
-build/host/update-test: build/host/tests/update.o \
+# The updater's checks, swap, watch and restore on temporary folders (tests/update.c); its
+# zips are deflated with zlib's deflate, which the core itself does not need.
+build/host/update-test: build/host/tests/update.o build/host/$(ZLIB)/deflate.o build/host/$(ZLIB)/trees.o \
 		$(filter-out build/host/src/main.o build/host/src/update.o build/host/src/update_verify.o,$(HOST_OBJ))
 	@mkdir -p $(@D)
 	@echo "  LD    $@"

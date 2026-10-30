@@ -43,5 +43,6 @@ int update_manifest_parse(const char *text, update_manifest *m);
 int update_signature_ok(const char *text, size_t len, const unsigned char *sig, size_t sig_len,
                         const unsigned char (*keys)[65], int key_count);
 
-// The release zip (stored entries, one PPSA99072/ folder) into dir: 0 on success. why: short.
+// The release zip (stored or deflated entries, one PPSA99072/ folder) into dir: 0 on success.
+// why: short.
 int update_unzip(const char *zip_path, const char *dir, uint64_t max_total, char *why, size_t cap);

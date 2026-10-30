@@ -47,8 +47,10 @@ with zipfile.ZipFile(path) as z:
             sys.exit(f"sign-release: bad entry {n}")
         if part[1] in ("control.key", "previous", ".PPSA99072.update"):
             sys.exit(f"sign-release: {n} must not be in a release")
-        if i.compress_type != zipfile.ZIP_STORED or (i.external_attr >> 16) & 0o777 != 0o777:
-            sys.exit(f"sign-release: {n} is not stored 0777 (tools/zip-open-modes.py)")
+        if i.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+            sys.exit(f"sign-release: {n} is neither stored nor deflated")
+        if (i.external_attr >> 16) & 0o777 != 0o777:
+            sys.exit(f"sign-release: {n} is not 0777 (tools/zip-open-modes.py)")
         names.add(n)
     for need in ("eboot.bin", "sce_sys/param.json", "assets/ps5-discord.elf", "version.txt"):
         if "PPSA99072/" + need not in names:
