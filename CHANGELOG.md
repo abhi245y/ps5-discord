@@ -21,6 +21,10 @@ All notable changes to this project are documented here. The format follows
   the PS menu) the PS5's own notifications show messages, rings and Go Live stopping, with
   the sender's avatar. Discord's own mutes and per-server levels are followed; quiet hours;
   hidden during Go Live unless allowed.
+- "Playing" on Discord: the game in front on the PS5 (PS5 and PS4 titles) shows on your
+  profile with its cover (looked up on prosperopatches.com / orbispatches.com) and time
+  played; your online, idle or do-not-disturb status stays. Off in Settings, Privacy, and
+  skipped when a linked PlayStation account already shows the game.
 - A Discord sign-in per console user: the core runs the account of the user on screen and
   switches when another user comes on screen.
 - Chat: View image in a message's menu shows its pictures full screen.
