@@ -341,6 +341,7 @@ struct Prefs
     bool notify_system = true; // PS5 alerts while the app is not on screen
     bool notify_live = false;  // ... also while Go Live is on
     int quiet_hours = 0;       // 0 off, else a preset (screens/settings.cpp kQuiet)
+    bool share_game = true;    // Discord shows the game in front on this console
 
     void set(const std::string &key, int value) // a set_pref request, applied here
     {
@@ -360,6 +361,8 @@ struct Prefs
             notify_live = value != 0;
         else if (key == "quiet_hours")
             quiet_hours = value;
+        else if (key == "share_game")
+            share_game = value != 0;
     }
 };
 

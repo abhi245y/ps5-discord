@@ -15,6 +15,8 @@
 
 #include "chat.h"
 #include "log.h"
+#include "playing.h"
+#include "prefs.h"
 #include "props.h"
 #include "status.h"
 #include "voice.h"
@@ -27,7 +29,7 @@
 // Same value the web client sent in build 641004 (docs/gateway.md).
 #define CAPABILITIES 1734653
 
-enum { OP_DISPATCH = 0, OP_HEARTBEAT = 1, OP_IDENTIFY = 2, OP_VOICE_STATE = 4, OP_RESUME = 6, OP_RECONNECT = 7,
+enum { OP_DISPATCH = 0, OP_HEARTBEAT = 1, OP_IDENTIFY = 2, OP_PRESENCE = 3, OP_VOICE_STATE = 4, OP_RESUME = 6, OP_RECONNECT = 7,
        OP_INVALID_SESSION = 9, OP_HELLO = 10, OP_HEARTBEAT_ACK = 11, OP_GUILD_SUBSCRIPTIONS_BULK = 37 };
 
 typedef struct {
@@ -42,7 +44,14 @@ typedef struct {
     int64_t next_heartbeat; // monotonic ms, 0 = not started
     int acked;
     int reconnect; // set by handlers: leave the read loop
+    char game[128]; // the game Discord shows for this session ("" none)
+    char cover[512]; // ... and its picture (playing_cover)
+    int64_t game_check; // monotonic ms of the next look at the console's game
 } gateway;
+
+// READY: the user's linked PlayStation account already posts the game (Sony's own
+// integration), so this session sends none.
+static int sony_shows_game;
 
 // All socket I/O stays on the gateway thread (an mbedTLS context is not safe for a
 // concurrent read and write). Other threads leave requests here.
@@ -129,6 +138,13 @@ static void on_dispatch(gateway *g, const char *t, cJSON *d)
         voice_on_ready(d);
         snprintf(g->session_id, sizeof g->session_id, "%s", sid ? sid : "");
         snprintf(g->resume_url, sizeof g->resume_url, "%s", url ? url : "");
+        sony_shows_game = 0;
+        cJSON *acct;
+        cJSON_ArrayForEach(acct, cJSON_GetObjectItem(d, "connected_accounts"))
+            sony_shows_game |= strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(acct, "type")) ?: "", "playstation") == 0 &&
+                               cJSON_IsTrue(cJSON_GetObjectItem(acct, "show_activity"));
+        g->game[0] = g->cover[0] = 0; // IDENTIFY sent no activities
+        g->game_check = 0;
         status_user(name, cJSON_GetArraySize(cJSON_GetObjectItem(d, "guilds")),
                     cJSON_GetArraySize(cJSON_GetObjectItem(d, "private_channels")));
         status_state("ready");
@@ -341,6 +357,53 @@ static int send_voice_state(gateway *g, const voice_op4 *v)
     return send_json(g, op_msg(OP_VOICE_STATE, d));
 }
 
+// Discord's "Playing <game>": a look every 15 s, op 3 only on a change (Discord allows
+// about 5 presence updates a minute). A RESUME keeps the session's presence; READY starts none.
+// The cover arrives a look or two after the name, and is sent then.
+static int send_game(gateway *g)
+{
+    static char seen[128];
+    static int64_t since; // when the game in front was first seen: Discord shows the time played
+    int64_t now = now_ms();
+    if (now < g->game_check)
+        return 0;
+    g->game_check = now + 15000;
+    char title[16], name[128] = "", cover[512] = "";
+    if (prefs_get("share_game") && !sony_shows_game)
+        playing_now(title, name, sizeof name);
+    if (name[0])
+        playing_cover(title, g->token, cover, sizeof cover);
+    if (strcmp(name, seen) != 0) {
+        snprintf(seen, sizeof seen, "%s", name);
+        since = (int64_t)time(NULL) * 1000;
+    }
+    if (strcmp(name, g->game) == 0 && strcmp(cover, g->cover) == 0)
+        return 0;
+    snprintf(g->game, sizeof g->game, "%s", name);
+    snprintf(g->cover, sizeof g->cover, "%s", cover);
+    cJSON *d = cJSON_CreateObject();
+    cJSON_AddStringToObject(d, "status", "unknown"); // as IDENTIFY: the status set elsewhere stays
+    cJSON_AddNumberToObject(d, "since", 0);
+    cJSON *acts = cJSON_AddArrayToObject(d, "activities");
+    if (name[0]) {
+        cJSON *a = cJSON_CreateObject();
+        cJSON_AddNumberToObject(a, "type", 0);
+        cJSON_AddStringToObject(a, "name", name);
+        cJSON_AddNumberToObject(cJSON_AddObjectToObject(a, "timestamps"), "start", (double)since);
+        if (PLAYING_APP_ID[0]) // its icon when there is no cover
+            cJSON_AddStringToObject(a, "application_id", PLAYING_APP_ID);
+        if (cover[0]) {
+            cJSON *assets = cJSON_AddObjectToObject(a, "assets");
+            cJSON_AddStringToObject(assets, "large_image", cover);
+            cJSON_AddStringToObject(assets, "large_text", name);
+        }
+        cJSON_AddItemToArray(acts, a);
+    }
+    cJSON_AddFalseToObject(d, "afk");
+    LOG("gateway: playing %s", name[0] ? name : "nothing");
+    return send_json(g, op_msg(OP_PRESENCE, d));
+}
+
 // Called on the gateway thread between reads.
 static int send_pending(gateway *g)
 {
@@ -358,6 +421,8 @@ static int send_pending(gateway *g)
         if (send_voice_state(g, &v) != 0)
             return -1;
     }
+    if (send_game(g) != 0)
+        return -1;
     cJSON *op;
     while ((op = stream_take_gateway()))
         if (send_json(g, op) != 0) // Go Live ops 18, 22, 19
