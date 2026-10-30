@@ -34,6 +34,7 @@
 #include "rp_pair.h"
 #include "stream.h"
 #include "tls.h"
+#include "update.h"
 
 #ifdef __PROSPERO__
 #define DATA_DIR "/data/ps5-discord"
@@ -275,6 +276,10 @@ int main(void)
     }
     if (core_key_make(APP_DIR, raw) != 0)
         LOG("control: cannot write %s/control.key (errno %d): the app cannot reach the core", APP_DIR, errno);
+#ifdef __PROSPERO__
+    // Before the app is served: a swap a power cut ended is finished first.
+    update_init(APP_DIR, "/data/homebrew/.PPSA99072.update", DATA_DIR "/update-bad");
+#endif
     // Requests only once TLS, voice and Go Live are set up (the port is ours already).
     pthread_t t;
     pthread_create(&t, NULL, control_loop, (void *)(intptr_t)control);

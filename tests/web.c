@@ -125,10 +125,10 @@ int main(void)
     // /api/state is open: the login QR only goes to the key holder.
     status_state("login");
     status_qr("https://discord.com/ra/test");
-    char *state = status_json(0);
+    char *state = status_json(0, NULL);
     assert(!strstr(state, "\"qr"));
     free(state);
-    state = status_json(1);
+    state = status_json(1, NULL);
     assert(strstr(state, "\"qr_url\":\"https://discord.com/ra/test\""));
     free(state);
     puts("web: ids, queries, decoding, image allowlist, REST replies, core key passed");
