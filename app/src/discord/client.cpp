@@ -1374,6 +1374,7 @@ void Client::poll_voice()
             prefs.notify_system = num(p, "notify_system", 1.0) != 0.0;
             prefs.notify_live = num(p, "notify_live", 0.0) != 0.0;
             prefs.quiet_hours = std::clamp(static_cast<int>(num(p, "quiet_hours", 0.0)), 0, 4);
+            prefs.share_game = num(p, "share_game", 1.0) != 0.0;
         }
         if (v.contains("speaking") && v["speaking"].is_array())
             for (const json &id : v["speaking"])
