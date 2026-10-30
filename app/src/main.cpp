@@ -630,7 +630,8 @@ int main()
             sys::park();
         }
         ++frames;
-        client.set_drawn();
+        if (frames == 60) // the render loop ran: the updater's proof that this build starts
+            client.set_drawn();
         const std::int64_t presented = sys::monotonic_us();
         const float frame_ms = static_cast<float>(presented - previous) / 1000.0f;
         app::Telemetry &telemetry = shell.telemetry();

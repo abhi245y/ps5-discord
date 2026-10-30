@@ -77,6 +77,13 @@ verification challenge.
   none. The file is readable by any user (the app runs as another user than the core), so
   another payload, homebrew app or anyone on the console's FTP server can read it: the key
   keeps out the browser and the LAN, not other homebrew.
+- Updates come only as releases on this project's GitHub page, signed with the project's
+  offline keys; the core installs nothing else. A check sends the console's IP address to
+  api.github.com. A new version that does not start twice is rolled back, and that zip is
+  not offered at launch again (Settings, Check for updates offers it). Someone holding the
+  GitHub account could put back an older signed release that is still newer than a
+  console's version. A build the console refuses to launch at all cannot roll itself back:
+  the way out is to copy a release zip's PPSA99072 folder over the app by FTP.
 - Third-party clients break Discord's ToS and can get an account banned.
 - Go Live needs the DualSense on USB (a Bluetooth controller is dropped by Remote Play) and a
   Remote Play pairing, made once in Settings, Voice & audio. Above 720p30 needs Nitro or a

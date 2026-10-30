@@ -11,12 +11,12 @@
 #define UPDATE_REPO_ID "1425363066"
 
 // At core start: finishes a swap or a restore cut short, and starts the watch thread.
-void update_init(const char *app_dir, const char *work_dir, const char *bad_file);
+void update_init(const char *app_dir, const char *work_dir, const char *bad_file, const char *core_version);
 void update_check(int force);           // asks GitHub (at most once an hour unless forced)
 int update_start(char *why, size_t cap); // download and unpack the release found; 0 started
 int update_apply(void);                 // ready: swap once the app has closed; 0 accepted
-// Every request from the app: its version.txt, whether it has drawn a frame, whether it
-// started the fallback core. bye: its own Quit.
+// Every request from the app: its version.txt, whether it has presented 60 frames, whether
+// it started the fallback core. bye: its own Quit.
 void update_seen(const char *app_version, int drawn, int fallback);
 void update_bye(void);
 cJSON *update_json(void); // the "update" object of /api/state

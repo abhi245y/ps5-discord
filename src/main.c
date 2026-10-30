@@ -132,13 +132,18 @@ static void end_calls(void)
     voice_leave();
 }
 
-void core_quit(int forget_token)
+void core_end_calls(void)
 {
     end_calls();
     // The leave and the stream's end go out on the gateway thread (within a second): let
     // them, or the others see us in the call until Discord times us out.
     for (int i = 0; i < 20 && (voice_request_pending() || stream_gateway_pending()); i++)
         usleep(100000);
+}
+
+void core_quit(int forget_token)
+{
+    core_end_calls();
     if (forget_token) {
         char path[64];
         token_path(path, sizeof path);
@@ -278,7 +283,7 @@ int main(void)
         LOG("control: cannot write %s/control.key (errno %d): the app cannot reach the core", APP_DIR, errno);
 #ifdef __PROSPERO__
     // Before the app is served: a swap a power cut ended is finished first.
-    update_init(APP_DIR, "/data/homebrew/.PPSA99072.update", DATA_DIR "/update-bad");
+    update_init(APP_DIR, "/data/homebrew/.PPSA99072.update", DATA_DIR "/update-bad", CORE_VERSION);
 #endif
     // Requests only once TLS, voice and Go Live are set up (the port is ours already).
     pthread_t t;

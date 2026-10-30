@@ -20,6 +20,9 @@ void core_quit(int forget_token)
 {
     (void)forget_token;
 }
+void core_end_calls(void)
+{
+}
 void app_alert(const char *context, const char *text, const char *icon, int urgent)
 {
     (void)context, (void)text, (void)icon, (void)urgent;
@@ -289,7 +292,7 @@ static void running(int on)
 
 static void watches(void)
 {
-    // Two launches that never drew a frame: the previous version goes back, the zip marked bad.
+    // Two launches that never drew: the previous version goes back, the zip marked bad.
     folders("0.4.0", "0.5.0", 0);
     assert(swap_in(0) == 0 && journal_write("done", "0.5.0", "0") == 0);
     int was = 0;
@@ -303,34 +306,39 @@ static void watches(void)
     assert(strcmp(u.state, "rolled_back") == 0);
     unlink(bad_file);
 
-    // Drawn and up for 10 s: it stays, and previous/ goes.
+    // One drawn request to the new core: it stays, and previous/ goes.
     folders("0.4.0", "0.5.0", 0);
     assert(swap_in(0) == 0 && journal_write("done", "0.5.0", "0") == 0);
     was = 0;
     running(1), watch_tick(&was);
-    update_seen("0.5.0", 1, 0);
-    u.proof_first -= PROOF_MS;
     update_seen("0.5.0", 1, 0);
     watch_tick(&was);
     assert(!exists(work) && app_has("version.txt", "0.5.0"));
     running(0);
 
-    // Drawn, but on the fallback core: no proof. A clean quit of a drawn launch is.
+    // Drawn only at the old core (a call kept it): neither proof nor a failed launch.
     folders("0.4.0", "0.5.0", 0);
     assert(swap_in(0) == 0 && journal_write("done", "0.5.0", "0") == 0);
     was = 0;
     running(1), watch_tick(&was);
-    update_seen("0.5.0", 1, 1);
-    u.proof_first -= PROOF_MS;
+    snprintf(core_version, sizeof core_version, "0.4.0");
     update_seen("0.5.0", 1, 0);
+    snprintf(core_version, sizeof core_version, "0.5.0");
     running(0), watch_tick(&was);
     char state[16], version[64], extra[64];
+    assert(journal_read(state, version, extra) == 0 && strcmp(extra, "0") == 0);
+    // Drawn on the fallback core: no proof, a failed launch.
+    running(1), watch_tick(&was);
+    update_seen("0.5.0", 1, 1);
+    update_seen("0.5.0", 1, 0);
+    running(0), watch_tick(&was);
     assert(journal_read(state, version, extra) == 0 && strcmp(extra, "1") == 0);
+    // A proven launch that quits cleanly ends the watch at once, before the core stops.
     running(1), watch_tick(&was);
     update_seen("0.5.0", 1, 0);
     update_bye();
-    running(0), watch_tick(&was);
     assert(!exists(work) && app_has("version.txt", "0.5.0"));
+    running(0), watch_tick(&was);
 
     // Another version installed by FTP meanwhile: the watch ends, nothing goes back.
     folders("0.4.0", "0.5.0", 0);
@@ -340,6 +348,61 @@ static void watches(void)
     was = 0;
     running(1), watch_tick(&was), running(0), watch_tick(&was);
     assert(!exists(work) && app_has("version.txt", "0.6.0"));
+}
+
+// apply() to the watch: the launch the swap waited out is not the new version's first.
+static void applies(void)
+{
+    folders("0.4.0", "0.5.0", 0);
+    assert(journal_write("staged", "0.5.0", "0.4.0") == 0);
+    char staged[400];
+    snprintf(staged, sizeof staged, "%s/staged", work);
+    assert(open_modes(staged, 0) == 0 && open_modes(staged, 1) == 0);
+    int was = 1;
+    running(1), watch_tick(&was); // staged: nothing to watch yet
+    running(0);
+    apply(); // waits for the app to be gone (3 s settle)
+    was = app_running();
+    watch_tick(&was);
+    char state[16], version[64], extra[64];
+    assert(journal_read(state, version, extra) == 0 && strcmp(state, "done") == 0 && strcmp(extra, "0") == 0);
+    assert(app_has("version.txt", "0.5.0"));
+
+    // A restore a power cut ended, finished at start, marks the zip too.
+    assert(journal_write("restoring", "0.5.0", "0") == 0);
+    mark_bad("0.5.0");
+    assert(has(bad_file, "ab00000000000000000000000000000000000000000000000000000000000000 0.5.0"));
+    unsigned char sha[32] = {0xab};
+    assert(marked_bad(sha));
+    unlink(bad_file);
+    assert(!marked_bad(sha));
+
+    // A swap that ended before its journal said so: nothing left to move.
+    remove_tree(work);
+    mkdir(work, 0777);
+    assert(swap_in(1) == 0);
+    remove_tree(work);
+}
+
+static void notes_and_urls(void)
+{
+    char body[16400];
+    memset(body, 'a', 16383);
+    memcpy(body + 16383, "\xc3\xa9", 3); // é across the 16 KB line
+    char *n = notes_of(body);
+    assert(strlen(n) == 16383);
+    free(n);
+    n = notes_of("one\r\ntwo");
+    assert(strcmp(n, "one\ntwo") == 0);
+    free(n);
+    char host[256], path[3072], longhost[320] = "https://";
+    assert(http_split_url("https://api.github.com/x?y=1", host, path) == 0 && strcmp(host, "api.github.com") == 0 &&
+           strcmp(path, "/x?y=1") == 0);
+    assert(http_split_url("https://h", host, path) == 0 && strcmp(path, "/") == 0);
+    assert(http_split_url("https://u@h/", host, path) != 0 && http_split_url("https://h:443/", host, path) != 0);
+    assert(http_split_url("http://h/", host, path) != 0);
+    memset(longhost + 8, 'h', 300);
+    assert(http_split_url(longhost, host, path) != 0);
 }
 
 int main(void)
@@ -354,9 +417,12 @@ int main(void)
     snprintf(sandbox_dir, sizeof sandbox_dir, "%s/sandbox", tmp);
     mkdir(sandbox_dir, 0777);
     zips();
+    snprintf(core_version, sizeof core_version, "0.5.0");
     swaps();
     watches();
+    applies();
+    notes_and_urls();
     remove_tree(tmp);
-    puts("update: versions, manifest, signature, zip, swap and undo, watch, restore passed");
+    puts("update: versions, manifest, signature, zip, swap and undo, apply, watch, restore, notes, URLs passed");
     return 0;
 }

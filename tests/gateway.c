@@ -21,6 +21,9 @@ void core_quit(int forget_token)
 {
     (void)forget_token;
 }
+void core_end_calls(void)
+{
+}
 void app_alert(const char *context, const char *text, const char *icon, int urgent)
 {
     (void)context, (void)text, (void)icon, (void)urgent;

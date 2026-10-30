@@ -143,7 +143,7 @@ Reply failed(Reply reply, const char *stage, int fd = -1)
     return reply;
 }
 
-std::atomic<bool> g_drawn{false};    // Client::set_drawn: the first frame was presented
+std::atomic<bool> g_drawn{false};    // Client::set_drawn: 60 frames presented
 std::atomic<bool> g_fallback{false}; // the previous version's core was sent: every request says so
 
 // The core ships inside the app: when nothing answers on its port, hand the

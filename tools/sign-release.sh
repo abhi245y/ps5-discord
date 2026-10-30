@@ -28,9 +28,17 @@ cp "$zip" "$out/$asset"
 
 # The zip: stored entries only, all 0777, one PPSA99072/ folder with the app's own files.
 python3 -I - "$out/$asset" "$version" <<'EOF'
-import sys, zipfile
+import os, sys, zipfile
 path, version = sys.argv[1:]
+# What the core's reader takes: no comment (it reads the end record from the last 22 bytes),
+# under 4096 entries, no ZIP64.
+if os.path.getsize(path) >= 0xffffffff:
+    sys.exit("sign-release: the zip needs ZIP64")
 with zipfile.ZipFile(path) as z:
+    if z.comment:
+        sys.exit("sign-release: the zip has a comment")
+    if len(z.infolist()) >= 4096:
+        sys.exit("sign-release: too many entries")
     names = set()
     for i in z.infolist():
         n = i.filename

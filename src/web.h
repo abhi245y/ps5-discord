@@ -14,3 +14,4 @@ void web_serve(int listen_fd);
 int web_app_on_screen(void); // the app asked something in the last few seconds
 int core_sign_out(void);         // main.c: ends the session with Discord; 0 when it did
 void core_quit(int forget_token); // main.c: stops Go Live and the call, then the core
+void core_end_calls(void);        // main.c: stops Go Live (controller back) and leaves the call
