@@ -39,6 +39,9 @@ struct Request
         sign_out,     // end the session with Discord and forget it on the console
         quit,         // stop the core (no alerts or calls) and close the app
         reconnect,    // Retry now: the core ends its wait before the next attempt
+        update_check, // ask the core to look for a new version: on = from Settings (force)
+        update_start, // download and unpack the offered version
+        update_apply, // swap the files in; the core answers 200 and the app closes itself
     };
     Kind kind = Kind::open_channel;
     std::string guild_id; // empty for a DM

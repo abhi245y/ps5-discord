@@ -35,6 +35,7 @@ enum class Act
     pair,
     sign_out,
     quit,
+    update, // Check for updates, or open the update dialog
     pref, // a console-side setting (Row::key, discord::Prefs)
     ui_volume,
     sfx_volume,
@@ -193,13 +194,32 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
             {Kind::info, "Kept on this console",
              "Your sign-in is encrypted to this console, and nothing on your network can reach the app.", ""},
         };
-    default:
-        return {
-            {Kind::value, "Version", "", version.empty() ? "development" : version},
+    default: {
+        const discord::Update &u = s.update;
+        // An older core has no update object: no row.
+        std::vector<Row> rows{{Kind::value, "Version", "", version.empty() ? "development" : version}};
+        if (!u.state.empty())
+        {
+            const bool open = u.state == "available" || u.state == "ready" || u.state == "downloading" ||
+                              u.state == "unpacking";
+            std::string desc = u.state == "checking"      ? "Checking..."
+                               : u.state == "available"   ? "Version " + u.version + " available"
+                               : u.state == "downloading" ? "Downloading " + std::to_string(u.total > 0 ? u.done * 100 / u.total : 0) + "%"
+                               : u.state == "unpacking"   ? "Unpacking..."
+                               : u.state == "ready"       ? "Ready: restart to finish"
+                               : u.state == "applying"    ? "Restarting..."
+                               : u.state == "failed"      ? (u.error.empty() ? "The last update failed" : u.error)
+                               : u.state == "rolled_back" ? "The last update did not start"
+                                                          : "Up to date";
+            rows.push_back({Kind::button, "Updates", desc, open ? "Open" : "Check", 0, false, false, Act::update});
+        }
+        rows.insert(rows.end(), {
             {Kind::value, "License", "", "AGPL-3.0"},
             {Kind::value, "Source", "", "github.com/abhi245y/ps5-discord"},
             {Kind::value, "Emoji", "", "Twemoji, CC-BY 4.0"},
-        };
+        });
+        return rows;
+    }
     }
 }
 
@@ -662,6 +682,18 @@ bool SettingsScreen::update(const discord::Snapshot &s, const hui::InputFrame &i
                 set_pref(row.key, (row.level + 1) % row.count);
                 feedback.play(hui::audio::Cue::slider);
             }
+            break;
+        case Act::update:
+            if (row.value == "Open")
+                update_dialog_ = true;
+            else
+            {
+                discord::Request r;
+                r.kind = discord::Request::Kind::update_check;
+                r.on = true; // from Settings: the core does not throttle
+                requests.push_back(r);
+            }
+            feedback.play(hui::audio::Cue::select);
             break;
         case Act::sign_out:
         case Act::quit:

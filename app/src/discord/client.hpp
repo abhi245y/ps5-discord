@@ -63,6 +63,8 @@ class Client
     // menu). The core shows the PS5's own alert while it is not.
     void set_front(bool front);
     bool front() const;
+    // The first frame was presented: requests say so (the core's proof that a new build runs).
+    void set_drawn();
     bool quit_wanted() const { return quit_; }
 
   private:
@@ -111,6 +113,8 @@ class Client
     int state_failures_ = 0;   // /api/state polls in a row the core did not answer (client thread)
     bool been_ready_ = false;  // signed in and connected once this launch (same account)
     bool core_seen_ = false;   // it answered once: from then on a missed poll may be only slow
+    std::string start_error_;     // why /api/update/start was refused (client thread)
+    bool update_checked_ = false; // the launch-time check was queued (once)
     bool replaced_core_ = false; // an older running core was told to quit (once per launch)
     std::string replaced_version_; // the version it reported (client thread)
     std::int64_t replaced_ms_ = 0;
@@ -118,5 +122,10 @@ class Client
     bool prefetched_ = false; // recent conversations' history asked for once after sign-in
     std::atomic<bool> ready_{false}; // read by the image thread too
 };
+
+// Starts the bundled core if nothing answers on its port. For main(), before the display and
+// fonts open: a half-updated folder whose UI cannot load must still start the core that finishes
+// the swap.
+void ensure_core();
 
 } // namespace discord

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "core/settings.hpp"
@@ -31,6 +32,8 @@ class SettingsScreen
                 hui::ui::Feedback &feedback, std::vector<discord::Request> &requests,
                 hui::Settings &app_settings, bool &changed);
     void draw(const discord::Snapshot &snapshot, const hui::Settings &app_settings, DrawList &list) const;
+    // The Updates row asked for the update dialog (once per call).
+    bool take_update_dialog() { return std::exchange(update_dialog_, false); }
 
   private:
     const Ink &ink_;
@@ -45,6 +48,7 @@ class SettingsScreen
         quit,
         quality, // Go Live above 720p · 30 fps: Nitro's
     };
+    bool update_dialog_ = false;
     Confirm confirm_ = Confirm::none; // the question that is up
     int quality_ = 0;                 // Confirm::quality: the one asked for
     // The pairing dialog: the console's users, one user's actions (use, pair again, remove),
