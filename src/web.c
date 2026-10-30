@@ -764,7 +764,7 @@ static void handle(int c, int local)
 
     if (get && strcmp(path, "/api/state") == 0) {
         core_key_keep(); // the app polls this first; a reinstall may have taken its key file
-        reply_json(c, status_json());
+        reply_json(c, status_json(key_header_ok(req, body)));
     } else if (post && strcmp(path, "/api/browser-login") == 0) {
         if (browser_auth_request() == 0)
             reply(c, "202 Accepted", "application/json", "{\"ok\":true}", 11);

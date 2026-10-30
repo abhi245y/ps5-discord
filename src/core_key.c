@@ -2,24 +2,26 @@
 #include "core_key.h"
 
 #include <fcntl.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 static char key[CORE_KEY_LEN + 1];
 static char path[256];
+static pthread_mutex_t write_lock = PTHREAD_MUTEX_INITIALIZER; // /api/state runs on many threads
 static _Atomic int ready; // the audio link's thread runs before main makes the key
 
 static int write_key(void)
 {
     char tmp[264];
     snprintf(tmp, sizeof tmp, "%s.new", path);
+    pthread_mutex_lock(&write_lock);
     int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (fd < 0)
-        return -1;
-    int ok = write(fd, key, CORE_KEY_LEN) == CORE_KEY_LEN;
-    ok = close(fd) == 0 && ok;
-    return ok && rename(tmp, path) == 0 ? 0 : -1;
+    int ok = fd >= 0 && write(fd, key, CORE_KEY_LEN) == CORE_KEY_LEN;
+    ok = fd >= 0 && close(fd) == 0 && ok && rename(tmp, path) == 0;
+    pthread_mutex_unlock(&write_lock);
+    return ok ? 0 : -1;
 }
 
 int core_key_make(const char *dir, const unsigned char raw[32])

@@ -95,7 +95,7 @@ void status_attempt(int n)
     pthread_mutex_unlock(&lock);
 }
 
-char *status_json(void)
+char *status_json(int with_qr)
 {
     cJSON *j = cJSON_CreateObject();
     pthread_mutex_lock(&lock);
@@ -107,8 +107,9 @@ char *status_json(void)
     cJSON_AddNumberToObject(j, "dms", dms);
     cJSON_AddNumberToObject(j, "events", (double)events);
     cJSON_AddNumberToObject(j, "uptime", started ? (double)(time(NULL) - started) : 0);
-    // The app asks every second: the QR (about 31 KB) only while it is shown.
-    if (strcmp(state, "login") == 0) {
+    // The app asks every second: the QR (about 31 KB) only while it is shown, and only
+    // with the key: /api/state is open, and the QR is a sign-in another program could relay.
+    if (with_qr && strcmp(state, "login") == 0) {
         cJSON_AddStringToObject(j, "qr_url", qr_url);
         cJSON_AddNumberToObject(j, "qr_size", qr_size);
         cJSON_AddStringToObject(j, "qr", qr_bits);

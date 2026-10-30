@@ -121,6 +121,16 @@ int main(void)
     snprintf(req, sizeof req, "POST /api/send HTTP/1.0\r\nContent-Length: 77\r\n\r\n\r\nX-Core-Key: %s\r\n", disk);
     assert(!key_header_ok(req, strstr(req, "\r\n\r\n") + 4)); // in the body: not a header
     assert(core_key_ok(disk, CORE_KEY_LEN) && !core_key_ok(disk, CORE_KEY_LEN - 1));
+
+    // /api/state is open: the login QR only goes to the key holder.
+    status_state("login");
+    status_qr("https://discord.com/ra/test");
+    char *state = status_json(0);
+    assert(!strstr(state, "\"qr"));
+    free(state);
+    state = status_json(1);
+    assert(strstr(state, "\"qr_url\":\"https://discord.com/ra/test\""));
+    free(state);
     puts("web: ids, queries, decoding, image allowlist, REST replies, core key passed");
     return 0;
 }
