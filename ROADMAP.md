@@ -100,16 +100,28 @@ without a PC.
 - An update from one release to the next and a roll back, on a console, from the release
   build.
 
-**Out of scope.** Voice with a game in front outside Go Live (the console does not give a
-payload or a backgrounded app the mic), push to talk, per-user volume, uploads, threads.
+### 0.5.x: Voice and Go Live follow-ups
+
+**Goal.** Make calls and Go Live work the way people expect from the desktop app.
+
+**Scope.**
+- Voice while a game is in front without Go Live (the console gives the app the mic only
+  while it is on screen today).
+- Push to talk and per-user volume.
+- Go Live: no replug of the controller between streams, resuming a stream after a network
+  drop, quality chosen to fit the connection.
+- Go Live and calls together with a controller on Bluetooth.
+
+**Exit criteria.** The open checks of 0.5.0 above, plus a game played for an hour in a call
+with Go Live on, without touching the cable.
 
 ### 0.6.0: Beta hardening
 
 **Goal.** Ready for people other than the developers.
 
 **Scope.** Performance budgets at 1080p and 4K, memory ceilings, resilience to network loss,
-sign-in when Discord asks for a captcha, text size settings, push to talk and per-user
-volume, the troubleshooting and install guides kept current.
+sign-in when Discord asks for a captcha, text size settings, uploads and threads, the
+troubleshooting and install guides kept current.
 
 **Exit criteria.** A week of daily use by testers with no crash or data loss, and updates
 between betas from inside the app.
