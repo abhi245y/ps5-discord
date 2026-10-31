@@ -32,7 +32,7 @@ OPUS_INCLUDES := -I$(OPUS)/include -I$(OPUS)/celt -I$(OPUS)/silk -I$(OPUS)/silk/
 
 DS5 := tools/ds5-usb-bridge
 APP_SRC := src/main.c src/log.c src/status.c src/web.c src/chat.c src/gateway.c src/remote_auth.c src/browser_auth.c src/browser_storage.c src/http.c src/props.c src/ws.c src/tls.c src/zstream.c src/ratelimit.c \
-	src/core_key.c src/voice.c src/voice_proto.c src/voice_audio.c src/broadcast.c src/rp_pair.c src/prefs.c src/notify.c src/stream.c src/playing.c $(DS5)/pcm_stream.c
+	src/core_key.c src/voice.c src/voice_proto.c src/voice_audio.c src/broadcast.c src/rp_pair.c src/prefs.c src/notify.c src/stream.c src/playing.c src/update.c src/update_verify.c $(DS5)/pcm_stream.c
 # Controller audio without Go Live (controller_voice.c) is parked: CONTROLLER_VOICE=1 builds it.
 ifneq ($(CONTROLLER_VOICE),)
 APP_SRC += src/controller_voice.c
@@ -163,11 +163,12 @@ build/host/%.o: %.c
 	@$(HOST_CC) $(if $(filter .deps/%,$<),-w) $(HOST_CFLAGS) $(if $(filter src/% tests/%,$<),-Werror) -MMD -MP -c $< -o $@
 
 test: build/host/selftest build/host/browser-storage-test build/host/client-read-state-test build/host/gif-frames-test \
-		build/host/ds5-usb-test build/host/web-test build/host/gateway-test $(HOST_DAVE_TEST)
+		build/host/ds5-usb-test build/host/web-test build/host/gateway-test build/host/update-test $(HOST_DAVE_TEST)
 	./build/host/selftest
 	./build/host/ds5-usb-test
 	./build/host/web-test
 	./build/host/gateway-test
+	./build/host/update-test
 	./build/host/browser-storage-test
 	./build/host/client-read-state-test
 	./build/host/gif-frames-test
@@ -210,6 +211,14 @@ build/host/gateway-test: build/host/tests/gateway.o \
 	@echo "  LD    $@"
 	@$(HOST_CC) -o $@ $^ $(HOST_DAVE_LINK)
 build/host/tests/gateway.o: src/gateway.c | build/build_config.h
+# The updater's checks, swap, watch and restore on temporary folders (tests/update.c); its
+# zips are deflated with zlib's deflate, which the core itself does not need.
+build/host/update-test: build/host/tests/update.o build/host/$(ZLIB)/deflate.o build/host/$(ZLIB)/trees.o \
+		$(filter-out build/host/src/main.o build/host/src/update.o build/host/src/update_verify.o,$(HOST_OBJ))
+	@mkdir -p $(@D)
+	@echo "  LD    $@"
+	@$(HOST_CC) -o $@ $^ $(HOST_DAVE_LINK)
+build/host/tests/update.o: src/update.c src/update_verify.c | build/build_config.h
 # The bridge's checks (tools/ds5-usb-bridge: make test there adds sanitizers).
 build/host/ds5-usb-test: $(DS5)/test_usb.c $(DS5)/pcm_stream.c $(wildcard $(DS5)/*.h)
 	@mkdir -p $(@D)

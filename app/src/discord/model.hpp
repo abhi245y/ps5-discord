@@ -366,6 +366,17 @@ struct Prefs
     }
 };
 
+// The core's self-update (/api/state "update"); state "" = an older core, no update UI.
+struct Update
+{
+    std::string state; // none checking available downloading unpacking ready applying restoring failed
+    std::string version, installed, notes, error;
+    std::string check_error; // why the last check found nothing
+    std::string previous;    // the version Settings can go back to
+    std::int64_t done = 0, total = 0; // bytes
+    bool operator==(const Update &) const = default;
+};
+
 struct Snapshot
 {
     Connection connection = Connection::starting;
@@ -397,6 +408,7 @@ struct Snapshot
     std::vector<Notice> notices; // the latest few, oldest first
     std::string sign_out_error;  // the last sign out failed, and why
     Prefs prefs;
+    Update update;
     Voice voice;
     std::map<std::string, std::vector<VoiceSeat>> seats; // by channel id: rooms and DM calls
     std::vector<Call> calls;

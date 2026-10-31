@@ -22,6 +22,7 @@
 #include "log.h"
 #include "ratelimit.h"
 #include "status.h"
+#include "update.h"
 #include "voice.h"
 #include "voice_audio.h"
 #include "controller_voice.h"
@@ -764,7 +765,8 @@ static void handle(int c, int local)
 
     if (get && strcmp(path, "/api/state") == 0) {
         core_key_keep(); // the app polls this first; a reinstall may have taken its key file
-        reply_json(c, status_json(key_header_ok(req, body)));
+        const int keyed = key_header_ok(req, body);
+        reply_json(c, status_json(keyed, keyed ? update_json() : NULL));
     } else if (post && strcmp(path, "/api/browser-login") == 0) {
         if (browser_auth_request() == 0)
             reply(c, "202 Accepted", "application/json", "{\"ok\":true}", 11);
@@ -832,9 +834,14 @@ static void handle(int c, int local)
         reply(c, "202 Accepted", "application/json", "{}", 2);
     } else if (post && strcmp(path, "/api/signout") == 0) {
         LOG("sign out requested");
-        if (core_sign_out() != 0) {
+        char token[256];
+        chat_token(token, sizeof token);
+        if (!token[0]) { // nobody signed in (a second press): nothing to end, no restart
+            reply(c, "200 OK", "application/json", "{\"ok\":true}", 11);
+        } else if (core_sign_out() != 0) {
             refuse(c, "502 Bad Gateway", "Could not reach Discord to sign out. Try again.");
         } else {
+            status_state("signing_out"); // not "ready" while the calls end: the app would go back
             reply(c, "200 OK", "application/json", "{\"ok\":true}", 11);
             close(c);
             core_quit(1);
@@ -845,6 +852,27 @@ static void handle(int c, int local)
         api_change(c, body, 1);
     } else if (get && strcmp(path, "/api/dlsym") == 0) {
         api_dlsym(c, query);
+    } else if (post && strcmp(path, "/api/update/check") == 0) {
+        update_check(strstr(body, "\"force\":true") != NULL);
+        reply(c, "202 Accepted", "application/json", "{\"ok\":true}", 11);
+    } else if (post && strcmp(path, "/api/update/start") == 0) {
+        char why[96], out[160];
+        if (update_start(why, sizeof why) == 0) {
+            reply(c, "202 Accepted", "application/json", "{\"ok\":true}", 11);
+        } else {
+            int n = snprintf(out, sizeof out, "{\"error\":\"%s\"}", why); // fixed texts, no quotes
+            reply(c, "409 Conflict", "application/json", out, (size_t)n);
+        }
+    } else if (post && strcmp(path, "/api/update/apply") == 0) {
+        if (update_apply() == 0)
+            reply(c, "200 OK", "application/json", "{\"ok\":true}", 11);
+        else
+            reply(c, "409 Conflict", "application/json", "{\"ok\":false}", 12);
+    } else if (post && strcmp(path, "/api/update/restore") == 0) {
+        if (update_restore() == 0)
+            reply(c, "200 OK", "application/json", "{\"ok\":true}", 11);
+        else
+            reply(c, "409 Conflict", "application/json", "{\"ok\":false}", 12);
     } else if (post && strcmp(path, "/api/quit") == 0) {
         reply(c, "200 OK", "application/json", "{\"ok\":true}", 11);
         LOG("quit requested");

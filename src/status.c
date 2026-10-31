@@ -95,9 +95,11 @@ void status_attempt(int n)
     pthread_mutex_unlock(&lock);
 }
 
-char *status_json(int with_qr)
+char *status_json(int with_qr, cJSON *update)
 {
     cJSON *j = cJSON_CreateObject();
+    if (update)
+        cJSON_AddItemToObject(j, "update", update);
     pthread_mutex_lock(&lock);
     cJSON_AddNumberToObject(j, "api_version", CORE_API_VERSION);
     cJSON_AddStringToObject(j, "version", CORE_VERSION);

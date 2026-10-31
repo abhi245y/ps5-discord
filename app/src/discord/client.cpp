@@ -143,9 +143,14 @@ Reply failed(Reply reply, const char *stage, int fd = -1)
     return reply;
 }
 
+std::atomic<bool> g_fallback{false}; // the previous version's core was sent
+
 // The core ships inside the app: when nothing answers on its port, hand the
 // bundled payload to elfldr on this console. A core that finds the port taken
-// exits, so a retry while one is starting does no harm.
+// exits, so a retry while one is starting does no harm. The fourth send in a row with
+// no answer between is the previous version's core (if the update left one): the new
+// one does not run. A sign-out or a core replacement that starts one is no such row.
+static int sends = 0; // since a core last answered
 void start_core()
 {
     static auto last = std::chrono::steady_clock::time_point{};
@@ -153,7 +158,10 @@ void start_core()
     if (last != decltype(last){} && now - last < std::chrono::seconds(20))
         return;
     last = now;
-    FILE *f = std::fopen("/app0/assets/ps5-discord.elf", "rb");
+    FILE *f = ++sends >= 4 ? std::fopen("/app0/assets/ps5-discord.prev.elf", "rb") : nullptr;
+    g_fallback = f != nullptr;
+    if (!f)
+        f = std::fopen("/app0/assets/ps5-discord.elf", "rb");
     if (!f)
         return; // a host build, or an app packaged without the core
     std::string elf;
@@ -176,8 +184,8 @@ void start_core()
         for (ssize_t w; sent < elf.size() && (w = send(fd, elf.data() + sent, elf.size() - sent, 0)) > 0;)
             sent += static_cast<std::size_t>(w);
     close(fd);
-    hui::sys::log("[CLIENT] core not answering: sent the bundled core to elfldr (%zu of %zu bytes)", sent,
-                  elf.size());
+    hui::sys::log("[CLIENT] core not answering: sent the %s core to elfldr (%zu of %zu bytes)",
+                  g_fallback ? "previous (fallback)" : "bundled", sent, elf.size());
 }
 
 // The version the app and its bundled core were built as (tools/build.sh); "" on the host.
@@ -1132,6 +1140,8 @@ void Client::poll_state()
     // without the lock, which the UI thread needs every frame.
     state_failures_ = reply.status == 200 ? 0 : state_failures_ + 1;
     core_seen_ |= reply.status == 200;
+    if (reply.status == 200)
+        sends = 0;
     if (state_failures_ >= 3 || (!core_seen_ && reply.status != 200)) // at launch: no need to wait
         start_core();
     std::unique_lock<std::mutex> lock(mutex_);
@@ -1141,8 +1151,9 @@ void Client::poll_state()
             return;
         // Before the first sign-in this is the launch; after it, a drop like any other.
         snapshot_.connection = been_ready_ ? Connection::reconnecting : Connection::starting;
-        snapshot_.status_message =
-            been_ready_ ? "Restarting the ps5-discord core." : "Starting the ps5-discord core...";
+        snapshot_.status_message = signing_out_ ? "Signing out..."
+                                   : been_ready_ ? "Restarting the ps5-discord core."
+                                                 : "Starting the ps5-discord core...";
         ready_ = false;
         publish();
         return;
@@ -1150,6 +1161,42 @@ void Client::poll_state()
     const json state = json::parse(reply.body, nullptr, false);
     if (state.is_discarded())
         return;
+    // A missing object is an older core (no update UI). Dev builds never look for an update
+    // themselves; the launch check shows only an offer, never a failure.
+    Update update;
+    if (state.contains("update") && state["update"].is_object())
+    {
+        const json &u = state["update"];
+        update.state = text(u, "state");
+        update.version = text(u, "version");
+        update.installed = text(u, "installed");
+        update.notes = text(u, "notes");
+        update.error = text(u, "error");
+        update.check_error = text(u, "check_error");
+        update.previous = text(u, "previous");
+        update.done = static_cast<std::int64_t>(num(u, "done", 0.0));
+        update.total = static_cast<std::int64_t>(num(u, "total", 0.0));
+    }
+    if (update.state != "available")
+        start_error_.clear();
+    else if (update.error.empty())
+        update.error = start_error_; // the last Update press was refused
+    if (!(update == snapshot_.update))
+    {
+        snapshot_.update = update;
+        publish();
+    }
+    if (!update.state.empty() && !update_checked_)
+    {
+        update_checked_ = true;
+        const std::string &mine = bundled_version();
+        if (!mine.empty() && mine.find("-dev") == std::string::npos)
+        {
+            Request check;
+            check.kind = Request::Kind::update_check;
+            queue_.push_back(check); // under the lock; the client thread sends it this round
+        }
+    }
     const int api = static_cast<int>(num(state, "api_version", 0.0));
     const bool api_ok = api >= kApiVersionMin && api <= kApiVersionMax;
     // The core outlives the app, so after an update the old one is still running: stop it,
@@ -1204,6 +1251,15 @@ void Client::poll_state()
         return;
     }
     const Connection before = snapshot_.connection;
+    if (signing_out_ && s != "login" && s != "scanned" && s != "browser")
+    {
+        // The old core still ending its calls; the new one not at the QR yet.
+        snapshot_.connection = Connection::starting;
+        snapshot_.status_message = "Signing out...";
+        publish();
+        return;
+    }
+    signing_out_ = false;
     // Signed in before, signing in now: another console user's turn, or signed out. The
     // last account's servers, chats and DMs go.
     const bool signing_in = s == "login" || s == "scanned" || s == "browser";
@@ -1861,6 +1917,29 @@ void Client::handle(const Request &request)
         hui::sys::log("[CLIENT] /api/quit answered %d", http(port_, "POST", "/api/quit").status);
         quit_ = true;
         break;
+    case Request::Kind::update_check: {
+        const Reply reply = http(port_, "POST", "/api/update/check", request.on ? "{\"force\":true}" : "");
+        hui::sys::log("[CLIENT] /api/update/check answered %d", reply.status);
+        break;
+    }
+    case Request::Kind::update_start: {
+        const Reply reply = http(port_, "POST", "/api/update/start");
+        hui::sys::log("[CLIENT] /api/update/start answered %d", reply.status);
+        if (reply.status != 202) // in a call, low space...: the offer shows why
+        {
+            const json r = json::parse(reply.body, nullptr, false);
+            start_error_ = r.is_object() && !text(r, "error").empty() ? text(r, "error") : "The update did not start.";
+        }
+        break;
+    }
+    case Request::Kind::update_apply: // the app must go for the core to swap its files
+    case Request::Kind::update_restore: {
+        const char *path = request.kind == Request::Kind::update_apply ? "/api/update/apply" : "/api/update/restore";
+        const int status = http(port_, "POST", path).status;
+        hui::sys::log("[CLIENT] %s answered %d", path, status);
+        quit_ = status == 200;
+        break;
+    }
     case Request::Kind::sign_out: {
         // The core ends the session with Discord, forgets it and quits; poll_state starts
         // it again, at the QR code.
@@ -1876,6 +1955,8 @@ void Client::handle(const Request &request)
         snapshot_ = Snapshot{};
         snapshot_.status_message = "Signing out...";
         ready_ = false;
+        been_ready_ = false; // the core going away is the sign-out, not a drop
+        signing_out_ = true;
         events_next_ = -1; // the new core counts its events from the start
         chat_version_ = -1;
         publish();
@@ -1895,6 +1976,12 @@ void Client::handle(const Request &request)
         break;
     }
     }
+}
+
+void ensure_core()
+{
+    if (http(9041, "GET", "/api/state").status < 0)
+        start_core();
 }
 
 } // namespace discord

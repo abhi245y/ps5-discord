@@ -231,6 +231,10 @@ int main()
     sys::log("[HUI] storage dir=%d", save::ensure_directory(kDataRoot) ? 1 : 0);
     screens::EmojiPicker::set_store(std::string(kDataRoot) + "/emoji-recent.txt");
 
+    // First, before anything that can fail: a half-updated folder must still start the core
+    // that finishes the swap (or rolls it back).
+    discord::ensure_core();
+
     // The display opens at the saved resolution (1080p if that fails).
     const Settings saved = app::Shell::load_settings(kDataRoot);
     int resolution = ps5::Display::supports_display_modes() ? saved.resolution : 0;
@@ -238,7 +242,7 @@ int main()
     if (!open_display(display, &resolution))
     {
         sys::log("[HUI] fatal: display open failed");
-        sys::park();
+        sys::quit(); // ends this launch, so a broken build counts as a failed one
     }
 
     gfx::Renderer renderer;
@@ -258,7 +262,7 @@ int main()
         !load_font(renderer, "patrick-hand.huifont", &hand, &fonts.hand))
     {
         sys::log("[HUI] fatal: renderer init failed");
-        sys::park();
+        sys::quit();
     }
     gfx::Shaper shaper;
     app::attach_text_engine(shaper, renderer, std::string(kAssets) + "/fonts",

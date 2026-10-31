@@ -21,6 +21,8 @@ All notable changes to this project are documented here. The format follows
   the PS menu) the PS5's own notifications show messages, rings and Go Live stopping, with
   the sender's avatar. Discord's own mutes and per-server levels are followed; quiet hours;
   hidden during Go Live unless allowed.
+- Updates in the app: a new release shows its notes and installs on request (signed releases
+  from GitHub only); Settings > Previous version rolls back to the version before it.
 - "Playing" on Discord: the game in front on the PS5 (PS5 and PS4 titles) shows on your
   profile with its cover (looked up on prosperopatches.com / orbispatches.com) and time
   played; your online, idle or do-not-disturb status stays. Off in Settings, Privacy, and

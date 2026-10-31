@@ -1,5 +1,6 @@
 // Shared session status, written by login/gateway, read by the app (/api/state). Thread-safe.
 #pragma once
+#include <cJSON.h>
 
 // The control API's version (ROADMAP.md, "Core API version"). Raise it on any
 // change an older app could misread; the app refuses a core outside its range.
@@ -12,4 +13,5 @@ void status_event(void);              // count one gateway dispatch
 void status_log(const char *line);    // keeps the last lines for the UI
 void status_note(const char *note);   // why sign-in is stuck, for the app; NULL clears
 void status_attempt(int n);           // reconnect attempts since the session was last up; 0 once it is
-char *status_json(int with_qr);       // caller frees
+// with_qr: the login QR (the key holder only); update: an "update" object to add (taken).
+char *status_json(int with_qr, cJSON *update); // caller frees

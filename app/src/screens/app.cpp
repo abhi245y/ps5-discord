@@ -18,6 +18,7 @@
 #include "screens/signin.hpp"
 #include "screens/style.hpp"
 #include "screens/settings.hpp"
+#include "screens/update.hpp"
 #include "screens/voice.hpp"
 
 namespace screens
@@ -226,7 +227,7 @@ class DiscordApp final : public app::Concept
   public:
     explicit DiscordApp(app::Context &context)
         : context_(context), ink_{context.fonts, context.art}, home_(ink_), server_(ink_), chat_(ink_), voice_(ink_),
-          settings_(ink_)
+          settings_(ink_), update_(ink_)
     {
     }
 
@@ -252,7 +253,12 @@ class DiscordApp final : public app::Concept
             cued_ring_.clear();
         }
         const bool reconnecting = context_.snapshot.connection == discord::Connection::reconnecting;
-        if (reconnecting && route_ != Route::settings)
+        // The update card takes the input over any screen (not over a ring or the sign-in).
+        if (update_.update(context_.snapshot, input, feedback, requests,
+                           context_.snapshot.connection == discord::Connection::ready && !ring))
+        {
+        }
+        else if (reconnecting && route_ != Route::settings)
         {
             // The Reconnecting card: Left and Right pick Retry now or Settings.
             if ((input.nav == Direction::left && reconnect_focus_ == 1) ||
@@ -329,6 +335,8 @@ class DiscordApp final : public app::Concept
                 fade_.snap(0.0f);
             }
             context_.settings_changed |= changed;
+            if (settings_.take_update_dialog())
+                update_.open();
         }
         else if (quitting_)
         {
@@ -541,6 +549,7 @@ class DiscordApp final : public app::Concept
         }
         for (int i = static_cast<int>(banners_.size()) - 1; i >= 0; --i)
             draw_banner(frame.scene, banners_[i]);
+        update_.draw(context_.snapshot, frame.scene);
     }
 
     std::span<const app::TourStep> tour() const override
@@ -564,6 +573,7 @@ class DiscordApp final : public app::Concept
     Chat chat_;
     VoiceRoom voice_;
     SettingsScreen settings_;
+    UpdateDialog update_;
     Route route_ = Route::home;
     Route settings_from_ = Route::home; // the screen Circle returns to from settings
     Route voice_from_ = Route::home; // the screen Circle returns to from the voice room
