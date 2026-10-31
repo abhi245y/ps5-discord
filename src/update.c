@@ -748,7 +748,7 @@ static void go_back(void)
 {
     char state[16], version[64], from[64];
     if (journal_read(state, version, from) != 0 || strcmp(state, "done") != 0)
-        return set_state("none", "No previous version to go back to");
+        return set_state("none", "No previous version to roll back to");
     int r = ready_to_swap(version);
     if (r == -2) {
         pthread_mutex_lock(&lock);
@@ -761,7 +761,7 @@ static void go_back(void)
     journal_write("restoring", version, from);
     if (restore() != 0) {
         LOG("update: restore of the previous version failed");
-        return set_state("failed", "Going back failed: install a release by FTP");
+        return set_state("failed", "Rollback failed: install a release by FTP");
     }
     refresh_registered();
     mark_bad(version);
@@ -773,7 +773,7 @@ static void go_back(void)
     set_state("none", NULL);
     LOG("update: back to %s from %s", from, version);
     char text[128];
-    snprintf(text, sizeof text, "Discord went back to %s. Open it again.", from);
+    snprintf(text, sizeof text, "Discord rolled back to %s. Open it again.", from);
     notify_system("Discord", text, NULL);
 }
 

@@ -209,14 +209,14 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
                                : u.state == "unpacking"   ? "Unpacking..."
                                : u.state == "ready"       ? "Ready: restart to finish"
                                : u.state == "applying"    ? "Restarting..."
-                               : u.state == "restoring"   ? "Going back..."
+                               : u.state == "restoring"   ? "Rolling back..."
                                : u.state == "failed"      ? (u.error.empty() ? "The last update failed" : u.error)
                                : !u.error.empty()         ? u.error
                                : !u.check_error.empty()   ? u.check_error
                                                           : "Up to date";
             rows.push_back({Kind::button, "Updates", desc, open ? "Open" : "Check", 0, false, false, Act::update});
             if (!u.previous.empty() && u.state == "none")
-                rows.push_back({Kind::button, "Previous version", "Go back to " + u.previous, "Restore", 0, false,
+                rows.push_back({Kind::button, "Previous version", "Roll back to " + u.previous, "Roll back", 0, false,
                                 false, Act::restore});
         }
         rows.insert(rows.end(), {
@@ -839,10 +839,10 @@ void SettingsScreen::draw(const discord::Snapshot &s, const hui::Settings &app, 
     else if (confirm_ == Confirm::quit)
         confirm_card(list, ink_, "Quit Discord?", kQuitText, "Quit");
     else if (confirm_ == Confirm::restore)
-        confirm_card(list, ink_, "Go back to " + s.update.previous + "?",
-                     "The app closes, a call or Go Live ends, and the version before this update comes back. Open "
-                     "Discord again to use it. Check for updates offers this version again.",
-                     "Go back");
+        confirm_card(list, ink_, "Roll back the update?",
+                     "The app closes, a call or Go Live ends, and " + s.update.previous +
+                         " comes back. Open Discord again to use it. Check for updates offers this version again.",
+                     "Roll back");
     else if (confirm_ == Confirm::quality)
         confirm_card(list, ink_, std::string("Use ") + kQualities[std::clamp(quality_, 0, 3)] + "?",
                      "Discord allows this only with Nitro or in a boosted server. Without them it may lag or fail "
