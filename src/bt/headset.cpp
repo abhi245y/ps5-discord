@@ -34,6 +34,7 @@
 extern "C" {
 #include "broadcast.h"
 #include "log.h"
+#include "prefs.h"
 #include "voice.h"
 #include "voice_audio.h"
 }
@@ -484,8 +485,9 @@ class Radio
         m_mix.call = want;
 
         const bool inCall = want && voice_wanted();
-        // Hands-free while in a call when there is no AirPods mic (or it failed).
-        const bool sco = inCall && (!m_airpods || m_micFailed) && !m_hfpFailed;
+        // Hands-free while in a call when there is no AirPods mic, it failed, or the user
+        // chose hands-free (Settings: the AirPods mic does not work for them).
+        const bool sco = inCall && (!m_airpods || m_micFailed || prefs_get("bt_handsfree") == 1) && !m_hfpFailed;
         if (sco && !m_wantSco)
         {
             m_wantSco = true;

@@ -23,6 +23,7 @@ static pref prefs[] = {
     {"notify_live", 0, 1, 0, 0},    // ... and while Go Live is on (they would be on the stream)
     {"quiet_hours", 0, 4, 0, 0},    // notify.c: no sounds, no PS5 alerts
     {"share_game", 0, 1, 1, 1},     // Discord shows the game in front on this console (gateway.c)
+    {"bt_handsfree", 0, 1, 0, 0},   // Bluetooth headset: hands-free for calls even on AirPods (src/bt)
 };
 #define COUNT ((int)(sizeof prefs / sizeof *prefs))
 
