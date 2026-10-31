@@ -7,18 +7,18 @@ Status: alpha. [0.5.0-alpha.1](https://github.com/abhi245y/ps5-discord/releases/
 is the latest release: text chat, voice calls, Go Live, notifications and updates from inside
 the app. Something not working? See [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
-![Home](screenshots/02-home.jpg)
+![Chat while in a voice call](screenshots/13-chat-in-call.jpg)
 
 ## Screenshots
 
 | | |
 |---|---|
-| ![Sign in with the QR code](screenshots/01-sign-in.jpg) Sign in by scanning a QR code | ![Friends](screenshots/03-friends.jpg) Friends |
-| ![Servers](screenshots/04-servers.jpg) Servers | ![A server](screenshots/05-server.jpg) A server: voice rooms and text channels |
-| ![Chat](screenshots/06-chat.jpg) Chat with emoji and reactions | ![Emoji picker](screenshots/07-emoji-picker.jpg) The emoji picker |
-| ![Stickers](screenshots/08-stickers.jpg) Stickers | ![A sticker sent](screenshots/09-sticker-sent.jpg) A sticker in the chat |
-| ![Voice room](screenshots/10-voice-room.jpg) A voice call, with Go Live | ![Notification](screenshots/11-notification.jpg) A message banner |
-| ![Settings](screenshots/12-settings.jpg) Settings | |
+| ![Sign in with the QR code](screenshots/01-sign-in.jpg) Sign in by scanning a QR code | ![Home](screenshots/02-home.jpg) Home: friends online, live voice rooms, recent chats |
+| ![Friends](screenshots/03-friends.jpg) Friends | ![Servers](screenshots/04-servers.jpg) Servers |
+| ![A server](screenshots/05-server.jpg) A server: voice rooms and text channels | ![Chat](screenshots/06-chat.jpg) Chat with emoji and reactions |
+| ![Emoji picker](screenshots/07-emoji-picker.jpg) The emoji picker | ![Stickers](screenshots/08-stickers.jpg) Stickers |
+| ![A sticker sent](screenshots/09-sticker-sent.jpg) A sticker in the chat | ![Voice room](screenshots/10-voice-room.jpg) A voice call, with Go Live |
+| ![Notification](screenshots/11-notification.jpg) A message banner | ![Settings](screenshots/12-settings.jpg) Settings |
 
 Guides: [voice calls and Go Live](VOICE_AND_GO_LIVE.md), [troubleshooting](TROUBLESHOOTING.md).
 

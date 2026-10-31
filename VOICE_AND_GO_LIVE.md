@@ -27,6 +27,12 @@ ping (top right). Calls are end-to-end encrypted (Discord's DAVE), like on the d
 | Cross on **Leave** | Leave the call |
 | Circle | Back to the app; the call stays up |
 
+You can chat while you talk: in a server's chat the call sits under the channel list
+(Unmute, Deafen, Leave), the top right shows who is in it, and Square (**Voice**) opens the
+room.
+
+![Chatting while in a call](screenshots/13-chat-in-call.jpg)
+
 Settings, **Voice & audio**: **Mic gain** (how loud you are; join a call to see your level
 there) and **Call volume** (how loud the call is for you).
 
