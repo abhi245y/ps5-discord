@@ -228,9 +228,12 @@ bool A2dpSession::findSbcSink(std::uint32_t& caps)
             continue;
         }
         // Get All Capabilities (AVDTP 1.3) also lists delay reporting, which Get
-        // Capabilities leaves out
-        if (command(avdtp::kGetAllCapabilities, &seidByte, 1) != 2 || static_cast<int>(m_responseLength) < 4 ||
-            !avdtp::findSbcCapabilities(m_response, static_cast<int>(m_responseLength), caps))
+        // Capabilities leaves out; a headset older than 1.3 refuses it and gets the old one
+        const auto sbcFrom = [&](std::uint8_t signal) {
+            return command(signal, &seidByte, 1) == 2 && static_cast<int>(m_responseLength) >= 4 &&
+                   avdtp::findSbcCapabilities(m_response, static_cast<int>(m_responseLength), caps);
+        };
+        if (!sbcFrom(avdtp::kGetAllCapabilities) && !sbcFrom(avdtp::kGetCapabilities))
         {
             continue;
         }
