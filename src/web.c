@@ -783,9 +783,11 @@ static void handle(int c, int local)
         app_seen = time(NULL);
         app_front = !header_line(req, body, "\r\nX-App-Front: 0\r\n");
     }
-    // A development core (CORE_LAN) also takes the headset's calls from the LAN, with the key.
+    // A development core (CORE_LAN) also takes the headset's calls and the settings from the
+    // LAN, with the key, for tests from a PC.
     if (!local && strncmp(path, "/api/", 5) == 0 && strcmp(path, "/api/state") != 0 &&
-        strcmp(path, "/api/quit") != 0 && !(CORE_LAN && strncmp(path, "/api/bt", 7) == 0)) {
+        strcmp(path, "/api/quit") != 0 &&
+        !(CORE_LAN && (strncmp(path, "/api/bt", 7) == 0 || strcmp(path, "/api/prefs") == 0))) {
         reply(c, "403 Forbidden", "text/plain", "local only", 10);
         return;
     }
