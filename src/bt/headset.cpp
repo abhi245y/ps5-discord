@@ -7,6 +7,7 @@
 #include <cstring>
 #include <deque>
 #include <mutex>
+#include <pthread.h>
 #include <string>
 #include <sys/stat.h>
 #include <thread>
@@ -451,13 +452,30 @@ extern "C" void hs_init(const char* data_dir, const char* firmware_dir)
     setLogSink(&log);
     std::string bonds = std::string(data_dir) + "/bt";
     mkdir(bonds.c_str(), 0700);
-    // The radio lives as long as the core; its thread is never joined.
+    // The radio lives as long as the core; its thread is never joined. The console's
+    // default thread stack is too small for the stack and the decoder: 2 MB, as the
+    // other threads set theirs.
     auto* radio = new Radio(bonds, firmware_dir);
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 2 * 1024 * 1024);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    pthread_t thread;
+    const int r = pthread_create(
+        &thread, &attr,
+        [](void* p) -> void* {
+            static_cast<Radio*>(p)->run();
+            return nullptr;
+        },
+        radio);
+    pthread_attr_destroy(&attr);
+    if (r != 0)
     {
-        std::lock_guard<std::mutex> lock(g_mu);
-        g_started = true;
+        LOG("bt: no radio thread (%d)", r);
+        return;
     }
-    std::thread([radio] { radio->run(); }).detach();
+    std::lock_guard<std::mutex> lock(g_mu);
+    g_started = true;
 }
 
 extern "C" int hs_power(int on)
