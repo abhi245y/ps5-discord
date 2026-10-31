@@ -101,6 +101,7 @@ int vau_speaking(char ids[][VAU_ID], int max);
 // app: while on, its mic feeds the call (the app's mic bytes are ignored) and the call
 // plays on it instead of in the app.
 void vau_ext_set(int on);
+int vau_ext_get(void); // 1 while an external device has the call's audio
 void vau_ext_mic(const int16_t *mono, size_t frames);       // device thread; copies
 size_t vau_ext_playback(int16_t *stereo, size_t frames);    // device thread; frames supplied
 // 1 while the app's audio socket is connected: the app is on screen in a call.

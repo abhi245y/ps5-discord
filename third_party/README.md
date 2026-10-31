@@ -36,6 +36,40 @@ Only `lib/` is kept, without the files that need FFmpeg, OpenSSL, curl or JSON-C
 - `gen/takion.pb.{c,h}`: generated from `lib/protobuf/takion.proto` with nanopb's
   generator, committed so builds need no protoc.
 
+## BlueV (Bluetooth headset)
+
+The Bluetooth stack for a headset on a USB Bluetooth adapter: HCI over the console's
+ugen driver, Realtek firmware upload, pairing, L2CAP, SDP, A2DP (SBC) and AVRCP volume.
+Our code on top of it is in `src/bt/` and `src/headset.h`.
+
+| Folder | Upstream | Commit | License |
+| --- | --- | --- | --- |
+| `bluev/` | [0xZ3n0x/BlueV](https://github.com/0xZ3n0x/BlueV) `src/core`, `src/platform` | `10916873` (0.4.0) | GPL-3.0-or-later (`bluev/LICENSE`) |
+| `bluev/third_party/sbc/` | [libsbc](https://git.kernel.org/pub/scm/bluetooth/sbc.git) (`sbc/` only) | as BlueV pins it | LGPL-2.1-or-later (`COPYING.LIB`) |
+
+GPL-3.0-or-later code may be combined with AGPL-3.0 code (GPLv3 section 13); the parts
+keep their own license. BlueV's README says its Bluetooth and A2DP logic follows what an
+investigation of an earlier closed-source program (ghost-toothAPI) showed.
+
+Left out: `service/`, `app/`, the web page, the home screen entry, the settings file,
+`process_identity` (it rewrote the process's authid to find a second copy) and BlueV's
+`Radio`. Changed:
+
+- `core/bluetooth/bt_stack_sco.cpp` (new), `bt_stack.hpp`, `bt_stack_events.cpp`: the
+  voice link (Setup Synchronous Connection, Synchronous Connection Complete) for
+  hands-free.
+- `core/bluetooth/bt_stack_l2cap.cpp`, `bt_stack.hpp`: three inbound PSMs (RFCOMM too)
+  and eight channels.
+- `core/bluetooth/sdp_server.cpp`: a hands-free audio gateway record (HFP 1.8, RFCOMM
+  channel 1, wideband speech).
+- `platform/ps5/ugen_device.{cpp,hpp}`, `core/hfp/iso.hpp` (new): the adapter's
+  isochronous endpoints (interface 1, alternate setting 1, chosen before the transfer
+  table exists) for the voice link.
+
+FFmpeg's AAC decoder (the AirPods' AAC-ELD microphone, LGPL-2.1-or-later) is not
+vendored: `make ffmpeg` builds FFmpeg 7.1.1 from its release tarball
+(`tools/ffmpeg/build.sh`). AAC-ELD is covered by patents; the decoder is FFmpeg's own.
+
 ## Twemoji 15.1.0 (graphics)
 
 `app/assets/art/emoji.png` packs Twemoji's 72x72 pictures (https://github.com/jdecked/twemoji,

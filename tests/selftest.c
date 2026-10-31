@@ -4,6 +4,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 #include <time.h>
 #include <zlib.h>
 
@@ -16,6 +17,7 @@
 #include "../src/gateway.h"
 #include "../src/http.h"
 #include "../src/ratelimit.h"
+#include "../src/resample.h"
 #include "../src/voice.h"
 #include "../src/voice_audio.h"
 #include "../src/voice_proto.h"
@@ -692,8 +694,38 @@ static void test_h264_packetize(void)
     assert(none.count == 0);
 }
 
+// The headset's rate conversion: a 1 kHz tone keeps its level from 64 to 48 kHz and from
+// 16 to 48 kHz; 12 kHz is removed on the way from 48 to 16 kHz (above its 8 kHz limit).
+static double tone_amp(int fin, int up, int down, double f)
+{
+    static float in[64000], out[64000];
+    rs_state r;
+    assert(rs_init(&r, up, down) == 0);
+    for (int i = 0; i < fin; i++)
+        in[i] = 0.5f * (float)sin(2 * M_PI * f * i / fin);
+    const int m = rs_process(&r, in, fin, out, 64000), fout = fin * up / down;
+    assert(m == fout);
+    double s = 0, c = 0;
+    for (int i = 200; i < m; i++) {
+        s += out[i] * sin(2 * M_PI * f * i / fout);
+        c += out[i] * cos(2 * M_PI * f * i / fout);
+    }
+    return 2 * sqrt(s * s + c * c) / (m - 200);
+}
+
+static void test_resample(void)
+{
+    assert(fabs(tone_amp(64000, 3, 4, 1000) - 0.5) < 0.01);
+    assert(fabs(tone_amp(16000, 3, 1, 1000) - 0.5) < 0.01);
+    assert(fabs(tone_amp(48000, 1, 3, 1000) - 0.5) < 0.01);
+    assert(tone_amp(48000, 1, 3, 12000) < 0.05);
+    rs_state r;
+    assert(rs_init(&r, 4, 1) == -1);
+}
+
 int main(void)
 {
+    test_resample();
     test_gateway_rules();
     test_http_parse();
     test_h264_packetize();

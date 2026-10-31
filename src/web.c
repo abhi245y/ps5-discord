@@ -28,6 +28,8 @@
 #include "controller_voice.h"
 #include "broadcast.h"
 #include "prefs.h"
+#include "build_config.h"
+#include "headset.h"
 #include "rp_pair.h"
 #include "stream.h"
 #include "browser_auth.h"
@@ -564,6 +566,30 @@ static void api_remoteplay(int c, const char *path, const char *body)
         refuse(c, "400 Bad Request", strcmp(path, "/api/remoteplay/pair") == 0 ? rp_pair_error() : "No such pairing.");
 }
 
+// The Bluetooth headset (headset.h): power {"on": true}, scan, connect and forget
+// {"addr": "AA:BB:CC:DD:EE:FF"}, disconnect. The radio thread acts on them in order.
+static void api_bt(int c, const char *path, const char *body)
+{
+    cJSON *in = cJSON_Parse(body ? body : "");
+    const char *addr = cJSON_GetStringValue(cJSON_GetObjectItem(in, "addr"));
+    int r = -1;
+    if (strcmp(path, "/api/bt/power") == 0)
+        r = hs_power(cJSON_IsTrue(cJSON_GetObjectItem(in, "on")));
+    else if (strcmp(path, "/api/bt/scan") == 0)
+        r = hs_scan();
+    else if (strcmp(path, "/api/bt/connect") == 0)
+        r = hs_connect(addr);
+    else if (strcmp(path, "/api/bt/disconnect") == 0)
+        r = hs_disconnect();
+    else if (strcmp(path, "/api/bt/forget") == 0)
+        r = hs_forget(addr);
+    cJSON_Delete(in);
+    if (r == 0)
+        reply_ok(c);
+    else
+        refuse(c, "400 Bad Request", "Bluetooth is not available.");
+}
+
 // The console-side settings (prefs.h): {"golive_quality": 2, ...}, any of them.
 static void api_prefs(int c, const char *body)
 {
@@ -757,8 +783,9 @@ static void handle(int c, int local)
         app_seen = time(NULL);
         app_front = !header_line(req, body, "\r\nX-App-Front: 0\r\n");
     }
+    // A development core (CORE_LAN) also takes the headset's calls from the LAN, with the key.
     if (!local && strncmp(path, "/api/", 5) == 0 && strcmp(path, "/api/state") != 0 &&
-        strcmp(path, "/api/quit") != 0) {
+        strcmp(path, "/api/quit") != 0 && !(CORE_LAN && strncmp(path, "/api/bt", 7) == 0)) {
         reply(c, "403 Forbidden", "text/plain", "local only", 10);
         return;
     }
@@ -826,6 +853,14 @@ static void handle(int c, int local)
         api_remoteplay(c, path, body);
     } else if (get && strcmp(path, "/api/sticker-packs") == 0) {
         api_sticker_packs(c);
+    } else if (get && strcmp(path, "/api/bt") == 0) {
+        {
+        cJSON *bt = hs_state_json();
+        reply_json(c, cJSON_PrintUnformatted(bt));
+        cJSON_Delete(bt);
+    }
+    } else if (post && strncmp(path, "/api/bt/", 8) == 0) {
+        api_bt(c, path, body);
     } else if (post && strcmp(path, "/api/prefs") == 0) {
         api_prefs(c, body);
     } else if (post && strcmp(path, "/api/reconnect") == 0) {

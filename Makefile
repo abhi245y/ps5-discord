@@ -8,6 +8,7 @@
 #   make host                     build/host/ps5-discord (runs on Linux, token in ./token)
 #   make test                     host self-checks
 #   make dave                     build libdave (DAVE E2EE) into .deps/dave with tools/dave/build.sh (run on arlp-pc)
+#   make ffmpeg                   build FFmpeg's AAC decoder (AirPods mic) into .deps/ffmpeg with tools/ffmpeg/build.sh
 
 PS5_HOST ?=
 ELFLDR_PORT ?= 9021
@@ -32,7 +33,7 @@ OPUS_INCLUDES := -I$(OPUS)/include -I$(OPUS)/celt -I$(OPUS)/silk -I$(OPUS)/silk/
 
 DS5 := tools/ds5-usb-bridge
 APP_SRC := src/main.c src/log.c src/status.c src/web.c src/chat.c src/gateway.c src/remote_auth.c src/browser_auth.c src/browser_storage.c src/http.c src/props.c src/ws.c src/tls.c src/zstream.c src/ratelimit.c \
-	src/core_key.c src/voice.c src/voice_proto.c src/voice_audio.c src/broadcast.c src/rp_pair.c src/prefs.c src/notify.c src/stream.c src/playing.c src/update.c src/update_verify.c $(DS5)/pcm_stream.c
+	src/core_key.c src/voice.c src/voice_proto.c src/voice_audio.c src/broadcast.c src/rp_pair.c src/prefs.c src/notify.c src/stream.c src/playing.c src/update.c src/update_verify.c src/resample.c $(DS5)/pcm_stream.c
 # Controller audio without Go Live (controller_voice.c) is parked: CONTROLLER_VOICE=1 builds it.
 ifneq ($(CONTROLLER_VOICE),)
 APP_SRC += src/controller_voice.c
@@ -44,7 +45,12 @@ CHIAKI := third_party/chiaki-ng
 CHIAKI_SRC := $(wildcard $(CHIAKI)/src/*.c) $(CHIAKI)/src/remote/rudp.c $(CHIAKI)/src/remote/rudpsendbuffer.c \
 	$(CHIAKI)/gen/takion.pb.c $(addprefix third_party/nanopb/,pb_common.c pb_encode.c pb_decode.c) \
 	$(wildcard third_party/gf-complete/src/*.c) $(wildcard third_party/jerasure/src/*.c)
-PS5_ONLY_SRC := $(CHIAKI_SRC) $(DS5)/ds5_usb.c
+PS5_ONLY_SRC = $(CHIAKI_SRC) $(DS5)/ds5_usb.c $(SBC_SRC)
+# The Bluetooth headset (console only): BlueV's stack (third_party/bluev, C++) and ours (src/bt).
+BLUEV := third_party/bluev
+BLUEV_CXX := $(shell find $(BLUEV)/src/core $(BLUEV)/src/platform -name '*.cpp' | sort) $(wildcard src/bt/*.cpp)
+SBC_SRC := $(addprefix $(BLUEV)/third_party/sbc/sbc/,sbc.c sbc_primitives.c sbc_primitives_mmx.c sbc_primitives_sse.c)
+HEADSET_INC := -I$(BLUEV)/src -I$(BLUEV)/third_party/sbc/sbc -Isrc
 ZLIB_SRC := $(addprefix $(ZLIB)/,adler32.c crc32.c inffast.c inflate.c inftrees.c zutil.c)
 DEP_SRC = $(wildcard $(MBED)/library/*.c) $(ZLIB_SRC) $(CJSON)/cJSON.c $(QRGEN)/qrcodegen.c $(SQLITE)/sqlite3.c $(OPUS_SRC)
 INCLUDES := -Isrc -I$(MBED)/include -I$(ZLIB) -I$(CJSON) -I$(QRGEN) -I$(SQLITE) $(OPUS_INCLUDES) -I$(DS5) \
@@ -84,6 +90,17 @@ HOST_DAVE_LINK :=
 HOST_DAVE_SRC := src/dave_stub.c
 HOST_DAVE_TEST :=
 endif
+# FFmpeg's AAC decoder (the AirPods mic) from `make ffmpeg`; without it the AirPods play but
+# their mic does not decode.
+FFMPEG_PS5 := .deps/ffmpeg/install/ps5
+ifneq ($(wildcard $(FFMPEG_PS5)/lib/libavcodec.a),)
+FFMPEG_FLAGS := -DHAVE_FFMPEG -I$(FFMPEG_PS5)/include
+FFMPEG_LINK := $(FFMPEG_PS5)/lib/libavcodec.a $(FFMPEG_PS5)/lib/libavutil.a
+else
+$(warning FFmpeg for the PS5 is missing in $(FFMPEG_PS5): the AirPods mic will not decode (run `make ffmpeg`))
+endif
+PS5_CXXFLAGS := -std=c++20 -O2 -Wall -Wextra -fno-exceptions -fno-rtti -fno-strict-aliasing $(HARDEN) $(HEADSET_INC) $(INCLUDES) \
+	$(PS5_DAVE_INC) $(FFMPEG_FLAGS)
 # The SDK wrappers find LLVM through llvm-config; use the system one if present.
 export LLVM_CONFIG ?= $(or $(shell command -v llvm-config),$(abspath tools/llvm-config))
 # Hardening: the SDK's libkernel has __stack_chk_fail; its libc has no _chk functions, so
@@ -105,17 +122,19 @@ CORE_LAN ?= 0
 PS5_CFLAGS += -Ibuild
 HOST_CFLAGS += -Ibuild
 
-PS5_OBJ = $(patsubst %.c,build/ps5/%.o,$(APP_SRC) $(PS5_ONLY_SRC) $(PS5_DAVE_SRC) src/platform/entropy_ps5.c build/ca_bundle.c $(DEP_SRC))
-HOST_OBJ = $(patsubst %.c,build/host/%.o,$(APP_SRC) $(HOST_DAVE_SRC) build/ca_bundle.c $(DEP_SRC))
+PS5_OBJ = $(patsubst %.c,build/ps5/%.o,$(APP_SRC) $(PS5_ONLY_SRC) $(PS5_DAVE_SRC) src/platform/entropy_ps5.c build/ca_bundle.c $(DEP_SRC)) \
+	$(patsubst %.cpp,build/ps5/%.o,$(BLUEV_CXX))
+HOST_OBJ = $(patsubst %.c,build/host/%.o,$(APP_SRC) src/headset_stub.c $(HOST_DAVE_SRC) build/ca_bundle.c $(DEP_SRC))
 
-.PHONY: all deps dave host test deploy stop clean release FORCE
+.PHONY: all deps dave ffmpeg host test deploy stop clean release FORCE
 .DEFAULT_GOAL := all
 
 build/build_config.h: FORCE
 	@mkdir -p $(@D)
 	@printf '#define CORE_VERSION "%s"\n#define CORE_LAN %s\n' '$(CORE_VERSION)' '$(CORE_LAN)' > $@.new
 	@cmp -s $@.new $@ && rm $@.new || mv $@.new $@
-build/ps5/src/main.o build/ps5/src/status.o build/host/src/main.o build/host/src/status.o: build/build_config.h
+build/ps5/src/main.o build/ps5/src/status.o build/ps5/src/web.o build/host/src/main.o build/host/src/status.o \
+	build/host/src/web.o: build/build_config.h
 
 # The files of a GitHub release (ROADMAP.md), from a clean tree: the core built for release
 # (no LAN, no -dev), the self-checks, the app with that core inside, and their checksums.
@@ -134,6 +153,10 @@ all: build/ps5-discord.elf
 deps:
 	@bash tools/deps.sh
 
+# FFmpeg's AAC decoder for the PS5 (once per machine).
+ffmpeg:
+	@bash tools/ffmpeg/build.sh $(abspath $(SDK)) $(abspath .deps/ffmpeg)
+
 # Builds OpenSSL, mlspp and libdave for both targets (slow; once per machine).
 dave:
 	@bash tools/dave/build.sh $(abspath $(SDK)) $(abspath $(DAVE_OUT)) all
@@ -147,11 +170,19 @@ build/ca_bundle.c: $(CA_PEM) tools/embed.py
 
 build/ps5-discord.elf: $(PS5_OBJ)
 	@echo "  LD    $@"
-	@PS5_PAYLOAD_SDK=$(abspath $(SDK)) $(PS5_CXX) -nostdlib++ -o $@ $^ $(PS5_DAVE_LINK) -lpthread -lSceSystemService -lSceUserService
+	@PS5_PAYLOAD_SDK=$(abspath $(SDK)) $(PS5_CXX) -nostdlib++ -o $@ $^ $(PS5_DAVE_LINK) $(FFMPEG_LINK) -lc++ -lc++abi -lunwind \
+		-lkernel_sys -lpthread -lSceSystemService -lSceUserService
 
 build/ps5/%.o: %.c
 	@mkdir -p $(@D)
 	@PS5_PAYLOAD_SDK=$(abspath $(SDK)) $(PS5_CC) $(if $(filter .deps/% third_party/%,$<),-w) $(PS5_CFLAGS) -MMD -MP -c $< -o $@
+
+build/ps5/%.o: %.cpp
+	@mkdir -p $(@D)
+	@PS5_PAYLOAD_SDK=$(abspath $(SDK)) $(PS5_CXX) $(if $(filter third_party/%,$<),-w) $(PS5_CXXFLAGS) -MMD -MP -c $< -o $@
+
+# libsbc is built unmodified with BlueV's settings (SIMD paths, no run-time CPU probe).
+$(patsubst %.c,build/ps5/%.o,$(SBC_SRC)): PS5_CFLAGS += -include $(BLUEV)/src/compat/config.h
 
 host: build/host/ps5-discord
 build/host/ps5-discord: $(HOST_OBJ)
@@ -224,7 +255,7 @@ build/host/ds5-usb-test: $(DS5)/test_usb.c $(DS5)/pcm_stream.c $(wildcard $(DS5)
 	@mkdir -p $(@D)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -g -o $@ $(DS5)/test_usb.c $(DS5)/pcm_stream.c
 # From the same objects as the host build: our sources with -Werror, the libraries quiet.
-SELFTEST_SRC := tests/selftest.c src/ws.c src/tls.c src/zstream.c src/log.c src/status.c src/chat.c src/ratelimit.c src/http.c src/props.c \
+SELFTEST_SRC := tests/selftest.c src/resample.c src/ws.c src/tls.c src/zstream.c src/log.c src/status.c src/chat.c src/ratelimit.c src/http.c src/props.c \
 	src/core_key.c src/voice.c src/voice_proto.c src/voice_audio.c src/prefs.c src/notify.c $(DS5)/pcm_stream.c $(OPUS_SRC) \
 	$(HOST_DAVE_SRC) $(CJSON)/cJSON.c $(QRGEN)/qrcodegen.c $(ZLIB_SRC) $(ZLIB)/deflate.c $(ZLIB)/trees.c \
 	$(wildcard $(MBED)/library/*.c) build/ca_bundle.c

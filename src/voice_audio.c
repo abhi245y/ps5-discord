@@ -1011,6 +1011,11 @@ void vau_ext_set(int on)
     pthread_mutex_unlock(&ext_mu);
 }
 
+int vau_ext_get(void)
+{
+    return ext_on;
+}
+
 void vau_ext_mic(const int16_t *mono, size_t frames)
 {
     pthread_mutex_lock(&ext_mu);
