@@ -67,6 +67,8 @@ Discord's voice servers. Updates need `api.github.com`, `github.com` and
 
 ## Voice
 
+How calls work, step by step: [VOICE_AND_GO_LIVE.md](VOICE_AND_GO_LIVE.md).
+
 **Others cannot hear you.** The app's microphone works while the app is on screen. During a
 game the console does not give the mic to the app: use Go Live, where the USB DualSense is
 your headset. Check mute (the room's mic button) and Settings, Voice & audio, Mic gain.
@@ -81,8 +83,10 @@ dave`); without it every join fails with close code 4017. Release builds include
 
 **Go Live does not start.**
 - The DualSense must be plugged in by USB. A Bluetooth controller does not work for Go Live.
-- Pair Remote Play once: Settings, Voice & audio. Pair again if you reset the console's
-  Remote Play settings.
+- Remote Play must be on (PS5 Settings, System, Remote Play) for a user signed in to PSN.
+- Pair once: Settings, Voice & audio, Go Live pairing. Pair again if you removed the device
+  from the PS5's Remote Play list.
+- The steps: [VOICE_AND_GO_LIVE.md](VOICE_AND_GO_LIVE.md#go-live).
 - Above 720p · 30 fps needs Nitro or a boosted server; 720p · 30 fps is the safe choice.
 
 **The second Go Live does not start.** After a Go Live, unplug the controller and plug it
