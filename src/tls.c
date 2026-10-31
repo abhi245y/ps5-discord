@@ -6,6 +6,8 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <poll.h>
+#include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -79,50 +81,132 @@ int tls_random(void *unused, unsigned char *out, size_t len)
 #define CONNECT_MS 10000
 #define IO_SECONDS 15
 
-// TCP connect with a deadline (mbedtls_net_connect blocks for the system's minute or more),
-// then blocking I/O with send and receive timeouts. 0 or an mbedTLS net error.
+#ifdef __PROSPERO__
+int sceNetPoolCreate(const char *name, int size, int flags);
+int sceNetPoolDestroy(int pool);
+int sceNetResolverCreate(const char *name, int pool, int flags);
+int sceNetResolverDestroy(int rid);
+// As shadPS4 has it (OrbisNetResolverInfo, 384 bytes).
+typedef struct {
+    uint8_t addr[16]; // in_addr, or in6_addr
+    uint32_t af, pad[3];
+} resolver_addr;
+typedef struct {
+    resolver_addr addrs[10];
+    uint32_t records, records_v4, pad[14];
+} resolver_info;
+int sceNetResolverStartNtoaMultipleRecords(int rid, const char *host, resolver_info *info, int timeout, int retry,
+                                           int flags);
+
+// Every A record: the SDK's getaddrinfo asks for one (sceNetResolverStartNtoa), and when
+// that one is a CDN node this network cannot reach, every try fails. 0 when none.
+static int resolve_all(const char *host, struct in_addr *out, int cap)
+{
+    resolver_info info;
+    memset(&info, 0, sizeof info);
+    int pool = sceNetPoolCreate("tls", 0x4000, 0), rid = pool >= 0 ? sceNetResolverCreate("tls", pool, 0) : -1, n = 0;
+    if (rid >= 0 && sceNetResolverStartNtoaMultipleRecords(rid, host, &info, 0, 0, 0) >= 0)
+        for (uint32_t i = 0; i < info.records && i < 10 && n < cap; i++)
+            if (info.addrs[i].af == AF_INET)
+                memcpy(&out[n++], info.addrs[i].addr, 4);
+    if (rid >= 0)
+        sceNetResolverDestroy(rid);
+    if (pool >= 0)
+        sceNetPoolDestroy(pool);
+    return n;
+}
+#endif
+
+// The last few addresses a connect timed out on: tried last next time, so one dead node
+// costs one timeout, not one per connection.
+static _Atomic uint32_t dead[4];
+static _Atomic unsigned dead_next;
+
+static int is_dead(const struct sockaddr *sa)
+{
+    if (sa->sa_family != AF_INET)
+        return 0;
+    uint32_t ip = ((const struct sockaddr_in *)sa)->sin_addr.s_addr;
+    for (int i = 0; i < 4; i++)
+        if (dead[i] == ip)
+            return 1;
+    return 0;
+}
+
+// One address with a deadline: the socket, or -1 (logged).
+static int connect_one(const char *host, const struct sockaddr *sa, socklen_t len, int i, int n)
+{
+    int fd = socket(sa->sa_family, SOCK_STREAM, IPPROTO_TCP);
+    if (fd < 0)
+        return -1;
+    int flags = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    int ok = connect(fd, sa, len) == 0, err = ok ? 0 : errno, waited = 0;
+    if (!ok && err == EINPROGRESS) {
+        struct pollfd p = {.fd = fd, .events = POLLOUT};
+        socklen_t err_len = sizeof err;
+        waited = poll(&p, 1, CONNECT_MS);
+        if (waited != 1 || getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &err_len) != 0)
+            err = waited == 0 ? ETIMEDOUT : errno;
+        ok = err == 0;
+    }
+    if (!ok) {
+        char ip[INET6_ADDRSTRLEN] = "?";
+        const void *at = sa->sa_family == AF_INET6 ? (const void *)&((const struct sockaddr_in6 *)sa)->sin6_addr
+                                                   : (const void *)&((const struct sockaddr_in *)sa)->sin_addr;
+        inet_ntop(sa->sa_family, at, ip, sizeof ip);
+        LOG("tls: connect to %s (%s, %d of %d) failed: %s", host, ip, i + 1, n, strerror(err));
+        if (err == ETIMEDOUT && sa->sa_family == AF_INET)
+            dead[dead_next++ % 4] = ((const struct sockaddr_in *)sa)->sin_addr.s_addr;
+        close(fd);
+        return -1;
+    }
+    fcntl(fd, F_SETFL, flags); // blocking again: mbedTLS's recv then reports a timeout as an error
+    struct timeval tv = {.tv_sec = IO_SECONDS};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+    return fd;
+}
+
+// TCP connect with a deadline (mbedtls_net_connect blocks for the system's minute or more)
+// to each address in turn, the ones that timed out lately last; then blocking I/O with
+// send and receive timeouts. 0 or an mbedTLS net error.
 static int connect_timed(mbedtls_net_context *net, const char *host, const char *port)
 {
-    struct addrinfo hints = {.ai_family = AF_UNSPEC, .ai_socktype = SOCK_STREAM, .ai_protocol = IPPROTO_TCP}, *list;
-    if (getaddrinfo(host, port, &hints, &list) != 0)
-        return MBEDTLS_ERR_NET_UNKNOWN_HOST;
-    int ret = MBEDTLS_ERR_NET_CONNECT_FAILED;
-    for (struct addrinfo *a = list; a; a = a->ai_next) {
-        int fd = socket(a->ai_family, a->ai_socktype, a->ai_protocol);
-        if (fd < 0) {
-            ret = MBEDTLS_ERR_NET_SOCKET_FAILED;
-            continue;
-        }
-        int flags = fcntl(fd, F_GETFL, 0);
-        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-        int ok = connect(fd, a->ai_addr, a->ai_addrlen) == 0, err = ok ? 0 : errno, waited = 0;
-        if (!ok && err == EINPROGRESS) {
-            struct pollfd p = {.fd = fd, .events = POLLOUT};
-            socklen_t len = sizeof err;
-            waited = poll(&p, 1, CONNECT_MS);
-            if (waited != 1 || getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len) != 0)
-                err = waited == 0 ? ETIMEDOUT : errno;
-            ok = err == 0;
-        }
-        if (!ok) {
-            char ip[INET6_ADDRSTRLEN] = "?";
-            const void *at = a->ai_family == AF_INET6 ? (const void *)&((struct sockaddr_in6 *)a->ai_addr)->sin6_addr
-                                                      : (const void *)&((struct sockaddr_in *)a->ai_addr)->sin_addr;
-            inet_ntop(a->ai_family, at, ip, sizeof ip);
-            LOG("tls: connect to %s (%s) failed: %s", host, ip, strerror(err));
-            close(fd);
-            continue;
-        }
-        fcntl(fd, F_SETFL, flags); // blocking again: mbedTLS's recv then reports a timeout as an error
-        struct timeval tv = {.tv_sec = IO_SECONDS};
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
-        net->fd = fd;
-        ret = 0;
-        break;
+    struct sockaddr_storage addrs[10];
+    socklen_t lens[10];
+    int n = 0;
+#ifdef __PROSPERO__
+    struct in_addr v4[10];
+    int found = resolve_all(host, v4, 10);
+    for (; n < found; n++) {
+        struct sockaddr_in *a = (struct sockaddr_in *)&addrs[n];
+        *a = (struct sockaddr_in){.sin_len = sizeof *a, .sin_family = AF_INET, .sin_port = htons((uint16_t)atoi(port)),
+                                  .sin_addr = v4[n]};
+        lens[n] = sizeof *a;
     }
-    freeaddrinfo(list);
-    return ret;
+#endif
+    struct addrinfo hints = {.ai_family = AF_UNSPEC, .ai_socktype = SOCK_STREAM, .ai_protocol = IPPROTO_TCP}, *list;
+    if (n == 0) {
+        if (getaddrinfo(host, port, &hints, &list) != 0)
+            return MBEDTLS_ERR_NET_UNKNOWN_HOST;
+        for (struct addrinfo *a = list; a && n < 10; a = a->ai_next, n++) {
+            memcpy(&addrs[n], a->ai_addr, a->ai_addrlen);
+            lens[n] = a->ai_addrlen;
+        }
+        freeaddrinfo(list);
+    }
+    for (int pass = 0; pass < 2; pass++) // the live ones, then the dead ones
+        for (int i = 0; i < n; i++) {
+            if (is_dead((struct sockaddr *)&addrs[i]) != pass)
+                continue;
+            int fd = connect_one(host, (struct sockaddr *)&addrs[i], lens[i], i, n);
+            if (fd >= 0) {
+                net->fd = fd;
+                return 0;
+            }
+        }
+    return MBEDTLS_ERR_NET_CONNECT_FAILED;
 }
 
 int tls_connect(tls_conn *c, const char *host, const char *port)
