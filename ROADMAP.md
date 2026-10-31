@@ -100,10 +100,11 @@ without a PC.
 - An update from one release to the next and a roll back, on a console, from the release
   build.
 
-### 0.6.0: Guides (0.6.0-alpha.1, 2026-10-31)
+### 0.6.0: Guides (0.6.0-alpha.2, 2026-10-31)
 
 **Delivered.** Guides for voice calls and Go Live and for troubleshooting, screenshots in the
-README, a shorter update offer.
+README, a shorter update offer; no Home on the old core after an update, and a clear
+"Signing out" screen.
 
 ### 0.7.0: Voice and Go Live follow-ups
 
