@@ -25,6 +25,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "platform/ps5/sce_module.hpp"
 #include "platform/ps5/system.hpp"
 
 // A failed internal check is logged instead of aborting the app. The one seen
@@ -89,6 +90,38 @@ std::string text(const json &j, const char *key)
     return it != j.end() && it->is_string() ? it->get<std::string>() : std::string();
 }
 
+// Snowflakes as decimal strings: the longer one, or the larger at equal length, is newer.
+bool newer_id(const std::string &a, const std::string &b)
+{
+    return a.size() != b.size() ? a.size() > b.size() : a > b;
+}
+
+// value() throws on null or a wrong type, and the core writes null for absent keys.
+double num(const json &j, const char *key, double fallback)
+{
+    const auto it = j.find(key);
+    return it != j.end() && it->is_number() ? it->get<double>() : fallback;
+}
+
+bool flag(const json &j, const char *key, bool fallback)
+{
+    const auto it = j.find(key);
+    return it != j.end() && it->is_boolean() ? it->get<bool>() : fallback;
+}
+
+// An exception leaving a thread calls std::terminate: log it and carry on instead.
+template <class F> void guarded(const char *where, F &&f)
+{
+    try
+    {
+        f();
+    }
+    catch (const std::exception &e)
+    {
+        hui::sys::log("[CLIENT] %s: %s", where, e.what());
+    }
+}
+
 // ---- loopback HTTP -----------------------------------------------------------
 
 struct Reply
@@ -110,9 +143,14 @@ Reply failed(Reply reply, const char *stage, int fd = -1)
     return reply;
 }
 
+std::atomic<bool> g_fallback{false}; // the previous version's core was sent
+
 // The core ships inside the app: when nothing answers on its port, hand the
 // bundled payload to elfldr on this console. A core that finds the port taken
-// exits, so a retry while one is starting does no harm.
+// exits, so a retry while one is starting does no harm. The fourth send in a row with
+// no answer between is the previous version's core (if the update left one): the new
+// one does not run. A sign-out or a core replacement that starts one is no such row.
+static int sends = 0; // since a core last answered
 void start_core()
 {
     static auto last = std::chrono::steady_clock::time_point{};
@@ -120,7 +158,10 @@ void start_core()
     if (last != decltype(last){} && now - last < std::chrono::seconds(20))
         return;
     last = now;
-    FILE *f = std::fopen("/app0/assets/ps5-discord.elf", "rb");
+    FILE *f = ++sends >= 4 ? std::fopen("/app0/assets/ps5-discord.prev.elf", "rb") : nullptr;
+    g_fallback = f != nullptr;
+    if (!f)
+        f = std::fopen("/app0/assets/ps5-discord.elf", "rb");
     if (!f)
         return; // a host build, or an app packaged without the core
     std::string elf;
@@ -143,13 +184,36 @@ void start_core()
         for (ssize_t w; sent < elf.size() && (w = send(fd, elf.data() + sent, elf.size() - sent, 0)) > 0;)
             sent += static_cast<std::size_t>(w);
     close(fd);
-    hui::sys::log("[CLIENT] core not answering: sent the bundled core to elfldr (%zu of %zu bytes)", sent,
-                  elf.size());
+    hui::sys::log("[CLIENT] core not answering: sent the %s core to elfldr (%zu of %zu bytes)",
+                  g_fallback ? "previous (fallback)" : "bundled", sent, elf.size());
+}
+
+// The version the app and its bundled core were built as (tools/build.sh); "" on the host.
+const std::string &bundled_version()
+{
+    static const std::string version = [] {
+        std::string v;
+        if (FILE *f = std::fopen("/app0/version.txt", "rb"))
+        {
+            char buf[64];
+            v.assign(buf, std::fread(buf, 1, sizeof buf, f));
+            std::fclose(f);
+        }
+        while (!v.empty() && (v.back() == '\n' || v.back() == '\r' || v.back() == ' '))
+            v.pop_back();
+        return v;
+    }();
+    return version;
 }
 
 std::atomic<bool> g_front{true}; // Client::set_front; every request tells the core
 
-Reply http(int port, const char *method, const std::string &path, const std::string &body = {})
+// Replies are capped (16 MiB: pictures from strangers pass through the core); the chat tree,
+// which grows with the account, gets more room (kChatMax).
+constexpr std::size_t kReplyMax = 16u << 20, kChatMax = 256u << 20;
+
+Reply http(int port, const char *method, const std::string &path, const std::string &body = {},
+           std::size_t max = kReplyMax)
 {
     Reply reply;
     const int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -167,13 +231,11 @@ Reply http(int port, const char *method, const std::string &path, const std::str
     to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     if (connect(fd, reinterpret_cast<sockaddr *>(&to), sizeof to) != 0)
         return failed(reply, "connect", fd);
-    char head[512];
-    const int n = std::snprintf(head, sizeof head,
-                                "%s %s HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
-                                "X-Discord-Native: 1\r\nX-App-Front: %d\r\nContent-Length: %zu\r\n\r\n",
-                                method, path.c_str(), g_front ? 1 : 0, body.size());
-    std::string request(head, static_cast<std::size_t>(n));
-    request += body;
+    std::string request = std::string(method) + " " + path +
+                          " HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
+                          "X-Discord-Native: 1\r\nX-Core-Key: " + hui::ps5::core_key() +
+                          "\r\nX-App-Front: " + (g_front ? "1" : "0") +
+                          "\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
     for (std::size_t sent = 0; sent < request.size();)
     {
         const ssize_t w = send(fd, request.data() + sent, request.size() - sent, 0);
@@ -184,7 +246,11 @@ Reply http(int port, const char *method, const std::string &path, const std::str
     std::string raw;
     char buf[16384];
     for (ssize_t r; (r = recv(fd, buf, sizeof buf, 0)) > 0;)
+    {
         raw.append(buf, static_cast<std::size_t>(r));
+        if (raw.size() > max)
+            return failed(reply, max == kReplyMax ? "recv (over 16 MiB)" : "recv (over 256 MiB)", fd);
+    }
     close(fd);
     const std::size_t split = raw.find("\r\n\r\n");
     if (split == std::string::npos || std::sscanf(raw.c_str(), "HTTP/%*s %d", &reply.status) != 1)
@@ -373,7 +439,7 @@ Message message_from(const json &m, const std::string &me_id)
     out.content = readable(text(m, "content"), m, &out.emojis);
     out.time_ms = snowflake_ms(out.id);
     // Messages without text of their own: say what they are.
-    const int type = static_cast<int>(m.value("type", 0.0));
+    const int type = static_cast<int>(num(m, "type", 0.0));
     if (type == 7)
         out.content = "joined the server. \xF0\x9F\x91\x8B";
     else if (type == 6)
@@ -441,20 +507,22 @@ Message message_from(const json &m, const std::string &me_id)
             if (att.image)
             {
                 // A small preview from the media proxy, and a screen-sized copy at the
-                // picture's own aspect (at most 1760x860) for the full-screen view.
-                const std::string join = att.url.find('?') == std::string::npos ? "?" : "&";
-                const double w = a.value("width", 0.0), h = a.value("height", 0.0);
+                // picture's own aspect (at most 1760x860) for the full-screen view. The proxy
+                // answers in WebP unless told otherwise, which stb_image cannot read: a PNG
+                // preview (sharp text in screenshots), a JPEG full-size copy (a tenth the bytes).
+                const std::string join = (att.url.find('?') == std::string::npos ? "?" : "&") + std::string("format=");
+                const double w = num(a, "width", 0.0), h = num(a, "height", 0.0);
                 if (w > 0 && h > 0)
                 {
                     const double scale = std::min({1.0, 1760.0 / w, 860.0 / h});
-                    att.full_url = att.url + join + "width=" + std::to_string(static_cast<int>(w * scale)) +
+                    att.full_url = att.url + join + "jpeg&width=" + std::to_string(static_cast<int>(w * scale)) +
                                    "&height=" + std::to_string(static_cast<int>(h * scale));
                 }
                 else
-                    att.full_url = att.url + join + "width=1760";
-                att.url += join + "width=440&height=248";
+                    att.full_url = att.url + join + "jpeg&width=1760";
+                att.url += join + "png&width=440&height=248";
             }
-            const double size = a.value("size", 0.0);
+            const double size = num(a, "size", 0.0);
             char sz[32];
             std::snprintf(sz, sizeof sz, size >= 1048576 ? "%.1f MB" : "%.0f KB",
                           size >= 1048576 ? size / 1048576 : size / 1024);
@@ -471,8 +539,8 @@ Message message_from(const json &m, const std::string &me_id)
                 reaction.emoji_id = text(r["emoji"], "id");
                 reaction.emoji = reaction.emoji_id.empty() ? text(r["emoji"], "name") : ":" + text(r["emoji"], "name") + ":";
             }
-            reaction.count = static_cast<int>(r.value("count", 0.0));
-            reaction.me = r.value("me", false);
+            reaction.count = static_cast<int>(num(r, "count", 0.0));
+            reaction.me = flag(r, "me", false);
             if (reaction.count > 0 && !reaction.emoji.empty())
                 out.reactions.push_back(reaction);
         }
@@ -577,7 +645,7 @@ void apply_tree(Snapshot &s, const json &t)
             else if (const std::string splash = text(g, "splash"); !splash.empty())
                 guild.banner_url = "https://cdn.discordapp.com/splashes/" + guild.id + "/" + splash + ".png?size=640";
             guild.art = art_for(guild.id, kSceneArt);
-            guild.members = static_cast<int>(g.value("member_count", 0.0));
+            guild.members = static_cast<int>(num(g, "member_count", 0.0));
             if (g.contains("emojis") && g["emojis"].is_array())
                 for (const json &e : g["emojis"])
                     if (e.is_object() && !text(e, "id").empty())
@@ -611,19 +679,19 @@ void apply_tree(Snapshot &s, const json &t)
                 // category by its position, channels by theirs within it.
                 std::map<std::string, std::pair<double, std::string>> categories;
                 for (const json &c : g["channels"])
-                    if (static_cast<int>(c.value("type", 0.0)) == 4)
-                        categories[text(c, "id")] = {c.value("position", 0.0), text(c, "name")};
+                    if (static_cast<int>(num(c, "type", 0.0)) == 4)
+                        categories[text(c, "id")] = {num(c, "position", 0.0), text(c, "name")};
                 std::vector<std::pair<std::pair<double, double>, Channel>> ordered;
                 for (const json &c : g["channels"])
                 {
-                    const int type = static_cast<int>(c.value("type", 0.0));
+                    const int type = static_cast<int>(num(c, "type", 0.0));
                     if (type == 4) // categories only group channels
                         continue;
                     Channel ch;
                     ch.id = text(c, "id");
                     ch.name = text(c, "name");
                     ch.topic = text(c, "topic");
-                    ch.can_send = c.value("can_send", true);
+                    ch.can_send = flag(c, "can_send", true);
                     ch.kind = type == 5 ? ChannelKind::announcement : ChannelKind::text;
                     const std::string last = text(c, "last_message_id");
                     ch.last_ms = snowflake_ms(last);
@@ -649,7 +717,7 @@ void apply_tree(Snapshot &s, const json &t)
                         conv.mention = mentions > 0;
                         unread.push_back(conv);
                     }
-                    ordered.emplace_back(std::make_pair(category_pos, c.value("position", 0.0)), ch);
+                    ordered.emplace_back(std::make_pair(category_pos, num(c, "position", 0.0)), ch);
                 }
                 std::stable_sort(ordered.begin(), ordered.end(),
                                  [](const auto &a, const auto &b) { return a.first < b.first; });
@@ -744,7 +812,7 @@ void apply_tree(Snapshot &s, const json &t)
                             name += (name.empty() ? "" : ", ") + users[rid.get<std::string>()].name;
             }
             conv.title = name.empty() ? std::string("Direct message") : name;
-            if (static_cast<int>(d.value("type", 1.0)) == 1 && !conv.user_id.empty())
+            if (static_cast<int>(num(d, "type", 1.0)) == 1 && !conv.user_id.empty())
                 s.dm_by_user[conv.user_id] = conv.channel_id;
             const auto [has_unread, mentions] = read_of(conv.channel_id, last);
             conv.unread = has_unread ? std::max(1, mentions) : 0;
@@ -775,7 +843,7 @@ void apply_tree(Snapshot &s, const json &t)
         std::vector<VoiceSeat> &seats = s.seats[channel];
         if (states.is_array())
             for (const json &st : states)
-                seats.push_back({text(st, "user_id"), st.value("self_mute", false), st.value("self_deaf", false)});
+                seats.push_back({text(st, "user_id"), flag(st, "self_mute", false), flag(st, "self_deaf", false)});
     }
     // DM calls going on or ringing; a ring lists the people it still rings.
     s.calls.clear();
@@ -932,13 +1000,6 @@ void Client::want_image(const std::string &url)
     image_queue_.push_back(url);
 }
 
-std::vector<KeyPress> Client::take_keys()
-{
-    std::lock_guard<std::mutex> lock(mutex_);
-    std::vector<KeyPress> out;
-    out.swap(keys_);
-    return out;
-}
 
 std::vector<Image> Client::take_images()
 {
@@ -1004,7 +1065,7 @@ void Client::fetch_images()
             else
                 image.w = image.h = 0;
         }
-        if (image.rgba.empty()) // shown as its stand-in for good: say why
+        if (image.rgba.empty()) // its stand-in shows until the app asks again (10 s on): say why
             hui::sys::log("[CLIENT] image failed (%d, %zu bytes, starts %.8s): %s", reply.status, reply.body.size(),
                           reply.body.c_str(), image.url.c_str());
         std::lock_guard<std::mutex> lock(mutex_);
@@ -1017,7 +1078,7 @@ void Client::run_images()
     while (!stop_)
     {
         if (ready_)
-            fetch_images();
+            guarded("images", [&] { fetch_images(); });
         usleep(50000);
     }
 }
@@ -1028,38 +1089,41 @@ void Client::run()
     std::int64_t last_state = 0;
     while (!stop_)
     {
-        const std::int64_t now = now_ms();
-        if (now - last_state >= 1000)
-        {
-            poll_state();
-            last_state = now;
-        }
-        if (ready_)
-        {
-            if (now - last_chat_ms_ >= 3000)
-                poll_chat();
-            if (now - last_mentions_ms_ >= 30000)
-                poll_mentions();
-        }
-        // Quick while connected (the core's speaking window is ~300 ms, so rings follow it),
-        // quick while joining, slower otherwise.
-        const std::int64_t voice_every = snapshot_.voice.state == VoiceState::connected ? 250
-                                         : snapshot_.voice.active()                     ? 1000
-                                                                                        : 4000;
-        if (now - last_voice_ms_ >= voice_every)
-            poll_voice();
-        for (;;)
-        {
-            Request request;
+        guarded("client", [&] {
+            const std::int64_t now = now_ms();
+            if (now - last_state >= 1000)
             {
-                std::lock_guard<std::mutex> lock(mutex_);
-                if (queue_.empty())
-                    break;
-                request = queue_.front();
-                queue_.pop_front();
+                poll_state();
+                last_state = now;
             }
-            handle(request);
-        }
+            if (ready_)
+            {
+                // ponytail: 3 s cadence, 1 s after an event; a 304 makes either cheap.
+                if (now - last_chat_ms_ >= 3000 || (chat_dirty_ && now - last_chat_ms_ >= 1000))
+                    poll_chat();
+                if (now - last_mentions_ms_ >= 30000)
+                    poll_mentions();
+            }
+            // Quick while connected (the core's speaking window is ~300 ms, so rings follow it),
+            // quick while joining, slower otherwise.
+            const std::int64_t voice_every = snapshot_.voice.state == VoiceState::connected ? 250
+                                             : snapshot_.voice.active()                     ? 1000
+                                                                                            : 4000;
+            if (now - last_voice_ms_ >= voice_every)
+                poll_voice();
+            for (;;)
+            {
+                Request request;
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    if (queue_.empty())
+                        break;
+                    request = queue_.front();
+                    queue_.pop_front();
+                }
+                handle(request);
+            }
+        });
         usleep(250000);
     }
 }
@@ -1067,15 +1131,29 @@ void Client::run()
 void Client::poll_state()
 {
     const Reply reply = http(port_, "GET", "/api/state");
-    std::lock_guard<std::mutex> lock(mutex_);
+    if (reply.status > 0 && reply.status != 200) // it is there, only busy or unhappy
+    {
+        hui::sys::log("[CLIENT] /api/state answered %d", reply.status);
+        return;
+    }
+    // One slow or lost reply is not a dead core: three in a row are. The ELF goes out
+    // without the lock, which the UI thread needs every frame.
+    state_failures_ = reply.status == 200 ? 0 : state_failures_ + 1;
+    core_seen_ |= reply.status == 200;
+    if (reply.status == 200)
+        sends = 0;
+    if (state_failures_ >= 3 || (!core_seen_ && reply.status != 200)) // at launch: no need to wait
+        start_core();
+    std::unique_lock<std::mutex> lock(mutex_);
     if (reply.status != 200)
     {
-        if (reply.status > 0)
-            hui::sys::log("[CLIENT] /api/state answered %d", reply.status);
-        else
-            start_core();
-        snapshot_.connection = Connection::starting;
-        snapshot_.status_message = "Starting the ps5-discord core...";
+        if (state_failures_ < 3 && snapshot_.connection != Connection::starting)
+            return;
+        // Before the first sign-in this is the launch; after it, a drop like any other.
+        snapshot_.connection = been_ready_ ? Connection::reconnecting : Connection::starting;
+        snapshot_.status_message = signing_out_ ? "Signing out..."
+                                   : been_ready_ ? "Restarting the ps5-discord core."
+                                                 : "Starting the ps5-discord core...";
         ready_ = false;
         publish();
         return;
@@ -1083,8 +1161,76 @@ void Client::poll_state()
     const json state = json::parse(reply.body, nullptr, false);
     if (state.is_discarded())
         return;
-    const int api = static_cast<int>(state.value("api_version", 0.0));
-    if (api < kApiVersionMin || api > kApiVersionMax)
+    // A missing object is an older core (no update UI). Dev builds never look for an update
+    // themselves; the launch check shows only an offer, never a failure.
+    Update update;
+    if (state.contains("update") && state["update"].is_object())
+    {
+        const json &u = state["update"];
+        update.state = text(u, "state");
+        update.version = text(u, "version");
+        update.installed = text(u, "installed");
+        update.notes = text(u, "notes");
+        update.error = text(u, "error");
+        update.check_error = text(u, "check_error");
+        update.previous = text(u, "previous");
+        update.done = static_cast<std::int64_t>(num(u, "done", 0.0));
+        update.total = static_cast<std::int64_t>(num(u, "total", 0.0));
+    }
+    if (update.state != "available")
+        start_error_.clear();
+    else if (update.error.empty())
+        update.error = start_error_; // the last Update press was refused
+    if (!(update == snapshot_.update))
+    {
+        snapshot_.update = update;
+        publish();
+    }
+    if (!update.state.empty() && !update_checked_)
+    {
+        update_checked_ = true;
+        const std::string &mine = bundled_version();
+        if (!mine.empty() && mine.find("-dev") == std::string::npos)
+        {
+            Request check;
+            check.kind = Request::Kind::update_check;
+            queue_.push_back(check); // under the lock; the client thread sends it this round
+        }
+    }
+    const int api = static_cast<int>(num(state, "api_version", 0.0));
+    const bool api_ok = api >= kApiVersionMin && api <= kApiVersionMax;
+    // The core outlives the app, so after an update the old one is still running: stop it,
+    // and the bundled one starts once it is gone. Not in the middle of a call unless the old
+    // core cannot serve this app at all; once per launch, so a mismatched build cannot loop.
+    const std::string theirs = text(state, "version");
+    // The old one on its way out (Go Live gives the controller back first: up to 30 s).
+    if (replaced_core_ && theirs == replaced_version_ && now_ms() - replaced_ms_ < 60000)
+    {
+        core_seen_ = false;
+        snapshot_.connection = Connection::starting;
+        snapshot_.status_message = "Updating the ps5-discord core...";
+        ready_ = false;
+        publish();
+        return;
+    }
+    if (!replaced_core_ && !bundled_version().empty() && theirs != bundled_version() &&
+        (!api_ok || (voice_known_ && !snapshot_.voice.active())))
+    {
+        replaced_core_ = true;
+        replaced_version_ = theirs;
+        replaced_ms_ = now_ms();
+        core_seen_ = false; // its port going quiet is the cue to start ours at once
+        snapshot_.connection = Connection::starting;
+        snapshot_.status_message = "Updating the ps5-discord core...";
+        ready_ = false;
+        publish();
+        lock.unlock();
+        hui::sys::log("[CLIENT] the running core is %s, this app bundles %s: replacing it",
+                      theirs.empty() ? "an older one" : theirs.c_str(), bundled_version().c_str());
+        http(port_, "POST", "/api/quit");
+        return;
+    }
+    if (!api_ok)
     {
         snapshot_.connection = Connection::starting;
         snapshot_.status_message = "This app needs core API " + std::to_string(kApiVersionMin) + "-" +
@@ -1095,18 +1241,46 @@ void Client::poll_state()
         return;
     }
     const std::string s = text(state, "state");
+    if (s == "stopped") // Discord ended the session for good: say why, not a spinner
+    {
+        snapshot_.connection = Connection::starting;
+        snapshot_.status_message = text(state, "note").empty() ? "Discord closed the session. Quit and start the app again."
+                                                                : text(state, "note");
+        ready_ = false;
+        publish();
+        return;
+    }
     const Connection before = snapshot_.connection;
+    if (signing_out_ && s != "login" && s != "scanned" && s != "browser")
+    {
+        // The old core still ending its calls; the new one not at the QR yet.
+        snapshot_.connection = Connection::starting;
+        snapshot_.status_message = "Signing out...";
+        publish();
+        return;
+    }
+    signing_out_ = false;
     // Signed in before, signing in now: another console user's turn, or signed out. The
     // last account's servers, chats and DMs go.
-    if (before == Connection::ready && (s == "login" || s == "scanned" || s == "browser" || s == "starting"))
+    const bool signing_in = s == "login" || s == "scanned" || s == "browser";
+    if ((before == Connection::ready && (signing_in || s == "starting")) ||
+        (before == Connection::reconnecting && signing_in))
     {
         snapshot_ = Snapshot{};
         events_next_ = -1;
+        chat_version_ = -1;
+        prefetched_ = false;
+        last_voice_ms_ = 0;
+        been_ready_ = false;
+        open_ = Request{};
+        ++account_;
     }
     if (s == "ready")
         snapshot_.connection = Connection::ready;
     else if (s == "login" || s == "scanned" || s == "browser")
         snapshot_.connection = Connection::signing_in;
+    else if (been_ready_ && (s == "connecting" || s == "starting"))
+        snapshot_.connection = Connection::reconnecting; // after the launch: every drop looks the same
     else if (s == "connecting" && before == Connection::ready)
         snapshot_.connection = Connection::reconnecting;
     else
@@ -1116,12 +1290,18 @@ void Client::poll_state()
     if (s == "browser" || s == "ready") browser_error_.clear();
     snapshot_.login_qr = text(state, "qr");
     snapshot_.login_note = browser_error_.empty() ? text(state, "note") : browser_error_;
-    snapshot_.login_qr_size = static_cast<int>(state.value("qr_size", 0.0));
+    snapshot_.login_qr_size = static_cast<int>(num(state, "qr_size", 0.0));
     snapshot_.status_message.clear();
+    snapshot_.reconnect_attempt = static_cast<int>(num(state, "attempt", 0.0));
+    if (snapshot_.connection == Connection::ready)
+        been_ready_ = true;
     const bool was_ready = ready_;
     ready_ = snapshot_.connection == Connection::ready;
     if (ready_ && !was_ready)
+    {
         last_chat_ms_ = last_mentions_ms_ = 0; // fetch everything now
+        chat_version_ = -1;
+    }
     publish();
 }
 
@@ -1129,9 +1309,12 @@ void refresh_mentions(Snapshot &s);
 
 void Client::poll_chat()
 {
-    const Reply reply = http(port_, "GET", "/api/chat");
+    chat_dirty_ = false; // before asking: an event during the request asks again
+    const long long held = chat_version_;
+    const Reply reply = http(port_, "GET", held >= 0 ? "/api/chat?v=" + std::to_string(held) : "/api/chat", {},
+                             kChatMax);
     last_chat_ms_ = now_ms();
-    if (reply.status != 200)
+    if (reply.status != 200) // 304: what the snapshot holds is current
         return;
     const json tree = json::parse(reply.body, nullptr, false);
     if (tree.is_discarded() || !tree.is_object())
@@ -1142,13 +1325,38 @@ void Client::poll_chat()
     Snapshot next;
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        // Another account than the one on screen (a console user switch the state polls
+        // missed while the core was away): nothing of the last one may stay.
+        const std::string me = tree.contains("me") ? text(tree["me"], "id") : std::string();
+        if (!snapshot_.me.id.empty() && me != snapshot_.me.id)
+        {
+            Snapshot fresh;
+            fresh.connection = snapshot_.connection;
+            snapshot_ = std::move(fresh);
+            prefetched_ = false;
+            events_next_ = -1;
+            last_voice_ms_ = 0;
+            open_ = Request{};
+            ++account_;
+        }
         next = snapshot_;
+        chat_version_ = static_cast<long long>(num(tree, "version", -1.0));
     }
     apply_tree(next, tree);
     refresh_mentions(next);
     std::lock_guard<std::mutex> lock(mutex_);
+    // What the events thread changed meanwhile is newer than the copy: carry it over.
     next.messages = std::move(snapshot_.messages);
+    next.notices = std::move(snapshot_.notices);
+    next.history_start = std::move(snapshot_.history_start);
+    next.load_failed = std::move(snapshot_.load_failed);
     snapshot_ = std::move(next);
+    for (auto &[channel, list] : snapshot_.messages) // sends that never heard back
+        if (std::any_of(list->begin(), list->end(),
+                        [](const Message &m) { return m.pending && now_ms() - m.time_ms > 60000; }))
+            for (Message &m : edit_messages(snapshot_, channel))
+                if (m.pending && now_ms() - m.time_ms > 60000)
+                    m.pending = false, m.failed = true;
     if (!prefetched_)
     {
         // Warm the conversations people open first, so they show at once.
@@ -1174,6 +1382,7 @@ void Client::poll_voice()
     last_voice_ms_ = now_ms();
     const json v = reply.status == 200 ? json::parse(reply.body, nullptr, false) : json::object();
     std::lock_guard<std::mutex> lock(mutex_);
+    voice_known_ |= reply.status == 200;
     Voice &voice = snapshot_.voice;
     voice = Voice{};
     if (v.is_object())
@@ -1181,11 +1390,11 @@ void Client::poll_voice()
         voice.state = voice_state_of(text(v, "state"));
         voice.channel_id = text(v, "channel");
         voice.guild_id = text(v, "guild");
-        voice.muted = v.value("mute", false);
-        voice.deafened = v.value("deaf", false);
-        voice.ping_ms = static_cast<int>(v.value("ping_ms", 0.0));
-        voice.secure = v.value("secure", false);
-        voice.since_ms = static_cast<std::int64_t>(v.value("since_ms", 0.0));
+        voice.muted = flag(v, "mute", false);
+        voice.deafened = flag(v, "deaf", false);
+        voice.ping_ms = static_cast<int>(num(v, "ping_ms", 0.0));
+        voice.secure = flag(v, "secure", false);
+        voice.since_ms = static_cast<std::int64_t>(num(v, "since_ms", 0.0));
         voice.error = text(v, "error");
         voice.controller = text(v, "controller");
         voice.output_tv = text(v, "output") != "controller";
@@ -1193,32 +1402,35 @@ void Client::poll_voice()
         {
             voice.broadcast = text(v["broadcast"], "state");
             voice.broadcast_error = text(v["broadcast"], "error");
-            voice.paired = v["broadcast"].value("paired", false);
+            voice.replug = text(v["broadcast"], "controller");
+            voice.paired = flag(v["broadcast"], "paired", false);
             voice.pair_state = text(v["broadcast"], "pair_state");
             voice.pair_error = text(v["broadcast"], "pair_error");
             voice.pair_console = text(v["broadcast"], "pair_console");
             voice.pair_user = text(v["broadcast"], "pair_user");
-            voice.pair_since = static_cast<std::int64_t>(v["broadcast"].value("pair_since", 0.0));
+            voice.pair_since = static_cast<std::int64_t>(num(v["broadcast"], "pair_since", 0.0));
             voice.rp_use = text(v["broadcast"], "use");
             if (v["broadcast"].contains("users") && v["broadcast"]["users"].is_array())
                 for (const json &u : v["broadcast"]["users"])
                     if (u.is_object())
-                        voice.rp_users.push_back({text(u, "id"), text(u, "name"), u.value("account", false),
-                                                  u.value("paired", false), u.value("on_screen", false),
+                        voice.rp_users.push_back({text(u, "id"), text(u, "name"), flag(u, "account", false),
+                                                  flag(u, "paired", false), flag(u, "on_screen", false),
                                                   text(u, "console"),
-                                                  static_cast<std::int64_t>(u.value("since", 0.0))});
+                                                  static_cast<std::int64_t>(num(u, "since", 0.0))});
         }
         if (v.contains("prefs") && v["prefs"].is_object())
         {
             const json &p = v["prefs"];
             Prefs &prefs = snapshot_.prefs;
-            prefs.golive_quality = std::clamp(static_cast<int>(p.value("golive_quality", 0.0)), 0, 3);
-            prefs.mic_gain = std::clamp(static_cast<int>(p.value("mic_gain", 5.0)), 0, 10);
-            prefs.notify_dm = p.value("notify_dm", 1.0) != 0.0;
-            prefs.notify_server = std::clamp(static_cast<int>(p.value("notify_server", 1.0)), 0, 2);
-            prefs.notify_system = p.value("notify_system", 1.0) != 0.0;
-            prefs.notify_live = p.value("notify_live", 0.0) != 0.0;
-            prefs.quiet_hours = std::clamp(static_cast<int>(p.value("quiet_hours", 0.0)), 0, 4);
+            prefs.golive_quality = std::clamp(static_cast<int>(num(p, "golive_quality", 0.0)), 0, 3);
+            prefs.mic_gain = std::clamp(static_cast<int>(num(p, "mic_gain", 5.0)), 0, 10);
+            prefs.call_volume = std::clamp(static_cast<int>(num(p, "call_volume", 5.0)), 0, 10);
+            prefs.notify_dm = num(p, "notify_dm", 1.0) != 0.0;
+            prefs.notify_server = std::clamp(static_cast<int>(num(p, "notify_server", 1.0)), 0, 2);
+            prefs.notify_system = num(p, "notify_system", 1.0) != 0.0;
+            prefs.notify_live = num(p, "notify_live", 0.0) != 0.0;
+            prefs.quiet_hours = std::clamp(static_cast<int>(num(p, "quiet_hours", 0.0)), 0, 4);
+            prefs.share_game = num(p, "share_game", 1.0) != 0.0;
         }
         if (v.contains("speaking") && v["speaking"].is_array())
             for (const json &id : v["speaking"])
@@ -1233,7 +1445,9 @@ void Client::run_events()
 {
     while (!stop_)
     {
-        if (!ready_ || !poll_events())
+        bool ok = false;
+        guarded("events", [&] { ok = ready_ && poll_events(); });
+        if (!ok)
             usleep(250000); // not signed in, or the core is away: try again shortly
     }
 }
@@ -1242,6 +1456,7 @@ void Client::run_events()
 bool Client::poll_events()
 {
     const std::string wait = events_next_ < 0 ? "0" : "6"; // under the 8 s socket timeout
+    const unsigned account = account_; // a batch asked for by the last account is not this one's
     const Reply reply =
         http(port_, "GET", "/api/events?since=" + std::to_string(std::max(0L, events_next_.load())) + "&wait=" + wait);
     if (reply.status != 200)
@@ -1249,30 +1464,47 @@ bool Client::poll_events()
     const json e = json::parse(reply.body, nullptr, false);
     if (e.is_discarded())
         return true;
-    const long next = static_cast<long>(e.value("next", 0.0));
+    if (account != account_) // the account was reset while this poll waited
+        return true;
+    const long next = static_cast<long>(num(e, "next", 0.0));
     if (events_next_ < 0) // first contact: start from now, history comes from /api/messages
     {
         events_next_ = next;
+        return true;
+    }
+    // Events were missed (the app sat suspended in a game past the core's ring), or a new
+    // core counts from 0 again: every loaded history may lack messages. Load them afresh.
+    if (flag(e, "gap", false) || next < events_next_)
+    {
+        events_next_ = next;
+        std::lock_guard<std::mutex> lock(mutex_);
+        hui::sys::log("[CLIENT] events missed: reloading the chats");
+        snapshot_.messages.clear();
+        snapshot_.history_start.clear();
+        snapshot_.load_failed.clear();
+        last_chat_ms_ = 0;
+        if (!open_.channel_id.empty())
+        {
+            Request reload = open_; // no read receipt: the chat may no longer be on screen
+            reload.kind = Request::Kind::prefetch;
+            queue_.push_back(reload);
+        }
+        publish();
         return true;
     }
     events_next_ = next;
     if (!e.contains("events") || e["events"].empty())
         return true;
     std::lock_guard<std::mutex> lock(mutex_);
+    if (account != account_)
+        return true;
     for (const json &ev : e["events"])
     {
         const std::string type = text(ev, "t");
         const std::string channel = text(ev, "channel_id");
         if (type == "CALL") // a DM call changed: its calls come with the tree
         {
-            last_chat_ms_ = 0;
-            continue;
-        }
-        if (type == "KEY")
-        {
-            keys_.push_back({static_cast<std::uint16_t>(ev.value("usage", 0.0)),
-                             static_cast<std::uint32_t>(ev.value("mods", 0.0)),
-                             static_cast<std::uint32_t>(ev.value("led", 0.0))});
+            chat_dirty_ = true;
             continue;
         }
         if (type == "MESSAGE_CREATE")
@@ -1282,7 +1514,7 @@ bool Client::poll_events()
             // (the PS5's alert shows it), nor one older than a few seconds (a backlog).
             const Message m = message_from(ev, snapshot_.me.id);
             const std::string guild = text(ev, "guild_id");
-            const int kind = static_cast<int>(ev.value("notify", 0.0));
+            const int kind = static_cast<int>(num(ev, "notify", 0.0));
             if (kind > 0 && g_front && (m.time_ms == 0 || now_ms() - m.time_ms < 15000)) // else the PS5 alert
             {
                 Notice n;
@@ -1291,7 +1523,7 @@ bool Client::poll_events()
                 n.channel_id = channel;
                 n.kind = kind;
                 n.for_me = kind >= 2;
-                n.quiet = ev.value("quiet", false);
+                n.quiet = flag(ev, "quiet", false);
                 n.author = ev.contains("author") && ev["author"].is_object() ? user_from(ev["author"]) : User{};
                 n.title = n.author.name;
                 for (const Guild &g : snapshot_.guilds)
@@ -1313,18 +1545,19 @@ bool Client::poll_events()
         }
         if (snapshot_.messages.find(channel) == snapshot_.messages.end())
         {
-            last_chat_ms_ = 0; // not open: its history loads when it is; refresh unread counts now
+            chat_dirty_ = true; // not open: its history loads when it is; refresh unread counts soon
             continue;
         }
         std::vector<Message> &ms = edit_messages(snapshot_, channel);
         if (type == "MESSAGE_CREATE")
         {
             Message m = message_from(ev, snapshot_.me.id);
-            // Our own echo replaces its pending copy: by nonce, else by text.
+            // Our own echo replaces its pending copy: by nonce, else by text. By nonce also one
+            // marked failed after a minute without an answer: it went out late.
             const std::string nonce = text(ev, "nonce");
             auto pending = std::find_if(ms.begin(), ms.end(), [&](const Message &p) {
-                return p.pending && ((!nonce.empty() && p.nonce == nonce) ||
-                                     (p.author_id == m.author_id && p.content == m.content));
+                return ((p.pending || p.failed) && !nonce.empty() && p.nonce == nonce) ||
+                       (p.pending && p.author_id == m.author_id && p.content == m.content);
             });
             if (pending != ms.end())
                 *pending = m;
@@ -1457,7 +1690,7 @@ void Client::handle(const Request &request)
                 if (p.contains("stickers") && p["stickers"].is_array())
                     for (const json &st : p["stickers"])
                         pack.stickers.push_back({text(st, "id"), text(st, "name"),
-                                                 static_cast<int>(st.value("format_type", 1.0))});
+                                                 static_cast<int>(num(st, "format_type", 1.0))});
                 if (!pack.stickers.empty())
                     packs.push_back(std::move(pack));
             }
@@ -1485,11 +1718,16 @@ void Client::handle(const Request &request)
                 return;
             path += "&before=" + oldest;
         }
+        if (request.kind == Request::Kind::open_channel)
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            open_ = request; // the chat on screen, reloaded when events were missed
+        }
         const Reply reply = http(port_, "GET", path);
         const json r = json::parse(reply.body, nullptr, false);
         if (reply.status != 200 || r.is_discarded() || !r.contains("body") || !r["body"].is_array())
         {
-            const int discord_status = r.is_discarded() ? 0 : static_cast<int>(r.value("status", 0.0));
+            const int discord_status = r.is_discarded() ? 0 : static_cast<int>(num(r, "status", 0.0));
             hui::sys::log("[CLIENT] history for %s failed (%d/%d)", request.channel_id.c_str(), reply.status,
                           discord_status);
             std::lock_guard<std::mutex> lock(mutex_);
@@ -1519,7 +1757,16 @@ void Client::handle(const Request &request)
             if (request.kind == Request::Kind::load_older)
                 ms.insert(ms.begin(), page.begin(), page.end());
             else
-                ms = page;
+            {
+                // What arrived while the page was on its way (newer than its newest), and our
+                // own sends still pending, stay after it.
+                std::vector<Message> later;
+                for (const Message &m : ms)
+                    if (m.pending || newer_id(m.id, newest))
+                        later.push_back(m);
+                ms = std::move(page);
+                ms.insert(ms.end(), later.begin(), later.end());
+            }
             publish();
         }
         // Opening a channel reads it.
@@ -1535,8 +1782,13 @@ void Client::handle(const Request &request)
             body["sticker"] = request.sticker_id;
         const Reply reply = http(port_, "POST", "/api/send", body.dump());
         const json r = json::parse(reply.body, nullptr, false);
-        const int discord_status = r.is_discarded() ? 0 : static_cast<int>(r.value("status", 0.0));
-        if (reply.status != 200 || discord_status < 200 || discord_status >= 300)
+        const int discord_status = r.is_discarded() ? 0 : static_cast<int>(num(r, "status", 0.0));
+        // No answer in time (the core may be waiting out a rate limit): it may still go out,
+        // and its echo replaces the row. Only a refusal is "not sent" now; a row that never
+        // hears back is, after a minute (poll_chat).
+        if (reply.status <= 0)
+            hui::sys::log("[CLIENT] send to %s: no answer yet, waiting for the echo", request.channel_id.c_str());
+        else if (reply.status != 200 || discord_status < 200 || discord_status >= 300)
         {
             hui::sys::log("[CLIENT] send to %s failed (%d/%d)", request.channel_id.c_str(), reply.status,
                           discord_status);
@@ -1561,13 +1813,26 @@ void Client::handle(const Request &request)
     }
     case Request::Kind::edit:
     case Request::Kind::remove: {
+        if (request.message_id.rfind("pending-", 0) == 0) // never reached Discord: ours alone
+        {
+            if (request.kind == Request::Kind::remove)
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                std::vector<Message> &ms = edit_messages(snapshot_, request.channel_id);
+                ms.erase(std::remove_if(ms.begin(), ms.end(),
+                                        [&](const Message &m) { return m.id == request.message_id; }),
+                         ms.end());
+                publish();
+            }
+            break;
+        }
         json body{{"channel", request.channel_id}, {"message", request.message_id}};
         if (request.kind == Request::Kind::edit)
             body["content"] = request.content;
         const Reply reply = http(port_, "POST", request.kind == Request::Kind::edit ? "/api/edit" : "/api/delete",
                                  body.dump());
         const json r = json::parse(reply.body, nullptr, false);
-        const int discord_status = r.is_discarded() ? 0 : static_cast<int>(r.value("status", 0.0));
+        const int discord_status = r.is_discarded() ? 0 : static_cast<int>(num(r, "status", 0.0));
         if (reply.status != 200 || discord_status < 200 || discord_status >= 300)
             hui::sys::log("[CLIENT] %s failed (%d/%d)", request.kind == Request::Kind::edit ? "edit" : "delete",
                           reply.status, discord_status);
@@ -1645,10 +1910,36 @@ void Client::handle(const Request &request)
         last_voice_ms_ = 0;
         break;
     }
+    case Request::Kind::reconnect:
+        hui::sys::log("[CLIENT] /api/reconnect answered %d", http(port_, "POST", "/api/reconnect").status);
+        break;
     case Request::Kind::quit: // the core stops (Go Live and the call first), then the app closes
         hui::sys::log("[CLIENT] /api/quit answered %d", http(port_, "POST", "/api/quit").status);
         quit_ = true;
         break;
+    case Request::Kind::update_check: {
+        const Reply reply = http(port_, "POST", "/api/update/check", request.on ? "{\"force\":true}" : "");
+        hui::sys::log("[CLIENT] /api/update/check answered %d", reply.status);
+        break;
+    }
+    case Request::Kind::update_start: {
+        const Reply reply = http(port_, "POST", "/api/update/start");
+        hui::sys::log("[CLIENT] /api/update/start answered %d", reply.status);
+        if (reply.status != 202) // in a call, low space...: the offer shows why
+        {
+            const json r = json::parse(reply.body, nullptr, false);
+            start_error_ = r.is_object() && !text(r, "error").empty() ? text(r, "error") : "The update did not start.";
+        }
+        break;
+    }
+    case Request::Kind::update_apply: // the app must go for the core to swap its files
+    case Request::Kind::update_restore: {
+        const char *path = request.kind == Request::Kind::update_apply ? "/api/update/apply" : "/api/update/restore";
+        const int status = http(port_, "POST", path).status;
+        hui::sys::log("[CLIENT] %s answered %d", path, status);
+        quit_ = status == 200;
+        break;
+    }
     case Request::Kind::sign_out: {
         // The core ends the session with Discord, forgets it and quits; poll_state starts
         // it again, at the QR code.
@@ -1664,7 +1955,10 @@ void Client::handle(const Request &request)
         snapshot_ = Snapshot{};
         snapshot_.status_message = "Signing out...";
         ready_ = false;
+        been_ready_ = false; // the core going away is the sign-out, not a drop
+        signing_out_ = true;
         events_next_ = -1; // the new core counts its events from the start
+        chat_version_ = -1;
         publish();
         break;
     }
@@ -1682,6 +1976,12 @@ void Client::handle(const Request &request)
         break;
     }
     }
+}
+
+void ensure_core()
+{
+    if (http(9041, "GET", "/api/state").status < 0)
+        start_core();
 }
 
 } // namespace discord

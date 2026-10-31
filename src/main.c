@@ -1,7 +1,8 @@
-// ps5-discord core: background payload holding the Discord gateway session.
-// PoC: logs in by QR code (printed to klog), keeps the token in a file,
-// logs session state to klog.
+// ps5-discord core: the background payload that holds the Discord session for the app.
+// Signs in (QR or the console's browser), keeps each console user's sign-in encrypted
+// (browser_storage.c), runs the gateway, calls and Go Live, and serves the app on 9041.
 #include <arpa/inet.h>
+#include <errno.h>
 #include <netinet/in.h>
 #include <pthread.h>
 #include <signal.h>
@@ -19,6 +20,7 @@
 #include "log.h"
 #include "remote_auth.h"
 #include "browser_auth.h"
+#include "build_config.h"
 #include "browser_storage.h"
 #include "status.h"
 #include "web.h"
@@ -26,30 +28,38 @@
 #include "controller_voice.h"
 #include "broadcast.h"
 #include "http.h"
+#include "core_key.h"
 #include "notify.h"
 #include "prefs.h"
 #include "rp_pair.h"
 #include "stream.h"
 #include "tls.h"
+#include "update.h"
 
 #ifdef __PROSPERO__
 #define DATA_DIR "/data/ps5-discord"
+#define APP_DIR "/data/homebrew/PPSA99072" // the app's /app0: where it reads the core key
 int sceKernelSetProcessName(const char *name);
+#include <ps5/klog.h>
 #else
 #define DATA_DIR "."
+#define APP_DIR "."
 #endif
 // The session is kept encrypted to this console (browser_storage.c session_save).
 // One per console user (token-<user>): each signs in to their own Discord account, and the
 // core runs the account of the user on screen.
-static char token_name[32] = "token";
-static volatile int32_t session_user = -1;
+static char token_name[32] = "token"; // the main thread's; others read it through token_path
+static pthread_mutex_t name_lock = PTHREAD_MUTEX_INITIALIZER; // core_quit runs on a request thread
+static _Atomic int32_t session_user = -1;
 
 static void token_path(char *out, size_t cap)
 {
+    pthread_mutex_lock(&name_lock);
     snprintf(out, cap, "%s/%s", DATA_DIR, token_name);
+    pthread_mutex_unlock(&name_lock);
 }
-// Control port: keeps one instance alive and serves the status web UI
-// (http://<ps5>:9041, POST /api/quit for make stop). Future UI app IPC goes here too.
+// Control port: keeps one instance alive and serves the app's API (web.c; loopback only,
+// CORE_LAN=1 opens it to the LAN for make stop).
 #define CONTROL_PORT 9041
 
 static int read_token(char *out, size_t cap)
@@ -95,7 +105,9 @@ static int login(char *token, size_t cap)
 // be told: the session stays, so the sign-in is never left alive but unknown here.
 int core_sign_out(void)
 {
-    http_response r = http_post_json("/auth/logout", "{\"provider\":null,\"voip_provider\":null}", chat_token());
+    char token[256];
+    chat_token(token, sizeof token);
+    http_response r = http_post_json("/auth/logout", "{\"provider\":null,\"voip_provider\":null}", token);
     free(r.body);
     LOG("sign out: Discord answered %d", r.status);
     // 401: the token was dead already.
@@ -121,9 +133,18 @@ static void end_calls(void)
     voice_leave();
 }
 
-void core_quit(int forget_token)
+void core_end_calls(void)
 {
     end_calls();
+    // The leave and the stream's end go out on the gateway thread (within a second): let
+    // them, or the others see us in the call until Discord times us out.
+    for (int i = 0; i < 20 && (voice_request_pending() || stream_gateway_pending()); i++)
+        usleep(100000);
+}
+
+void core_quit(int forget_token)
+{
+    core_end_calls();
     if (forget_token) {
         char path[64];
         token_path(path, sizeof path);
@@ -137,13 +158,15 @@ void core_quit(int forget_token)
 static void use_user(int32_t user)
 {
     session_user = user;
+    pthread_mutex_lock(&name_lock);
     snprintf(token_name, sizeof token_name, "token-%08x", (unsigned)user);
+    pthread_mutex_unlock(&name_lock);
     char path[64];
     token_path(path, sizeof path);
     FILE *f = fopen(path, "r"); // access() refuses payloads on the console
     if (f)
         fclose(f);
-    else
+    else if (user >= 0) // the legacy sign-in is for a real user, not "nobody on screen"
         rename(DATA_DIR "/token", path);
     prefs_load(DATA_DIR, user);
     notify_set_owner(user);
@@ -199,8 +222,32 @@ static int claim_instance(void)
 
 static void *control_loop(void *arg)
 {
-    web_serve((int)(intptr_t)arg);
+    int fd = (int)(intptr_t)arg;
+    for (;;) {
+        web_serve(fd);
+        close(fd);
+        // Our port again, or the app cannot reach us and starts another core. Another one
+        // already has it: that is the app's core now, this one goes.
+        for (int i = 0; i < 50 && (fd = claim_instance()) < 0; i++)
+            usleep(100000);
+        if (fd < 0) {
+            LOG("control: another core has the port, quitting");
+            core_quit(0);
+        }
+        LOG("control: listening again");
+    }
     return NULL;
+}
+
+static void on_crash(int sig)
+{
+#ifdef __PROSPERO__
+    // Straight to klog: LOG's copy for the web view takes a lock the crashed thread may hold.
+    klog_printf("[discord] crashed: signal %d\n", sig);
+#endif
+    bc_rescue_controller();
+    signal(sig, SIG_DFL);
+    raise(sig);
 }
 
 int main(void)
@@ -212,14 +259,17 @@ int main(void)
 #endif
     // A peer that hangs up mid-write (the app, a browser, Discord) must not kill the core.
     signal(SIGPIPE, SIG_IGN);
+    // A crash while Go Live holds the controller would leave it dead until a reboot.
+    // SA_ONSTACK: a thread with an alternate stack (the updater's) logs a stack overflow too.
+    struct sigaction crash = {.sa_handler = on_crash, .sa_flags = SA_ONSTACK};
+    for (int i = 0; i < 5; i++)
+        sigaction((int[]){SIGSEGV, SIGBUS, SIGABRT, SIGILL, SIGFPE}[i], &crash, NULL);
     char token[256];
     int control = claim_instance();
     if (control < 0) {
         LOG("already running");
         return 1;
     }
-    pthread_t t;
-    pthread_create(&t, NULL, control_loop, (void *)(intptr_t)control);
     srand((unsigned)time(NULL) ^ (unsigned)getpid());
     voice_init(DATA_DIR);
     cv_init();
@@ -230,7 +280,27 @@ int main(void)
         LOG("tls init failed");
         return 1;
     }
-    LOG("starting");
+    LOG("starting, version %s", CORE_VERSION);
+    unsigned char raw[32];
+    if (tls_random(NULL, raw, sizeof raw) != 0) {
+        LOG("control: no random bytes for the key");
+        return 1;
+    }
+    if (core_key_make(APP_DIR, raw) != 0)
+        LOG("control: cannot write %s/control.key (errno %d): the app cannot reach the core", APP_DIR, errno);
+#ifdef __PROSPERO__
+    // Before the app is served: a swap a power cut ended is finished first.
+    update_init(APP_DIR, "/data/homebrew/.PPSA99072.update", DATA_DIR "/update-bad");
+#endif
+    // Requests only once TLS, voice and Go Live are set up (the port is ours already).
+    pthread_t t;
+    pthread_create(&t, NULL, control_loop, (void *)(intptr_t)control);
+    // Started before anyone signed in to the console (elfldr at boot): wait for them, or
+    // their sign-in would be read from token-ffffffff. A minute, in case nobody ever shows.
+#ifdef __PROSPERO__
+    for (int i = 0; i < 60 && rp_foreground() < 0; i++)
+        sleep(1);
+#endif
     pthread_t watcher;
     if (pthread_create(&watcher, NULL, watch_user, NULL) == 0)
         pthread_detach(watcher);
@@ -244,14 +314,23 @@ int main(void)
         }
         if (code == GATEWAY_SWITCH) { // the user on screen changed: their account next
             end_calls();
+            // What end_calls queued for the old account's gateway is gone with it; on the next
+            // account's it would end that account's stream or call.
+            stream_forget_gateway();
+            voice_op4 old;
+            voice_take_request(&old);
             chat_reset();
             status_state("starting");
             continue;
         }
+        end_calls(); // a live broadcast holds the controller: give it back before waiting
         if (code != 4004) {
+            char note[128];
+            snprintf(note, sizeof note, "Discord closed the session (code %d). Quit and start the app again.", code);
+            status_note(note);
             status_state("stopped");
             LOG("stopped (%d)", code);
-            pause(); // keep the web UI up so the failure is visible; quit from there
+            pause(); // keep the control API up so the app can show why and quit
         }
         LOG("token rejected, logging in again");
         app_alert("Discord", "Signed out. Open the app to sign in again.", NULL, 1);

@@ -71,9 +71,15 @@ int main(void)
     snprintf(path, sizeof path, "%s/token-copy", directory);
     f = fopen(path, "wb"); fwrite(raw, 1, n, f); fclose(f);
     assert(session_load(directory, "token-copy", out, sizeof out) == -1 && out[0] == 0); // the name is sealed in
+    f = fopen(target, "wb"); fwrite(raw, 1, 20, f); fclose(f); // cut short inside the header
+    assert(session_load(directory, "token", out, sizeof out) == -1 && out[0] == 0);
+    f = fopen(target, "wb"); fwrite(raw, 1, n - 3, f); fclose(f); // cut short in the token
+    assert(session_load(directory, "token", out, sizeof out) == -1);
     raw[n - 1] ^= 1;
     f = fopen(target, "wb"); fwrite(raw, 1, n, f); fclose(f);
     assert(session_load(directory, "token", out, sizeof out) == -1); // tampered
+    f = fopen(target, "wb"); fwrite("abc\x01\xff" "def\n", 1, 9, f); fclose(f); // junk, not an old plain token
+    assert(session_load(directory, "token", out, sizeof out) == -1 && out[0] == 0);
     // An older build's file, in the clear: read once (1), for the caller to save again.
     f = fopen(target, "w"); fprintf(f, "%s\n", valid); fclose(f);
     assert(session_load(directory, "token", out, sizeof out) == 1 && strcmp(out, valid) == 0);

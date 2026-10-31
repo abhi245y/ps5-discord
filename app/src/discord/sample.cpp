@@ -102,6 +102,7 @@ Snapshot sample_snapshot()
     s.voice.ping_ms = 42;
     s.voice.secure = true;
     // Two console users: the one on screen, and a second one for Go Live over Bluetooth.
+    s.voice.replug = "replug"; // the tour shows the question before Go Live
     s.voice.rp_users = {{"10000000", "Ana", true, false, true, "", 0}, {"10000001", "Guest", true, false, false, "", 0}};
     s.voice.since_ms = kNow - 42 * kMinute;
     s.voice.speaking = {"mira", "theo"};

@@ -1,4 +1,5 @@
 #include "voice.h"
+#include "json_num.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -23,7 +24,11 @@
 #define VOICE_QUERY "/?v=8"
 #define JOIN_TIMEOUT_MS 20000
 #define MAX_RESUMES 5
-#define MAX_USERS 64
+// The voice server could not be reached at all (no network, no DNS): not the server's fault,
+// so it does not count against MAX_RESUMES; the call waits up to UNREACHABLE_MS for it.
+#define VOICE_UNREACHABLE -4
+#define UNREACHABLE_MS (10 * 60 * 1000)
+#define MAX_USERS 99 // a voice channel's limit
 #define IDS 32
 
 enum vstate { V_IDLE, V_JOINING, V_CONNECTING, V_SECURING, V_CONNECTED, V_ERROR };
@@ -33,7 +38,7 @@ static const char *state_names[] = {"idle", "joining", "connecting", "securing",
 typedef struct {
     // copied from the gateway when the thread starts
     char endpoint[256], token[128], session_id[64], server_id[IDS], channel_id[IDS], user_id[IDS];
-    volatile int stop;  // set (under lock) when a newer state replaces this connection
+    _Atomic int stop;   // set (under lock) when a newer state replaces this connection
     ws_conn ws;
     int udp;            // -1 until READY
     uint32_t ssrc;
@@ -48,6 +53,7 @@ typedef struct {
     uint8_t ext_sender[512]; // op 25, sent once per call: a reset session needs it again
     size_t ext_sender_len;
     char users[MAX_USERS][IDS]; // who is in the call, for DAVE
+    int readds;                 // op 31 re-add requests in a row
     int n_users;
     char err[256];
 } vthread;
@@ -55,6 +61,7 @@ typedef struct {
 // Everything below is guarded by lock. Other threads only read or queue requests.
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static char self_id[IDS];
+static char gw_session[64]; // this gateway session's id (READY): voice states of ours carry it
 static enum vstate state = V_IDLE;
 static char err_text[256];
 static char want_guild[IDS], want_channel[IDS]; // the call asked for (or current)
@@ -65,6 +72,7 @@ static int ping_ms, secure;
 static char refused[160];
 static int64_t joined_ms, since_ms;
 static int op4_due;
+static char listed[32]; // the channel Discord last said we are in (our VOICE_STATE_UPDATE); "" none
 static voice_op4 op4;
 static vthread *cur; // the connection that may report; NULL when none
 static vthread *att_owner; // the connection the audio engine serves (voice_audio.c)
@@ -95,7 +103,7 @@ static const char *str(cJSON *o, const char *key)
 
 static int64_t num(cJSON *o, const char *key)
 {
-    return (int64_t)cJSON_GetNumberValue(cJSON_GetObjectItem(o, key));
+    return json_int(o, key, 0);
 }
 
 // Lock held. Replaces the current connection: its thread exits without reporting.
@@ -137,6 +145,8 @@ static void set_state_locked(enum vstate s)
         since_ms = 0;
     if (s == V_JOINING && state != V_JOINING)
         joined_ms = mono_ms(); // the join timeout counts from entering this state
+    if (s == V_IDLE || s == V_ERROR)
+        secure = ping_ms = 0; // the next call starts without the last one's
     state = s;
 }
 
@@ -158,6 +168,8 @@ static void maybe_start_locked(void)
 void voice_set_self(const char *user_id)
 {
     pthread_mutex_lock(&lock);
+    if (strcmp(self_id, user_id ? user_id : "") != 0)
+        listed[0] = 0; // another account: where Discord listed the last one is not ours
     copy(self_id, sizeof self_id, user_id);
     pthread_mutex_unlock(&lock);
 }
@@ -170,7 +182,7 @@ void voice_join(const char *guild_id, const char *channel_id)
     if (!here) { // already in it: nothing to send
         copy(want_guild, sizeof want_guild, guild_id);
         copy(want_channel, sizeof want_channel, channel_id);
-        op4 = (voice_op4){.mute = mute, .deaf = deaf};
+        op4 = (voice_op4){.mute = mute, .deaf = deaf, .leave_first = !cur && listed[0]};
         copy(op4.guild, sizeof op4.guild, guild_id);
         copy(op4.channel, sizeof op4.channel, channel_id);
         op4_due = 1;
@@ -224,6 +236,7 @@ void voice_on_ready(cJSON *ready)
     const char *ghost = prev[0] ? ghost_guild(ready, prev) : NULL;
     stop_locked();
     session_id[0] = token[0] = endpoint[0] = channel[0] = guild[0] = 0;
+    copy(gw_session, sizeof gw_session, sid);
     if (want_channel[0] || ghost) {
         op4 = (voice_op4){.mute = mute, .deaf = deaf};
         copy(op4.guild, sizeof op4.guild, want_channel[0] ? want_guild : ghost);
@@ -279,12 +292,22 @@ int voice_set_flags(int m, int d)
     return in_call ? 0 : -1;
 }
 
+int voice_request_pending(void)
+{
+    pthread_mutex_lock(&lock);
+    int due = op4_due;
+    pthread_mutex_unlock(&lock);
+    return due;
+}
+
 int voice_take_request(voice_op4 *out)
 {
     pthread_mutex_lock(&lock);
     int due = op4_due;
     if (due)
         *out = op4;
+    if (due && state == V_JOINING)
+        joined_ms = mono_ms(); // the join timeout counts from when Discord gets it, not from the queue
     op4_due = 0;
     pthread_mutex_unlock(&lock);
     return due;
@@ -298,7 +321,14 @@ void voice_on_state(cJSON *d)
         pthread_mutex_unlock(&lock);
         return;
     }
-    if (!cid) { // we left (or were moved out by the server)
+    const char *sid = str(d, "session_id");
+    // Our account in voice from another client (a phone): Discord moved the call there, so
+    // ours ended; it is not a call to join here.
+    const int elsewhere = cid && sid && gw_session[0] && strcmp(sid, gw_session) != 0;
+    if (elsewhere)
+        LOG("voice: this account joined voice on another device");
+    copy(listed, sizeof listed, elsewhere ? NULL : cid);
+    if (!cid || elsewhere) { // we left (or were moved out by the server, or to another device)
         stop_locked();
         guild[0] = channel[0] = session_id[0] = token[0] = endpoint[0] = 0;
         if (state != V_JOINING && state != V_ERROR) { // a join we just sent stays pending
@@ -306,10 +336,11 @@ void voice_on_state(cJSON *d)
             set_state_locked(V_IDLE);
         }
     } else {
-        const char *sid = str(d, "session_id"), *gid = str(d, "guild_id");
+        const char *gid = str(d, "guild_id");
         if (strcmp(channel, cid) != 0 || strcmp(session_id, sid ? sid : "") != 0) {
             stop_locked();
-            token[0] = endpoint[0] = 0; // server details belong to the old call
+            if (session_id[0]) // server details of the old call; on a first join Discord may
+                token[0] = endpoint[0] = 0; // send the server update first, and it is ours
             copy(session_id, sizeof session_id, sid);
             if (state != V_ERROR)
                 set_state_locked(V_JOINING);
@@ -348,12 +379,18 @@ void voice_on_server(cJSON *d)
     pthread_mutex_unlock(&lock);
 }
 
-char *voice_state_json(void)
+// Lock held: a join Discord did not confirm in time ends (or, for a switch, keeps the call).
+static void join_timeout_locked(void)
 {
-    char ids[8][VAU_ID];
-    int ns = vau_speaking(ids, 8); // before our lock: the engine never takes ours
-    pthread_mutex_lock(&lock);
-    if (state == V_JOINING && mono_ms() - joined_ms > JOIN_TIMEOUT_MS) {
+    if (op4_due) // not sent yet (the gateway is reconnecting): the wait starts when it goes
+        return;
+    if (state == V_JOINING && mono_ms() - joined_ms > JOIN_TIMEOUT_MS && cur && channel[0]) {
+        // A switch Discord never confirmed: we are still in the old channel, so stay there.
+        LOG("voice: the switch was not confirmed, staying in the call");
+        copy(want_guild, sizeof want_guild, guild);
+        copy(want_channel, sizeof want_channel, channel);
+        set_state_locked(V_CONNECTED);
+    } else if (state == V_JOINING && mono_ms() - joined_ms > JOIN_TIMEOUT_MS) {
         // Discord never confirmed the channel (not a voice room, or no permission).
         copy(err_text, sizeof err_text, "Discord did not confirm the voice channel.");
         stop_locked();
@@ -361,6 +398,21 @@ char *voice_state_json(void)
         queue_leave_locked();
         set_state_locked(V_ERROR);
     }
+}
+
+void voice_tick(void)
+{
+    pthread_mutex_lock(&lock);
+    join_timeout_locked();
+    pthread_mutex_unlock(&lock);
+}
+
+char *voice_state_json(void)
+{
+    char ids[8][VAU_ID];
+    int ns = vau_speaking(ids, 8); // before our lock: the engine never takes ours
+    pthread_mutex_lock(&lock);
+    join_timeout_locked();
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "state", state_names[state]);
     cJSON_AddStringToObject(o, "channel", channel[0] ? channel : want_channel);
@@ -412,9 +464,11 @@ static int fatal(vthread *t, const char *msg)
 static void audio_dave(vthread *t, int detach)
 {
     pthread_mutex_lock(&lock);
-    if (cur == t && att_owner == t) {
-        if (detach)
-            vau_dave_state(NULL, 0, 0);
+    // The owner alone: a stopped thread (cur moved on) must still take its session back
+    // before destroying it.
+    if (att_owner == t && (detach || cur == t)) {
+        if (detach) // keep the version: above 0 and not ready, the engine sends nothing in the clear
+            vau_dave_state(NULL, t->dave_version, 0);
         else
             vau_dave_state(t->dave, t->dave_version, t->dave_ready);
     }
@@ -515,6 +569,7 @@ static void dave_reset(vthread *t, int version)
     }
     t->dave = NULL;
     t->dave_ready = 0;
+    t->readds = 0; // a new group gets its own re-adds
     dave_start(t, version);
     audio_dave(t, 0);
 }
@@ -562,6 +617,25 @@ static int on_ready(vthread *t, cJSON *d)
 
 static int send_key_package(vthread *t);
 
+// The audio engine takes this connection's socket and key; again after a resume (the
+// engine let go when the websocket dropped; the UDP socket and key live on). Then the state
+// and the DAVE session follow.
+static void attach_audio(vthread *t)
+{
+    t->healthy = 1;
+    pthread_mutex_lock(&lock);
+    if (cur == t) {
+        att_owner = t;
+        vau_attach(t->udp, t->key, t->ssrc, t->user_id, t->dave_version);
+        // op 11 (who is already here) arrives before this and attach starts a clean peer
+        // table: list them again so their audio can be matched to them.
+        for (int i = 0; i < t->n_users; i++)
+            vau_expect_user(t->users[i]);
+    }
+    pthread_mutex_unlock(&lock);
+    update_state(t);
+}
+
 // Opcode 4 (SESSION_DESCRIPTION): the transport key and the DAVE version to use.
 static int on_session(vthread *t, cJSON *d)
 {
@@ -572,20 +646,9 @@ static int on_session(vthread *t, cJSON *d)
     if (cJSON_GetArraySize(k) != 32)
         return fatal(t, "The voice server sent a bad encryption key.");
     for (int i = 0; i < 32; i++)
-        t->key[i] = (uint8_t)cJSON_GetNumberValue(cJSON_GetArrayItem(k, i));
-    t->healthy = 1;
+        t->key[i] = (uint8_t)json_item_int(cJSON_GetArrayItem(k, i), 0);
     dave_start(t, (int)num(d, "dave_protocol_version"));
-    pthread_mutex_lock(&lock);
-    if (cur == t) {
-        att_owner = t;
-        vau_attach(t->udp, t->key, t->ssrc, t->user_id);
-        // op 11 (who is already here) arrives before this and attach starts a clean peer
-        // table: list them again so their audio can be matched to them.
-        for (int i = 0; i < t->n_users; i++)
-            vau_expect_user(t->users[i]);
-    }
-    pthread_mutex_unlock(&lock);
-    update_state(t);
+    attach_audio(t);
     LOG("voice: session up, DAVE version %d", t->dave_version);
     return send_key_package(t) == 0 ? 0 : -1; // Discord's clients send it at once, not only on op 24
 }
@@ -708,14 +771,22 @@ static void dave_commit_or_welcome(vthread *t, int op, const uint8_t *p, size_t 
     }
     LOG("voice: DAVE %s %s, transition %lld", op == 29 ? "commit" : "welcome", failed ? "failed" : "ok",
         (long long)tid);
-    if (failed) { // ask for a re-add
-        send_json(t, voice_json_transition(31, tid));
+    if (failed) { // ask for a re-add, a few times: a roster we cannot match fails every time
+        if (++t->readds <= 3)
+            send_json(t, voice_json_transition(31, tid));
+        else
+            LOG("voice: DAVE keeps failing, no more re-adds (nothing is sent until a group forms)");
         return;
     }
+    t->readds = 0;
+    int first = !t->dave_ready;
+    t->dave_ready = 1;
     if (tid)
         send_json(t, voice_json_transition(23, tid));
-    t->dave_ready = 1;
-    update_state(t);
+    // The new epoch's keys are used once Discord executes the transition (op 22, which updates
+    // the state); a transition 0 or our first group takes effect now.
+    if (!tid || first)
+        update_state(t);
 }
 
 // Binary frame from the server: [seq][op][payload].
@@ -757,7 +828,7 @@ static int on_text(vthread *t, const char *json)
         return 0;
     if (cJSON_IsNumber(cJSON_GetObjectItem(m, "seq")))
         t->seq_ack = num(m, "seq");
-    int op = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(m, "op"));
+    int op = (int)json_int(m, "op", 0);
     cJSON *d = cJSON_GetObjectItem(m, "d");
     int r = 0;
     switch (op) {
@@ -782,7 +853,8 @@ static int on_text(vthread *t, const char *json)
         pthread_mutex_unlock(&lock);
         break;
     }
-    case 9:
+    case 9: // RESUMED: Discord sends no new op 4, so the engine comes back here
+        attach_audio(t);
         LOG("voice: resumed");
         break;
     case 11: { // CLIENTS_CONNECT
@@ -853,6 +925,13 @@ static int run_session(vthread *t)
             t->next_hb = now + t->hb_ms;
             continue;
         }
+        pthread_mutex_lock(&lock);
+        int dead = att_owner == t && vau_udp_dead();
+        pthread_mutex_unlock(&lock);
+        if (dead) { // a resume would keep the dead socket: identify again, for a new one
+            t->ready = 0;
+            return -1;
+        }
         int wait = vau_speaking_pending() ? 5 : 500;
         if (t->next_hb && t->next_hb - now < wait)
             wait = (int)(t->next_hb - now);
@@ -880,7 +959,7 @@ static int connect_once(vthread *t)
     snprintf(url, sizeof url, "wss://%s%s", t->endpoint, VOICE_QUERY);
     if (ws_open(&t->ws, url) != 0) {
         tls_close(&t->ws.tls);
-        return -1;
+        return VOICE_UNREACHABLE;
     }
     int code = run_session(t);
     audio_release(t);
@@ -896,7 +975,7 @@ static void finish(vthread *t, enum vstate s, const char *msg, int rejoin)
         cur = NULL;
         if (rejoin) { // the server dropped our session: ask again, it sends new details
             token[0] = endpoint[0] = 0;
-            op4 = (voice_op4){.mute = mute, .deaf = deaf};
+            op4 = (voice_op4){.mute = mute, .deaf = deaf, .leave_first = listed[0] != 0};
             copy(op4.guild, sizeof op4.guild, want_guild);
             copy(op4.channel, sizeof op4.channel, want_channel);
             op4_due = 1;
@@ -905,8 +984,7 @@ static void finish(vthread *t, enum vstate s, const char *msg, int rejoin)
         } else {
             guild[0] = channel[0] = session_id[0] = token[0] = endpoint[0] = 0;
             copy(err_text, sizeof err_text, msg);
-            if (s == V_IDLE)
-                want_guild[0] = want_channel[0] = 0;
+            want_guild[0] = want_channel[0] = 0; // an error too: READY must not rejoin it in a loop
             queue_leave_locked(); // keep the gateway's view in step: we are not in the channel
             set_state_locked(s);
         }
@@ -914,9 +992,17 @@ static void finish(vthread *t, enum vstate s, const char *msg, int rejoin)
     pthread_mutex_unlock(&lock);
 }
 
+static _Atomic int retry_now; // voice_retry: the app's Retry now
+
+void voice_retry(void)
+{
+    retry_now = 1;
+}
+
 static int sleep_unless_stopped(vthread *t, int seconds)
 {
-    for (int i = 0; i < seconds * 10 && !t->stop; i++)
+    retry_now = 0;
+    for (int i = 0; i < seconds * 10 && !t->stop && !retry_now; i++)
         usleep(100000);
     return !t->stop;
 }
@@ -925,12 +1011,13 @@ static void *voice_main(void *arg)
 {
     vthread *t = arg;
     int resumes = 0, backoff = 1;
+    int64_t unreachable_since = 0;
     for (;;) {
         int code = connect_once(t);
         if (t->stop)
             break;
-        if (t->healthy)
-            resumes = 0;
+        if (t->healthy) // it worked this time: the next drop starts the count again
+            resumes = 0, backoff = 1;
         char msg[160];
         if (code == -2) {
             finish(t, V_ERROR, t->err, 0);
@@ -959,9 +1046,19 @@ static void *voice_main(void *arg)
         }
         // A dropped socket or 4015 (voice server crashed): resume, with a limit.
         LOG("voice: connection ended (%d), resume in %d s", code, backoff);
-        if (++resumes > MAX_RESUMES) {
-            finish(t, V_ERROR, "Lost the voice server.", 0);
-            break;
+        if (code == VOICE_UNREACHABLE) {
+            if (!unreachable_since)
+                unreachable_since = mono_ms();
+            if (mono_ms() - unreachable_since > UNREACHABLE_MS) {
+                finish(t, V_ERROR, "Lost the voice server.", 0);
+                break;
+            }
+        } else {
+            unreachable_since = 0;
+            if (++resumes > MAX_RESUMES) {
+                finish(t, V_ERROR, "Lost the voice server.", 0);
+                break;
+            }
         }
         pthread_mutex_lock(&lock);
         if (cur == t)

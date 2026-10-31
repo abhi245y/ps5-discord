@@ -9,6 +9,7 @@
 // Everything in conn that both halves touch is guarded by mlock.
 // ponytail: no resume; a dropped stream connection ends the broadcast with an error.
 #include "stream.h"
+#include "json_num.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -31,7 +32,7 @@
 #include "ws.h"
 
 #define IDS 32
-#define MAX_USERS 64
+#define MAX_USERS 99 // a call's limit (voice.c)
 #define PT_OPUS 120
 #define PT_H264 101
 #define PT_H264_RTX 102
@@ -41,6 +42,7 @@
 #define VIDEO_EXT 0
 
 typedef struct {
+    unsigned gen; // the stream_start it serves (see gen below)
     char endpoint[256], token[256], server_id[IDS], user_id[IDS], session_id[64];
     ws_conn ws;
     int udp;
@@ -59,6 +61,7 @@ typedef struct {
     int media_ok, need_idr; // need_idr: viewers start from a keyframe, so P-frames wait
     uint16_t seq_a, seq_v;
     uint32_t ts_a, counter;
+    _Atomic int spent; // the 32-bit GCM nonce is nearly used up: the stream must end
     int64_t t0;
     unsigned sent_frames, sent_packets, sent_audio, dropped;
     char err[200];
@@ -68,6 +71,12 @@ static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;  // the gateway side be
 static pthread_mutex_t mlock = PTHREAD_MUTEX_INITIALIZER; // conn's shared part, DAVE
 static char state[16] = "off", error[200];
 static int want, running, viewers;
+// This generation's STREAM_CREATE came. Until it does, a STREAM_DELETE for the same key is
+// the previous stream's (stopped and started again at once), not this one's.
+static int created;
+// Each stream_start is a generation: a connection ending after Go Live was stopped and
+// started again (same key) must not take the new stream down with it.
+static unsigned gen;
 static char guild[IDS], channel[IDS], self[IDS], session[64], key_[160];
 static char rtc_server[IDS], endpoint[256], token[256];
 static cJSON *gw_queue[4];
@@ -132,8 +141,26 @@ static void gw_push(int op, cJSON *d)
     cJSON_AddItemToObject(m, "d", d);
     if (gw_count < 4)
         gw_queue[gw_count++] = m;
-    else
+    else {
+        LOG("stream: gateway queue full, dropped op %d", op);
         cJSON_Delete(m);
+    }
+}
+
+void stream_forget_gateway(void)
+{
+    pthread_mutex_lock(&lock);
+    while (gw_count)
+        cJSON_Delete(gw_queue[--gw_count]);
+    pthread_mutex_unlock(&lock);
+}
+
+int stream_gateway_pending(void)
+{
+    pthread_mutex_lock(&lock);
+    int n = gw_count;
+    pthread_mutex_unlock(&lock);
+    return n;
 }
 
 cJSON *stream_take_gateway(void)
@@ -171,57 +198,35 @@ static void send_rtp(conn *c, int pt, uint32_t ssrc, uint16_t seq, uint32_t ts, 
         h += 8;
     }
     memcpy(plain + h, p, n);
+    if (c->counter >= 0xFFFF0000u) { // a 32-bit nonce must never repeat (about 24 days of stream)
+        c->dropped++;
+        c->spent = 1; // serve() ends the stream with a reason
+        return;
+    }
     size_t len = voice_gcm_seal(c->key, c->counter++, plain, h + n, out, sizeof out);
-    if (len && send(c->udp, out, len, 0) == (ssize_t)len)
+    // Never wait here: this is Remote Play's video thread, and a full buffer is a lost packet.
+    if (len && send(c->udp, out, len, MSG_DONTWAIT) == (ssize_t)len)
         c->sent_packets++;
     else
         c->dropped++;
 }
 
-// The next NAL unit in Annex-B data from *pos: returns its start (after the start code)
-// and length, or NULL at the end.
-static const uint8_t *next_nal(const uint8_t *b, size_t n, size_t *pos, size_t *len)
+struct video_out {
+    conn *c;
+    uint32_t ts;
+};
+
+static void emit_video(void *user, const uint8_t *payload, size_t len, int marker)
 {
-    size_t i = *pos;
-    while (i + 3 <= n && !(b[i] == 0 && b[i + 1] == 0 && b[i + 2] == 1))
-        i++;
-    if (i + 3 > n)
-        return NULL;
-    size_t start = i + 3, j = start;
-    while (j + 3 <= n && !(b[j] == 0 && b[j + 1] == 0 && (b[j + 2] == 1 || (b[j + 2] == 0 && j + 3 < n && b[j + 3] == 1))))
-        j++;
-    if (j + 3 > n)
-        j = n;
-    *pos = j;
-    *len = j - start;
-    return b + start;
+    struct video_out *v = user;
+    send_rtp(v->c, PT_H264, v->c->video_ssrc, v->c->seq_v++, v->ts, marker, VIDEO_EXT, payload, len);
 }
 
-// mlock held. RFC 6184: a NAL up to RTP_MTU goes whole, a larger one as FU-A fragments.
+// mlock held. RFC 6184 (h264_packetize): a NAL up to RTP_MTU whole, a larger one as FU-A.
 static void send_frame_rtp(conn *c, const uint8_t *f, size_t n, uint32_t ts)
 {
-    size_t pos = 0, len;
-    const uint8_t *nal, *next;
-    nal = next_nal(f, n, &pos, &len);
-    while (nal) {
-        size_t nlen = len;
-        next = next_nal(f, n, &pos, &len);
-        int last_nal = next == NULL;
-        if (nlen <= RTP_MTU) {
-            send_rtp(c, PT_H264, c->video_ssrc, c->seq_v++, ts, last_nal, VIDEO_EXT, nal, nlen);
-        } else {
-            uint8_t frag[RTP_MTU + 2];
-            frag[0] = (uint8_t)((nal[0] & 0xe0) | 28);
-            for (size_t off = 1; off < nlen;) {
-                size_t chunk = nlen - off > RTP_MTU ? RTP_MTU : nlen - off;
-                frag[1] = (uint8_t)((off == 1 ? 0x80 : 0) | (off + chunk == nlen ? 0x40 : 0) | (nal[0] & 0x1f));
-                memcpy(frag + 2, nal + off, chunk);
-                off += chunk;
-                send_rtp(c, PT_H264, c->video_ssrc, c->seq_v++, ts, last_nal && off == nlen, VIDEO_EXT, frag, chunk + 2);
-            }
-        }
-        nal = next;
-    }
+    struct video_out v = {c, ts};
+    h264_packetize(f, n, RTP_MTU, emit_video, &v);
 }
 
 static void on_video(const uint8_t *au, size_t n, int keyframe)
@@ -231,7 +236,7 @@ static void on_video(const uint8_t *au, size_t n, int keyframe)
     int has_slice = 0, has_idr = 0, has_ps = 0;
     size_t pos = 0, len, nals = 0, payload = 0;
     const uint8_t *nal;
-    while ((nal = next_nal(au, n, &pos, &len)) && len) {
+    while ((nal = h264_next_nal(au, n, &pos, &len)) && len) {
         int t = nal[0] & 0x1f;
         nals++;
         payload += len;
@@ -263,7 +268,7 @@ static void on_video(const uint8_t *au, size_t n, int keyframe)
         memcpy(frame, sps_pps, extra);
         m = extra;
         pos = 0;
-        while ((nal = next_nal(au, n, &pos, &len)) && len) {
+        while ((nal = h264_next_nal(au, n, &pos, &len)) && len) {
             if ((nal[0] & 0x1f) == 9)
                 continue;
             static const uint8_t sc[4] = {0, 0, 0, 1};
@@ -312,6 +317,11 @@ static void on_audio(const uint8_t *opus, size_t n)
             else
                 p = body;
         }
+        // The clock, not the count, so dropped frames do not pull the sound behind the picture;
+        // never less than a frame on, so frames arriving together keep their order.
+        const uint32_t clock = (uint32_t)((mono_ms() - c->t0) * 48);
+        if ((int32_t)(clock - c->ts_a) > 0)
+            c->ts_a = clock;
         if (p) {
             send_rtp(c, PT_OPUS, c->audio_ssrc, c->seq_a++, c->ts_a, 0, 0, p, m);
             c->sent_audio++;
@@ -488,7 +498,7 @@ static void update_media(conn *c)
             daveEncryptorSetKeyRatchet(c->enc, r);
             daveKeyRatchetDestroy(r);
         }
-        // A new epoch or a failed commit clears dave_ready: the old key must not be used.
+        // A new group (op 24, epoch 1) clears dave_ready: the old key must not be used.
         ok = c->dave_ready && (r != NULL || daveEncryptorHasKeyRatchet(c->enc));
     }
     if (!c->enc)
@@ -568,7 +578,7 @@ static int on_session(conn *c, cJSON *d)
         return fatal(c, "Discord's stream server sent a bad key.");
     pthread_mutex_lock(&mlock);
     for (int i = 0; i < 32; i++)
-        c->key[i] = (uint8_t)cJSON_GetNumberValue(cJSON_GetArrayItem(k, i));
+        c->key[i] = (uint8_t)json_item_int(cJSON_GetArrayItem(k, i), 0);
     dave_start(c, (int)num(d, "dave_protocol_version"));
     c->enc = daveEncryptorCreate();
     if (c->enc) {
@@ -773,10 +783,12 @@ static int on_text(conn *c, const char *json)
     return r;
 }
 
-static int still_wanted(void)
+// A connection of an older generation (Go Live stopped and started again) is not wanted:
+// it must make way for the new one, which waits for it (connect_locked).
+static int still_wanted(const conn *c)
 {
     pthread_mutex_lock(&lock);
-    int w = want;
+    int w = want && c->gen == gen;
     pthread_mutex_unlock(&lock);
     return w && voice_wanted();
 }
@@ -789,8 +801,12 @@ static int serve(conn *c)
     c->hb_acked = 1;
     int64_t next_key = 0, next_log = mono_ms() + 5000;
     for (;;) {
-        if (!still_wanted())
+        if (!still_wanted(c))
             return 0;
+        if (c->spent) {
+            snprintf(c->err, sizeof c->err, "Go Live ran for too long in one go. Start it again.");
+            return -2;
+        }
         int64_t now = mono_ms();
         if (c->next_hb && now >= c->next_hb) {
             if (!c->hb_acked)
@@ -830,6 +846,8 @@ static int serve(conn *c)
     }
 }
 
+static void connect_locked(void);
+
 static void *stream_main(void *arg)
 {
     conn *c = arg;
@@ -855,17 +873,24 @@ static void *stream_main(void *arg)
                       : code != 0    ? "Lost Discord's stream server."
                                      : NULL;
     pthread_mutex_lock(&lock);
-    if (want) { // ended by itself: take the stream down at Discord too
-        cJSON *d = cJSON_CreateObject();
-        cJSON_AddStringToObject(d, "stream_key", key_);
-        gw_push(19, d);
-        want = 0;
+    const int current = c->gen == gen;
+    if (current) {
+        if (want) { // ended by itself: take the stream down at Discord too
+            cJSON *d = cJSON_CreateObject();
+            cJSON_AddStringToObject(d, "stream_key", key_);
+            gw_push(19, d);
+            want = 0;
+        }
+        rtc_server[0] = endpoint[0] = token[0] = 0;
     }
     running = 0;
-    rtc_server[0] = endpoint[0] = token[0] = 0;
+    if (!current)
+        connect_locked(); // the newer stream's details may have come while this one ended
     pthread_mutex_unlock(&lock);
-    set_state(why ? "error" : "off", why ? why : "");
-    bc_stop(); // the picture has nowhere to go
+    if (current) {
+        set_state(why ? "error" : "off", why ? why : "");
+        bc_stop(); // the picture has nowhere to go
+    }
     if (c->enc)
         daveEncryptorDestroy(c->enc);
     if (c->dave)
@@ -879,11 +904,12 @@ static void *stream_main(void *arg)
 // lock held. Both halves of the server's answer are in: open the connection.
 static void connect_locked(void)
 {
-    if (running || !rtc_server[0] || !endpoint[0] || !token[0])
+    if (running || !want || !rtc_server[0] || !endpoint[0] || !token[0])
         return;
     conn *c = calloc(1, sizeof *c);
     if (!c)
         return;
+    c->gen = gen;
     c->udp = -1;
     c->seq_ack = -1;
     copy(c->endpoint, sizeof c->endpoint, endpoint);
@@ -915,7 +941,10 @@ int stream_start(void)
         return 0;
     }
     want = 1;
+    gen++;
+    created = 0;
     viewers = 0;
+    rtc_server[0] = endpoint[0] = token[0] = 0; // the last stream's, if its connection still ends
     copy(guild, sizeof guild, g);
     copy(channel, sizeof channel, ch);
     copy(self, sizeof self, me);
@@ -963,6 +992,7 @@ void stream_on_dispatch(const char *type, cJSON *d)
         return;
     }
     if (strcmp(type, "STREAM_CREATE") == 0) {
+        created = 1;
         copy(rtc_server, sizeof rtc_server, str(d, "rtc_server_id"));
         connect_locked();
     } else if (strcmp(type, "STREAM_SERVER_UPDATE") == 0) {
@@ -972,9 +1002,17 @@ void stream_on_dispatch(const char *type, cJSON *d)
     } else if (strcmp(type, "STREAM_UPDATE") == 0) {
         viewers = cJSON_GetArraySize(cJSON_GetObjectItem(d, "viewer_ids"));
         LOG("stream: %d watching", viewers);
+    } else if (strcmp(type, "STREAM_DELETE") == 0 && !created) {
+        LOG("stream: the previous stream's end, ignored");
     } else if (strcmp(type, "STREAM_DELETE") == 0 && !cJSON_IsTrue(cJSON_GetObjectItem(d, "unavailable"))) {
         LOG("stream: Discord ended the stream (%s)", str(d, "reason") ? str(d, "reason") : "?");
         want = 0;
+        if (!running) { // no connection to end it: say so here, and stop the picture
+            pthread_mutex_unlock(&lock);
+            set_state("off", "");
+            bc_stop();
+            return;
+        }
     }
     pthread_mutex_unlock(&lock);
 }

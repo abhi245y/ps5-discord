@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <ctime>
 
+#include "core/save_file.hpp"
 #include "core/version.hpp"
 #include "screens/style.hpp"
 
@@ -34,6 +35,8 @@ enum class Act
     pair,
     sign_out,
     quit,
+    update, // Check for updates, or open the update dialog
+    restore, // the previous version back (asks first)
     pref, // a console-side setting (Row::key, discord::Prefs)
     ui_volume,
     sfx_volume,
@@ -144,13 +147,19 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
             pair.value = "Not paired";
             pair.desc = "Pair a console user once so Go Live can show your game.";
         }
-        Row mic{Kind::slider, "Input volume", "How loud you are in calls. Join one to see your level here.", "",
+        Row mic{Kind::slider, "Mic gain", "How loud you are in calls. Join one to see your level here.", "",
                 s.prefs.mic_gain, false, false, Act::pref};
         mic.key = "mic_gain";
         mic.percent = 20;
         mic.meter = v.active();
+        Row heard{Kind::slider, "Call volume",
+                  "How loud the others sound to you.", "",
+                  s.prefs.call_volume, false, false, Act::pref};
+        heard.key = "call_volume";
+        heard.percent = 20;
         return {
             mic,
+            heard,
             pair,
             choice_row("Go Live quality", "From the next Go Live on. Above 720p · 30 fps may need Nitro.",
                        "golive_quality", kQualities, s.prefs.golive_quality),
@@ -181,17 +190,42 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
         };
     case 4:
         return {
-            {Kind::info, "Your sign-in", "Kept on this console, encrypted: a copy of the file works nowhere else.", ""},
-            {Kind::info, "Network", "The core answers only this app, on this console; nothing on your network can reach it.",
-             ""},
+            toggle_row("Show what I'm playing", "Your PS5 game on Discord. Covers: prosperopatches.com",
+                       "share_game", s.prefs.share_game),
+            {Kind::info, "Kept on this console",
+             "Your sign-in is encrypted to this console, and nothing on your network can reach the app.", ""},
         };
-    default:
-        return {
-            {Kind::value, "Version", "The app and its core.", version.empty() ? "development" : version},
-            {Kind::value, "License", "Free software: you may share and change it.", "AGPL-3.0"},
-            {Kind::value, "Source", "Where the code lives.", "github.com/abhi245y/ps5-discord"},
-            {Kind::value, "Emoji", "Twemoji graphics by Twitter and contributors.", "CC-BY 4.0"},
-        };
+    default: {
+        const discord::Update &u = s.update;
+        // An older core has no update object: no row.
+        std::vector<Row> rows{{Kind::value, "Version", "", version.empty() ? "development" : version}};
+        if (!u.state.empty())
+        {
+            const bool open = u.state == "available" || u.state == "ready" || u.state == "downloading" ||
+                              u.state == "unpacking";
+            std::string desc = u.state == "checking"      ? "Checking..."
+                               : u.state == "available"   ? "Version " + u.version + " available"
+                               : u.state == "downloading" ? "Downloading " + std::to_string(u.total > 0 ? u.done * 100 / u.total : 0) + "%"
+                               : u.state == "unpacking"   ? "Unpacking..."
+                               : u.state == "ready"       ? "Ready: restart to finish"
+                               : u.state == "applying"    ? "Restarting..."
+                               : u.state == "restoring"   ? "Rolling back..."
+                               : u.state == "failed"      ? (u.error.empty() ? "The last update failed" : u.error)
+                               : !u.error.empty()         ? u.error
+                               : !u.check_error.empty()   ? u.check_error
+                                                          : "Up to date";
+            rows.push_back({Kind::button, "Updates", desc, open ? "Open" : "Check", 0, false, false, Act::update});
+            if (!u.previous.empty() && u.state == "none")
+                rows.push_back({Kind::button, "Previous version", "Roll back to " + u.previous, "Roll back", 0, false,
+                                false, Act::restore});
+        }
+        rows.insert(rows.end(), {
+            {Kind::value, "License", "", "AGPL-3.0"},
+            {Kind::value, "Source", "", "github.com/abhi245y/ps5-discord"},
+            {Kind::value, "Emoji", "", "Twemoji, CC-BY 4.0"},
+        });
+        return rows;
+    }
     }
 }
 
@@ -276,7 +310,21 @@ void slider(DrawList &list, const Ink &ink, float right, float cy, int level, in
 
 } // namespace
 
-SettingsScreen::SettingsScreen(const Ink &ink) : ink_(ink), version_(hui::read_content_version("/app0/sce_sys/param.json")) {}
+// The release the build wrote (tools/build.sh version.txt), else param.json's content version.
+static std::string app_version()
+{
+    std::string text;
+    if (hui::save::read_file("/app0/version.txt", &text, 64))
+    {
+        while (!text.empty() && (text.back() == '\n' || text.back() == ' '))
+            text.pop_back();
+        if (!text.empty())
+            return text;
+    }
+    return hui::read_content_version("/app0/sce_sys/param.json");
+}
+
+SettingsScreen::SettingsScreen(const Ink &ink) : ink_(ink), version_(app_version()) {}
 
 void SettingsScreen::open()
 {
@@ -492,6 +540,14 @@ bool SettingsScreen::update(const discord::Snapshot &s, const hui::InputFrame &i
         return true;
     }
     auto set_pref = [&](const char *key, int value) {
+        // Only from 720p · 30 fps up: who has chosen more once knows.
+        if (std::string(key) == "golive_quality" && s.prefs.golive_quality == 0 && value > 0)
+        {
+            confirm_ = Confirm::quality;
+            quality_ = value;
+            feedback.play(hui::audio::Cue::modal_open);
+            return;
+        }
         discord::Request r;
         r.kind = discord::Request::Kind::set_pref;
         r.content = key;
@@ -500,10 +556,22 @@ bool SettingsScreen::update(const discord::Snapshot &s, const hui::InputFrame &i
     };
     if (confirm_ != Confirm::none)
     {
-        if (input.is_pressed(Action::confirm))
+        if (input.is_pressed(Action::confirm) && confirm_ == Confirm::quality)
         {
             discord::Request r;
-            r.kind = confirm_ == Confirm::quit ? discord::Request::Kind::quit : discord::Request::Kind::sign_out;
+            r.kind = discord::Request::Kind::set_pref;
+            r.content = "golive_quality";
+            r.value = quality_;
+            requests.push_back(r);
+            confirm_ = Confirm::none;
+            feedback.play(hui::audio::Cue::select);
+        }
+        else if (input.is_pressed(Action::confirm))
+        {
+            discord::Request r;
+            r.kind = confirm_ == Confirm::quit      ? discord::Request::Kind::quit
+                     : confirm_ == Confirm::restore ? discord::Request::Kind::update_restore
+                                                    : discord::Request::Kind::sign_out;
             requests.push_back(r);
             feedback.play(hui::audio::Cue::select);
             open();
@@ -623,6 +691,22 @@ bool SettingsScreen::update(const discord::Snapshot &s, const hui::InputFrame &i
                 feedback.play(hui::audio::Cue::slider);
             }
             break;
+        case Act::update:
+            if (row.value == "Open")
+                update_dialog_ = true;
+            else
+            {
+                discord::Request r;
+                r.kind = discord::Request::Kind::update_check;
+                r.on = true; // from Settings: the core does not throttle
+                requests.push_back(r);
+            }
+            feedback.play(hui::audio::Cue::select);
+            break;
+        case Act::restore:
+            confirm_ = Confirm::restore;
+            feedback.play(hui::audio::Cue::modal_open);
+            break;
         case Act::sign_out:
         case Act::quit:
             confirm_ = row.act == Act::quit ? Confirm::quit : Confirm::sign_out;
@@ -679,8 +763,9 @@ void SettingsScreen::draw(const discord::Snapshot &s, const hui::Settings &app, 
             list.rounded_rect(r, kCardRadius, kRaised);
         else
             list.rounded_rect({r.x + 28.0f, r.y + r.h + kRowGap * 0.5f - 1.0f, r.w - 56.0f, 1.0f}, 0.0f, kLine);
-        ui::text(list, ink_.fonts.semibold, row.title, r.x + 28.0f, r.y + 42.0f, 28.0f, kText);
         const std::string desc = row.soon ? "Coming in a later build." : row.desc;
+        const bool alone = desc.empty() && !row.meter; // no line under it: the title sits centred
+        ui::text(list, ink_.fonts.semibold, row.title, r.x + 28.0f, alone ? cy + 10.0f : r.y + 42.0f, 28.0f, kText);
         // The description gets the row's width, less the control at the right.
         const float control = row.kind == Kind::info     ? 0.0f
                               : row.kind == Kind::button ? 260.0f
@@ -753,6 +838,16 @@ void SettingsScreen::draw(const discord::Snapshot &s, const hui::Settings &app, 
                      "Sign out");
     else if (confirm_ == Confirm::quit)
         confirm_card(list, ink_, "Quit Discord?", kQuitText, "Quit");
+    else if (confirm_ == Confirm::restore)
+        confirm_card(list, ink_, "Roll back the update?",
+                     "The app closes, a call or Go Live ends, and " + s.update.previous +
+                         " comes back. Open Discord again to use it. Check for updates offers this version again.",
+                     "Roll back");
+    else if (confirm_ == Confirm::quality)
+        confirm_card(list, ink_, std::string("Use ") + kQualities[std::clamp(quality_, 0, 3)] + "?",
+                     "Discord allows this only with Nitro or in a boosted server. Without them it may lag or fail "
+                     "for viewers, and Discord could act on your account. 720p · 30 fps is recommended.",
+                     "Use it");
 }
 
 void SettingsScreen::draw_pair(const discord::Snapshot &s, DrawList &list) const

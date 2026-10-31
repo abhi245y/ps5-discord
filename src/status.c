@@ -1,5 +1,7 @@
 #include "status.h"
 
+#include "build_config.h"
+
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -14,13 +16,15 @@
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static char state[32] = "starting", user[64];
-static int guilds, dms;
+static int guilds, dms, attempt;
 static long events;
 static char qr_url[128], note[256];
 static char qr_bits[177 * 177 + 1]; // row-major '1' = dark module
 static int qr_size;
+#if CORE_LAN
 static char log_ring[LOG_LINES][160];
 static unsigned log_next;
+#endif
 static time_t started;
 
 void status_state(const char *s)
@@ -67,10 +71,14 @@ void status_event(void)
 
 void status_log(const char *line)
 {
+#if CORE_LAN
     pthread_mutex_lock(&lock);
     snprintf(log_ring[log_next % LOG_LINES], sizeof log_ring[0], "%s", line);
     log_next++;
     pthread_mutex_unlock(&lock);
+#else
+    (void)line;
+#endif
 }
 
 void status_note(const char *text)
@@ -80,25 +88,42 @@ void status_note(const char *text)
     pthread_mutex_unlock(&lock);
 }
 
-char *status_json(void)
+void status_attempt(int n)
+{
+    pthread_mutex_lock(&lock);
+    attempt = n;
+    pthread_mutex_unlock(&lock);
+}
+
+char *status_json(int with_qr, cJSON *update)
 {
     cJSON *j = cJSON_CreateObject();
+    if (update)
+        cJSON_AddItemToObject(j, "update", update);
     pthread_mutex_lock(&lock);
     cJSON_AddNumberToObject(j, "api_version", CORE_API_VERSION);
+    cJSON_AddStringToObject(j, "version", CORE_VERSION);
     cJSON_AddStringToObject(j, "state", state);
     cJSON_AddStringToObject(j, "user", user);
     cJSON_AddNumberToObject(j, "guilds", guilds);
     cJSON_AddNumberToObject(j, "dms", dms);
     cJSON_AddNumberToObject(j, "events", (double)events);
     cJSON_AddNumberToObject(j, "uptime", started ? (double)(time(NULL) - started) : 0);
-    cJSON_AddStringToObject(j, "qr_url", qr_url);
-    cJSON_AddNumberToObject(j, "qr_size", qr_size);
-    cJSON_AddStringToObject(j, "qr", qr_bits);
+    // The app asks every second: the QR (about 31 KB) only while it is shown, and only
+    // with the key: /api/state is open, and the QR is a sign-in another program could relay.
+    if (with_qr && strcmp(state, "login") == 0) {
+        cJSON_AddStringToObject(j, "qr_url", qr_url);
+        cJSON_AddNumberToObject(j, "qr_size", qr_size);
+        cJSON_AddStringToObject(j, "qr", qr_bits);
+    }
     cJSON_AddStringToObject(j, "note", note);
+    cJSON_AddNumberToObject(j, "attempt", attempt);
+#if CORE_LAN // a development build's log, for curl on the LAN; a release has klog only
     cJSON *log = cJSON_AddArrayToObject(j, "log");
     unsigned first = log_next > LOG_LINES ? log_next - LOG_LINES : 0;
     for (unsigned i = first; i < log_next; i++)
         cJSON_AddItemToArray(log, cJSON_CreateString(log_ring[i % LOG_LINES]));
+#endif
     pthread_mutex_unlock(&lock);
     char *s = cJSON_PrintUnformatted(j);
     cJSON_Delete(j);

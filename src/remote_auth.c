@@ -1,4 +1,5 @@
 #include "remote_auth.h"
+#include "json_num.h"
 #include "browser_auth.h"
 
 #include <stdbool.h>
@@ -211,8 +212,8 @@ int remote_auth_login(char *out, size_t cap)
             continue;
         }
         if (strcmp(op, "hello") == 0) {
-            interval = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(m, "heartbeat_interval"));
-            deadline = now_ms() + (int64_t)cJSON_GetNumberValue(cJSON_GetObjectItem(m, "timeout_ms"));
+            interval = (int)json_int(m, "heartbeat_interval", 0);
+            deadline = now_ms() + (int64_t)json_int(m, "timeout_ms", 120000); // missing: Discord's 2 min
             next_beat = now_ms() + (int64_t)(interval * (rand() / (RAND_MAX + 1.0)));
             send_op(&ws, "init", "encoded_public_key", pub_b64);
         } else if (strcmp(op, "nonce_proof") == 0) {
@@ -236,7 +237,7 @@ int remote_auth_login(char *out, size_t cap)
             snprintf(qr_url, sizeof qr_url, QR_PREFIX "%s", fp);
             status_qr(qr_url);
             status_state("login");
-            LOG("remote auth: QR ready, open the web UI on port 9041 or scan below "
+            LOG("remote auth: QR ready, the app shows it; or scan below "
                 "(Discord app: Settings > Scan QR Code)");
             log_qr(qr_url);
         } else if (strcmp(op, "pending_ticket") == 0) {

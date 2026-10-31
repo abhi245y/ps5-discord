@@ -1,4 +1,5 @@
 #include "gateway.h"
+#include "json_num.h"
 
 #include <pthread.h>
 #include <stdint.h>
@@ -14,6 +15,8 @@
 
 #include "chat.h"
 #include "log.h"
+#include "playing.h"
+#include "prefs.h"
 #include "props.h"
 #include "status.h"
 #include "voice.h"
@@ -26,7 +29,7 @@
 // Same value the web client sent in build 641004 (docs/gateway.md).
 #define CAPABILITIES 1734653
 
-enum { OP_DISPATCH = 0, OP_HEARTBEAT = 1, OP_IDENTIFY = 2, OP_VOICE_STATE = 4, OP_RESUME = 6, OP_RECONNECT = 7,
+enum { OP_DISPATCH = 0, OP_HEARTBEAT = 1, OP_IDENTIFY = 2, OP_PRESENCE = 3, OP_VOICE_STATE = 4, OP_RESUME = 6, OP_RECONNECT = 7,
        OP_INVALID_SESSION = 9, OP_HELLO = 10, OP_HEARTBEAT_ACK = 11, OP_GUILD_SUBSCRIPTIONS_BULK = 37 };
 
 typedef struct {
@@ -37,10 +40,18 @@ typedef struct {
     char session_id[128];
     char resume_url[256];
     int heartbeat_ms;
+    int ready; // READY or RESUMED on this connection: Discord took us
     int64_t next_heartbeat; // monotonic ms, 0 = not started
     int acked;
     int reconnect; // set by handlers: leave the read loop
+    char game[128]; // the game Discord shows for this session ("" none)
+    char cover[512]; // ... and its picture (playing_cover)
+    int64_t game_check; // monotonic ms of the next look at the console's game
 } gateway;
+
+// READY: the user's linked PlayStation account already posts the game (Sony's own
+// integration), so this session sends none.
+static int sony_shows_game;
 
 // All socket I/O stays on the gateway thread (an mbedTLS context is not safe for a
 // concurrent read and write). Other threads leave requests here.
@@ -127,16 +138,27 @@ static void on_dispatch(gateway *g, const char *t, cJSON *d)
         voice_on_ready(d);
         snprintf(g->session_id, sizeof g->session_id, "%s", sid ? sid : "");
         snprintf(g->resume_url, sizeof g->resume_url, "%s", url ? url : "");
+        sony_shows_game = 0;
+        cJSON *acct;
+        cJSON_ArrayForEach(acct, cJSON_GetObjectItem(d, "connected_accounts"))
+            sony_shows_game |= strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(acct, "type")) ?: "", "playstation") == 0 &&
+                               cJSON_IsTrue(cJSON_GetObjectItem(acct, "show_activity"));
+        g->game[0] = g->cover[0] = 0; // IDENTIFY sent no activities
+        g->game_check = 0;
         status_user(name, cJSON_GetArraySize(cJSON_GetObjectItem(d, "guilds")),
                     cJSON_GetArraySize(cJSON_GetObjectItem(d, "private_channels")));
         status_state("ready");
         status_note(NULL);
+        g->ready = 1;
+        status_attempt(0);
         LOG("gateway: READY as %s, %d guilds, %d DMs, resume via %s", name ? name : "?",
             cJSON_GetArraySize(cJSON_GetObjectItem(d, "guilds")),
             cJSON_GetArraySize(cJSON_GetObjectItem(d, "private_channels")), g->resume_url);
     } else if (strcmp(t, "RESUMED") == 0) {
         status_state("ready");
         status_note(NULL);
+        g->ready = 1;
+        status_attempt(0);
         LOG("gateway: RESUMED");
     } else if (strcmp(t, "VOICE_STATE_UPDATE") == 0) {
         LOG("gateway: VOICE_STATE_UPDATE %s mute=%d", cJSON_GetObjectItem(d, "guild_id") &&
@@ -160,7 +182,7 @@ static int on_message(gateway *g, const char *json)
     cJSON *m = cJSON_Parse(json);
     if (!m)
         return LOG("gateway: bad json"), -1;
-    int op = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(m, "op"));
+    int op = (int)json_int(m, "op", 0);
     cJSON *s = cJSON_GetObjectItem(m, "s"), *d = cJSON_GetObjectItem(m, "d");
     if (cJSON_IsNumber(s))
         g->seq = (int64_t)s->valuedouble;
@@ -168,7 +190,9 @@ static int on_message(gateway *g, const char *json)
     int r = 0;
     switch (op) {
     case OP_HELLO:
-        g->heartbeat_ms = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(d, "heartbeat_interval"));
+        g->heartbeat_ms = (int)json_int(d, "heartbeat_interval", 41250);
+        if (g->heartbeat_ms < 1000) // 0 would be a heartbeat on every turn of the loop
+            g->heartbeat_ms = 1000;
         g->next_heartbeat = now_ms() + (int64_t)(g->heartbeat_ms * (rand() / (RAND_MAX + 1.0)));
         g->acked = 1;
         LOG("gateway: HELLO, heartbeat %d ms", g->heartbeat_ms);
@@ -207,11 +231,18 @@ static int on_message(gateway *g, const char *json)
 
 static int send_pending(gateway *g);
 
-static volatile int switching; // gateway_switch: another console user's account is wanted
+static _Atomic int switching; // gateway_switch: another console user's account is wanted
 
 void gateway_switch(int on)
 {
     switching = on;
+}
+
+static _Atomic int retry_now;
+
+void gateway_retry(void)
+{
+    retry_now = 1;
 }
 
 int gateway_switching(void)
@@ -261,6 +292,7 @@ static int run_connection(gateway *g)
             g->next_heartbeat += g->heartbeat_ms;
             continue;
         }
+        voice_tick();
         if (send_pending(g) != 0) {
             result = -1;
             break;
@@ -325,14 +357,74 @@ static int send_voice_state(gateway *g, const voice_op4 *v)
     return send_json(g, op_msg(OP_VOICE_STATE, d));
 }
 
+// Discord's "Playing <game>": a look every 15 s, op 3 only on a change (Discord allows
+// about 5 presence updates a minute). A RESUME keeps the session's presence; READY starts none.
+// The cover arrives a look or two after the name, and is sent then.
+static int send_game(gateway *g)
+{
+    static char seen[128];
+    static int64_t since; // when the game in front was first seen: Discord shows the time played
+    int64_t now = now_ms();
+    if (now < g->game_check)
+        return 0;
+    g->game_check = now + 15000;
+    char title[16], name[128] = "", cover[512] = "";
+    if (prefs_get("share_game") && !sony_shows_game)
+        playing_now(title, name, sizeof name);
+    if (name[0])
+        playing_cover(title, g->token, cover, sizeof cover);
+    if (strcmp(name, seen) != 0) {
+        snprintf(seen, sizeof seen, "%s", name);
+        since = (int64_t)time(NULL) * 1000;
+    }
+    if (strcmp(name, g->game) == 0 && strcmp(cover, g->cover) == 0)
+        return 0;
+    snprintf(g->game, sizeof g->game, "%s", name);
+    snprintf(g->cover, sizeof g->cover, "%s", cover);
+    cJSON *d = cJSON_CreateObject();
+    cJSON_AddStringToObject(d, "status", "unknown"); // as IDENTIFY: the status set elsewhere stays
+    cJSON_AddNumberToObject(d, "since", 0);
+    cJSON *acts = cJSON_AddArrayToObject(d, "activities");
+    if (name[0]) {
+        cJSON *a = cJSON_CreateObject();
+        cJSON_AddNumberToObject(a, "type", 0);
+        cJSON_AddStringToObject(a, "name", name);
+        cJSON_AddNumberToObject(cJSON_AddObjectToObject(a, "timestamps"), "start", (double)since);
+        if (PLAYING_APP_ID[0]) // its icon when there is no cover
+            cJSON_AddStringToObject(a, "application_id", PLAYING_APP_ID);
+        if (cover[0]) {
+            cJSON *assets = cJSON_AddObjectToObject(a, "assets");
+            cJSON_AddStringToObject(assets, "large_image", cover);
+            cJSON_AddStringToObject(assets, "large_text", name);
+        }
+        cJSON_AddItemToArray(acts, a);
+    }
+    cJSON_AddFalseToObject(d, "afk");
+    LOG("gateway: playing %s", name[0] ? name : "nothing");
+    return send_json(g, op_msg(OP_PRESENCE, d));
+}
+
 // Called on the gateway thread between reads.
 static int send_pending(gateway *g)
 {
+    // Only once Discord took this connection (READY or RESUMED): anything sent before the
+    // resume is answered with 4003 and lost with the connection. It waits in its queue.
+    if (!g->ready)
+        return 0;
     voice_op4 v;
-    if (g->session_id[0] && voice_take_request(&v) && send_voice_state(g, &v) != 0)
+    if (voice_take_request(&v)) {
+        if (v.leave_first) { // otherwise a join of the channel Discord has us in brings no reply
+            voice_op4 leave = {.mute = v.mute, .deaf = v.deaf};
+            if (send_voice_state(g, &leave) != 0)
+                return -1;
+        }
+        if (send_voice_state(g, &v) != 0)
+            return -1;
+    }
+    if (send_game(g) != 0)
         return -1;
     cJSON *op;
-    while (g->session_id[0] && (op = stream_take_gateway()))
+    while ((op = stream_take_gateway()))
         if (send_json(g, op) != 0) // Go Live ops 18, 22, 19
             return -1;
     char guild[32];
@@ -340,7 +432,7 @@ static int send_pending(gateway *g)
     snprintf(guild, sizeof guild, "%s", pending_subscribe);
     pending_subscribe[0] = 0;
     pthread_mutex_unlock(&pending_lock);
-    if (!guild[0] || !g->session_id[0])
+    if (!guild[0])
         return 0;
     cJSON *sub = cJSON_CreateObject(), *subs = cJSON_AddObjectToObject(sub, "subscriptions");
     cJSON *opts = cJSON_AddObjectToObject(subs, guild);
@@ -358,36 +450,40 @@ static void note_unreachable(void)
     int dns_ok = getaddrinfo("gateway.discord.gg", "443", &hints, &ai) == 0;
     if (ai)
         freeaddrinfo(ai);
-    status_note(dns_ok ? "Can't reach Discord. Check the console's internet connection. Trying again."
-                       : "Can't reach Discord: the console can't look up its address. Check the console's "
-                         "internet connection and DNS (for example nanoDNS). Trying again.");
+    // Short: the app shows it on one line. No address at all is almost always no network.
+    status_note(dns_ok ? "Can't reach Discord." : "No internet connection.");
 }
 
 int gateway_run(const char *token)
 {
     gateway g = {.token = token, .seq = -1};
-    int backoff = 1;
+    int backoff = 1, attempt = 0;
     for (;;) {
         int code = run_connection(&g);
         if (code == GATEWAY_SWITCH)
             return code;
-        switch (code) {
-        case 4004: // authentication failed
-        case 4010: case 4011: case 4012: case 4013: case 4014:
+        const int action = gateway_close_action(code);
+        if (action == GATEWAY_STOP) {
             LOG("gateway: fatal close %d, stopping", code);
             return code;
-        case 4007: // invalid seq
-        case 4009: // session timed out
-            drop_session(&g);
-            break;
         }
-        if (g.heartbeat_ms) // got HELLO this time: the network is fine
-            backoff = 1;
-        else if (backoff >= 2) // a second miss in a row: say why in the app
+        if (action == GATEWAY_FRESH)
+            drop_session(&g);
+        // Only a session Discord accepted resets the wait: a close after HELLO (rate limit,
+        // invalid session) must not turn into an identify every second.
+        if (g.ready)
+            backoff = 1, attempt = 0;
+        else if (!g.heartbeat_ms && backoff >= 2) // no HELLO a second time in a row: say why in the app
             note_unreachable();
         g.heartbeat_ms = 0;
+        g.ready = 0;
         LOG("gateway: connection ended (%d), retry in %d s", code, backoff);
-        sleep((unsigned)backoff);
-        backoff = backoff < 15 ? backoff * 2 : 15; // short cap: back soon once the network is
+        status_attempt(++attempt);
+        retry_now = 0;
+        for (int i = 0; i < backoff * 5 && !switching && !retry_now; i++) // another user, or Retry now: go now
+            usleep(200000);
+        if (switching)
+            return GATEWAY_SWITCH;
+        backoff = gateway_next_wait(backoff);
     }
 }

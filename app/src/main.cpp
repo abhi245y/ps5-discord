@@ -25,7 +25,6 @@
 #include "platform/ps5/audio_out.hpp"
 #include "platform/ps5/display_egl.hpp"
 #include "platform/ps5/ime.hpp"
-#include "platform/ps5/usb_keyboard.hpp"
 #include "screens/emoji_picker.hpp"
 #include "platform/ps5/voice_audio.hpp"
 #include "platform/ps5/pad.hpp"
@@ -232,6 +231,10 @@ int main()
     sys::log("[HUI] storage dir=%d", save::ensure_directory(kDataRoot) ? 1 : 0);
     screens::EmojiPicker::set_store(std::string(kDataRoot) + "/emoji-recent.txt");
 
+    // First, before anything that can fail: a half-updated folder must still start the core
+    // that finishes the swap (or rolls it back).
+    discord::ensure_core();
+
     // The display opens at the saved resolution (1080p if that fails).
     const Settings saved = app::Shell::load_settings(kDataRoot);
     int resolution = ps5::Display::supports_display_modes() ? saved.resolution : 0;
@@ -239,7 +242,7 @@ int main()
     if (!open_display(display, &resolution))
     {
         sys::log("[HUI] fatal: display open failed");
-        sys::park();
+        sys::quit(); // ends this launch, so a broken build counts as a failed one
     }
 
     gfx::Renderer renderer;
@@ -259,7 +262,7 @@ int main()
         !load_font(renderer, "patrick-hand.huifont", &hand, &fonts.hand))
     {
         sys::log("[HUI] fatal: renderer init failed");
-        sys::park();
+        sys::quit();
     }
     gfx::Shaper shaper;
     app::attach_text_engine(shaper, renderer, std::string(kAssets) + "/fonts",
@@ -271,23 +274,61 @@ int main()
     discord::Client client;
     const int utc_offset = console_utc_minutes();
     // Discord images: asked for while drawing, downloaded by the client, uploaded here.
-    // ponytail: small pictures are kept for the session; big ones are forgotten when their
-    // screen closes (art.forget). Evict by use if the small ones ever add up.
-    std::unordered_map<std::string, app::ArtSet::Remote> remote_textures; // texture 0: on its way or failed
-    art.remote = [&](const std::string &url) -> app::ArtSet::Remote {
-        const auto found = remote_textures.find(url);
-        if (found != remote_textures.end())
-            return found->second;
-        remote_textures.emplace(url, app::ArtSet::Remote{});
-        client.want_image(url);
-        return {};
+    // Big ones are forgotten when their screen closes (art.forget); past kTextureBudget the
+    // least recently drawn go (evict_textures), and a failed one is asked for again after 10 s.
+    struct RemoteTexture
+    {
+        app::ArtSet::Remote art; // texture 0: on its way or failed
+        std::int64_t used_us = 0, failed_us = 0;
+        std::size_t bytes = 0;
     };
-    art.forget = [&](const std::string &url) {
+    std::unordered_map<std::string, RemoteTexture> remote_textures;
+    std::size_t texture_bytes = 0;
+    art.remote = [&](const std::string &url) -> app::ArtSet::Remote {
+        const std::int64_t now = sys::monotonic_us();
         const auto found = remote_textures.find(url);
         if (found == remote_textures.end())
-            return;
-        renderer.batch().destroy_texture(found->second.texture);
-        remote_textures.erase(found); // one still on its way is dropped when it lands
+        {
+            remote_textures.emplace(url, RemoteTexture{{}, now});
+            client.want_image(url);
+            return {};
+        }
+        RemoteTexture &t = found->second;
+        t.used_us = now;
+        if (!t.art.texture && t.failed_us && now - t.failed_us > 10000000) // one more try
+        {
+            t.failed_us = 0;
+            client.want_image(url);
+        }
+        return t.art;
+    };
+    const auto drop_texture = [&](std::unordered_map<std::string, RemoteTexture>::iterator it) {
+        if (it->second.art.texture)
+            renderer.batch().destroy_texture(it->second.art.texture);
+        texture_bytes -= it->second.bytes;
+        return remote_textures.erase(it); // one still on its way is dropped when it lands
+    };
+    art.forget = [&](const std::string &url) {
+        if (const auto found = remote_textures.find(url); found != remote_textures.end())
+            drop_texture(found);
+    };
+    // Avatars and emoji are small, but a long session on busy servers adds them up, and a
+    // GIF sticker's sheet is megabytes: keep the most recently drawn within the budget. One
+    // drawn in the last two seconds is on screen and stays.
+    constexpr std::size_t kTextureBudget = 256u << 20;
+    const auto evict_textures = [&] {
+        const std::int64_t recent = sys::monotonic_us() - 2000000;
+        while (texture_bytes > kTextureBudget)
+        {
+            auto oldest = remote_textures.end();
+            for (auto it = remote_textures.begin(); it != remote_textures.end(); ++it)
+                if (it->second.bytes && it->second.used_us < recent &&
+                    (oldest == remote_textures.end() || it->second.used_us < oldest->second.used_us))
+                    oldest = it;
+            if (oldest == remote_textures.end())
+                return;
+            drop_texture(oldest);
+        }
     };
 
     ps5::Pad pad;
@@ -434,10 +475,6 @@ int main()
         const std::size_t count = pad.read(samples);
         InputFrame input = tracker.update(std::span<const PadSample>(samples, count),
                                           static_cast<std::uint64_t>(now));
-        // A keyboard plugged into the console types and navigates (read by the core).
-        if (!tour)
-            for (const discord::KeyPress &k : client.take_keys())
-                ps5::apply_key(input, {k.usage, k.mods, k.led});
         if (!remote_typed.empty())
         {
             // One key a frame, as typing would arrive.
@@ -495,9 +532,25 @@ int main()
         }
         snapshot.utc_offset_minutes = utc_offset;
         for (const discord::Image &image : client.take_images())
-            if (const auto wanted = remote_textures.find(image.url); wanted != remote_textures.end() && image.w > 0)
-                wanted->second = {renderer.batch().create_texture(image.w, image.h, image.rgba.data()), image.w,
-                                  image.h, image.frames, image.columns, image.fps};
+        {
+            const auto wanted = remote_textures.find(image.url);
+            if (wanted == remote_textures.end())
+                continue;
+            RemoteTexture &t = wanted->second;
+            if (image.w <= 0)
+            {
+                t.failed_us = sys::monotonic_us();
+                continue;
+            }
+            if (t.art.texture) // a second download of the same picture: the first one goes
+                renderer.batch().destroy_texture(t.art.texture);
+            texture_bytes -= t.bytes;
+            t.art = {renderer.batch().create_texture(image.w, image.h, image.rgba.data()), image.w, image.h,
+                     image.frames, image.columns, image.fps};
+            t.bytes = static_cast<std::size_t>(image.w) * image.h * 4;
+            texture_bytes += t.bytes;
+        }
+        evict_textures();
         shell.update(input, dt);
         if (shell.take_settings_changed())
         {

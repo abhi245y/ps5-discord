@@ -99,6 +99,13 @@ int connect_core(std::uint16_t port)
         close(fd);
         return -1;
     }
+    // The key first (src/core_key.h), while the socket still blocks: 64 bytes on loopback.
+    const std::string key = core_key();
+    if (key.empty() || send(fd, key.data(), key.size(), 0) != static_cast<ssize_t>(key.size()))
+    {
+        close(fd);
+        return -1;
+    }
     const int flags = fcntl(fd, F_GETFL, 0);
     fcntl(fd, F_SETFL, flags | O_NONBLOCK);
     const int one = 1;

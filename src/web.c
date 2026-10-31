@@ -1,4 +1,5 @@
 #include "web.h"
+#include "json_num.h"
 
 #include <sys/time.h>
 #include <time.h>
@@ -9,16 +10,19 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <errno.h>
 #include <unistd.h>
 
 #include <cJSON.h>
 
 #include "chat.h"
+#include "core_key.h"
 #include "gateway.h"
 #include "http.h"
 #include "log.h"
 #include "ratelimit.h"
 #include "status.h"
+#include "update.h"
 #include "voice.h"
 #include "voice_audio.h"
 #include "controller_voice.h"
@@ -84,20 +88,26 @@ static void reply_json(int c, char *j)
 // One REST call; a 429 is retried once after the wait Discord names, if short.
 static http_response rest(const char *method, const char *path, const char *json)
 {
-    http_response res = http_request(method, path, json, chat_token());
+    char token[256];
+    chat_token(token, sizeof token);
+    http_response res = http_request(method, path, json, token);
     const double wait = ratelimit_retry_after(&res, 5.0);
     if (wait > 0) {
         LOG("rate limited on %s %s, retrying in %.2f s", method, path, wait);
         free(res.body);
         usleep((useconds_t)(wait * 1e6) + 50000);
-        res = http_request(method, path, json, chat_token());
+        res = http_request(method, path, json, token);
     }
     return res;
 }
 
 static void reply_rest(int c, http_response res)
 {
-    const char *body = res.body && res.body[0] ? res.body : "null";
+    // Discord's reply goes in as JSON only when it is JSON: a proxy's HTML error page would
+    // make the whole reply unreadable, and the app would lose the status with it.
+    cJSON *parsed = res.body ? cJSON_Parse(res.body) : NULL;
+    const char *body = parsed ? res.body : "null";
+    cJSON_Delete(parsed);
     size_t cap = strlen(body) + 48;
     char *out = malloc(cap);
     if (out)
@@ -145,7 +155,26 @@ static void api_mentions(int c)
 }
 
 // Avatars, icons and attachments for the app, which speaks no TLS. Only
-// Discord's CDN hosts: the console must not become a general web proxy.
+// Discord's CDN hosts: the console must not become a general web proxy. The path to fetch
+// from host (written there), or NULL when the URL is not one of them.
+static const char *image_target(const char *url, char host[128])
+{
+    // Decoded CR, LF or space would end the CDN request line early and add headers.
+    const char *rest = strncmp(url, "https://", 8) == 0 && !strpbrk(url, "\r\n ") ? url + 8 : NULL;
+    size_t hlen = rest ? strcspn(rest, "/") : 0;
+    if (!rest || hlen == 0 || hlen >= 128)
+        return NULL;
+    memcpy(host, rest, hlen);
+    host[hlen] = 0;
+    int allowed = strcmp(host, "cdn.discordapp.com") == 0 || strcmp(host, "media.discordapp.net") == 0 ||
+                  (strncmp(host, "images-ext-", 11) == 0 && hlen > 26 &&
+                   strcmp(host + hlen - 15, ".discordapp.net") == 0) ||
+                  // Colour emoji pictures (Twemoji, as Discord draws them), that project only.
+                  (strcmp(host, "cdn.jsdelivr.net") == 0 &&
+                   strncmp(rest + hlen, "/gh/jdecked/twemoji@", 20) == 0 && !strstr(rest + hlen, ".."));
+    return allowed ? rest + hlen : NULL;
+}
+
 static void api_image(int c, const char *query)
 {
     char url[1024];
@@ -154,24 +183,13 @@ static void api_image(int c, const char *query)
         return;
     }
     url_decode(url);
-    const char *rest = strncmp(url, "https://", 8) == 0 ? url + 8 : NULL;
     char host[128];
-    size_t hlen = rest ? strcspn(rest, "/") : 0;
-    int allowed = 0;
-    if (rest && hlen > 0 && hlen < sizeof host) {
-        memcpy(host, rest, hlen);
-        host[hlen] = 0;
-        allowed = strcmp(host, "cdn.discordapp.com") == 0 || strcmp(host, "media.discordapp.net") == 0 ||
-                  (strncmp(host, "images-ext-", 11) == 0 && strstr(host, ".discordapp.net") != NULL) ||
-                  // Colour emoji pictures (Twemoji, as Discord draws them), that project only.
-                  (strcmp(host, "cdn.jsdelivr.net") == 0 &&
-                   strncmp(rest + hlen, "/gh/jdecked/twemoji@", 20) == 0 && !strstr(rest + hlen, ".."));
-    }
-    if (!allowed) {
+    const char *path = image_target(url, host);
+    if (!path) {
         reply(c, "403 Forbidden", "text/plain", "host", 4);
         return;
     }
-    http_response res = http_get(host, rest + hlen);
+    http_response res = http_get(host, path);
     if (res.status != 200 || !res.body)
         reply(c, "502 Bad Gateway", "text/plain", "fetch", 5);
     else
@@ -242,7 +260,9 @@ static void api_sticker_packs(int c)
     static pthread_mutex_t once = PTHREAD_MUTEX_INITIALIZER;
     pthread_mutex_lock(&once);
     if (!cached) {
-        http_response r = http_request("GET", "/sticker-packs", NULL, chat_token());
+        char token[256];
+        chat_token(token, sizeof token);
+        http_response r = http_request("GET", "/sticker-packs", NULL, token);
         cJSON *in = r.status == 200 ? cJSON_Parse(r.body) : NULL, *p, *s;
         free(r.body);
         cJSON *out = cJSON_CreateObject(), *packs = cJSON_AddArrayToObject(out, "packs");
@@ -257,7 +277,7 @@ static void api_sticker_packs(int c)
                 cJSON *os = cJSON_CreateObject();
                 cJSON_AddStringToObject(os, "id", cJSON_GetStringValue(cJSON_GetObjectItem(s, "id")) ?: "");
                 cJSON_AddStringToObject(os, "name", cJSON_GetStringValue(cJSON_GetObjectItem(s, "name")) ?: "");
-                cJSON_AddNumberToObject(os, "format_type", cJSON_GetNumberValue(cJSON_GetObjectItem(s, "format_type")));
+                cJSON_AddNumberToObject(os, "format_type", (double)json_int(s, "format_type", 1));
                 cJSON_AddItemToArray(list, os);
             }
             cJSON_AddItemToArray(packs, op);
@@ -391,22 +411,40 @@ static void api_voice_join(int c, const char *body)
 
 // Join a DM call: {channel}. With no call running, rings the other side first (answer is the
 // same: the ring is already on, so no new ring is sent).
+// Rings the others once we are in the call (arg: the channel, freed here). Discord rings
+// only for a call its caller is in: rung before the join, nobody saw it (the official
+// client joins, then rings).
+static void *ring_when_joined(void *arg)
+{
+    char *channel = arg, g[32], ch[32], me[32], sess[64];
+    for (int i = 0; i < 150 && voice_wanted(); i++) { // 15 s, while the call is still wanted
+        if (voice_current(g, ch, me, sess) && strcmp(ch, channel) == 0) {
+            char path[96];
+            snprintf(path, sizeof path, "/channels/%s/call/ring", channel);
+            http_response res = rest("POST", path, "{\"recipients\":null}");
+            LOG("voice: ringing the call in %s: Discord answered %d", channel, res.status);
+            free(res.body);
+            break;
+        }
+        usleep(100000);
+    }
+    free(channel);
+    return NULL;
+}
+
 static void api_voice_call(int c, const char *body)
 {
     cJSON *in = cJSON_Parse(body ? body : "");
     const char *channel = body_channel(c, in);
-    if (channel && !chat_call_active(channel)) {
-        char path[96];
-        snprintf(path, sizeof path, "/channels/%s/call/ring", channel);
-        http_response res = rest("POST", path, "{\"recipients\":null}");
-        free(res.body);
-        if (res.status < 200 || res.status > 299) {
-            refuse(c, "409 Conflict", "Discord would not ring that call.");
-            channel = NULL;
-        }
-    }
     if (channel) {
+        const int ring = !chat_call_active(channel); // a call already there (they rang us): join it
         voice_join(NULL, channel);
+        pthread_t t;
+        char *arg = ring ? strdup(channel) : NULL;
+        if (arg && pthread_create(&t, NULL, ring_when_joined, arg) == 0)
+            pthread_detach(t);
+        else
+            free(arg);
         reply_ok(c);
     }
     cJSON_Delete(in);
@@ -588,6 +626,7 @@ static char *voice_json(void)
     cJSON_AddBoolToObject(bc, "paired", used >= 0);
     cJSON_AddStringToObject(bc, "pair_state", rp_pair_state());
     cJSON_AddStringToObject(bc, "pair_error", rp_pair_error());
+    cJSON_AddStringToObject(bc, "controller", bc_controller());
     cJSON_AddItemToObject(o, "prefs", prefs_json());
     s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
@@ -620,8 +659,8 @@ static void api_dlsym(int c, const char *query)
 // The app polls every few seconds while it is on screen; a game in front suspends it
 // (or the PS button closes it), and then it is silent. Only the app sends the native
 // header. The core stays either way, for alerts and calls; the app's Quit stops it.
-static volatile time_t app_seen;
-static volatile int app_front = 1; // its last X-App-Front: 0 on the home screen or under the PS menu
+static _Atomic time_t app_seen;
+static _Atomic int app_front = 1; // its last X-App-Front: 0 on the home screen or under the PS menu
 
 int web_app_on_screen(void)
 {
@@ -652,6 +691,17 @@ static int host_ok(int c, const char *req, const char *body)
     }
     return (n == 9 && (strncmp(h, "127.0.0.1", 9) == 0 || strncmp(h, "localhost", 9) == 0)) ||
            (n == strlen(self) && strncmp(h, self, n) == 0);
+}
+
+// X-Core-Key: the per-boot key (core_key.h), which only the app can read.
+static int key_header_ok(const char *req, const char *body)
+{
+    const char *h = header_line(req, body, "\r\nX-Core-Key: ");
+    if (!h)
+        return 0;
+    h += 14;
+    size_t n = strcspn(h, "\r\n");
+    return h[n] == '\r' && core_key_ok(h, n);
 }
 
 // local: the peer is on this console (the native app). Chat data is only served to it.
@@ -687,17 +737,23 @@ static void handle(int c, int local)
     int get = strcmp(method, "GET") == 0, post = strcmp(method, "POST") == 0;
     // A page in the console's own browser connects from 127.x too. Browsers always
     // send Host, so a name other than ours is DNS rebinding. The custom header makes
-    // a cross-origin request need a preflight, which this server never grants.
+    // a cross-origin request need a preflight, which this server never grants. The key
+    // keeps out what is no browser: another payload or app on the console, or the LAN.
+    // /api/state stays open: it is how the app finds a core, and which one, before it has the key.
     if (!host_ok(c, req, body)) {
         reply(c, "403 Forbidden", "text/plain", "host", 4);
         return;
     }
-    if (strncmp(path, "/api/", 5) == 0 && !(get && strcmp(path, "/api/state") == 0) &&
-        !header_line(req, body, "\r\nX-Discord-Native: 1\r\n")) {
+    int open_path = strncmp(path, "/api/", 5) != 0 || (get && strcmp(path, "/api/state") == 0);
+    if (!open_path && !header_line(req, body, "\r\nX-Discord-Native: 1\r\n")) {
         reply(c, "403 Forbidden", "text/plain", "native app only", 15);
         return;
     }
-    if (local && header_line(req, body, "\r\nX-Discord-Native: 1\r\n")) {
+    if (!open_path && !key_header_ok(req, body)) {
+        reply(c, "403 Forbidden", "text/plain", "key", 3);
+        return;
+    }
+    if (local && header_line(req, body, "\r\nX-Discord-Native: 1\r\n") && key_header_ok(req, body)) {
         app_seen = time(NULL);
         app_front = !header_line(req, body, "\r\nX-App-Front: 0\r\n");
     }
@@ -708,7 +764,9 @@ static void handle(int c, int local)
     }
 
     if (get && strcmp(path, "/api/state") == 0) {
-        reply_json(c, status_json());
+        core_key_keep(); // the app polls this first; a reinstall may have taken its key file
+        const int keyed = key_header_ok(req, body);
+        reply_json(c, status_json(keyed, keyed ? update_json() : NULL));
     } else if (post && strcmp(path, "/api/browser-login") == 0) {
         if (browser_auth_request() == 0)
             reply(c, "202 Accepted", "application/json", "{\"ok\":true}", 11);
@@ -718,7 +776,12 @@ static void handle(int c, int local)
         browser_auth_cancel();
         reply(c, "200 OK", "application/json", "{\"ok\":true}", 11);
     } else if (get && strcmp(path, "/api/chat") == 0) {
-        reply_json(c, chat_tree_json());
+        // ?v=: the version the app holds; unchanged, nothing is sent.
+        char v[24] = "";
+        if (query_get(query, "v", v, sizeof v) == 0 && v[0] && strtol(v, NULL, 10) == chat_tree_version())
+            reply(c, "304 Not Modified", "application/json", "", 0);
+        else
+            reply_json(c, chat_tree_json());
     } else if (get && strcmp(path, "/api/events") == 0) {
         char since[24] = "0", wait[8] = "0";
         query_get(query, "since", since, sizeof since);
@@ -765,11 +828,20 @@ static void handle(int c, int local)
         api_sticker_packs(c);
     } else if (post && strcmp(path, "/api/prefs") == 0) {
         api_prefs(c, body);
+    } else if (post && strcmp(path, "/api/reconnect") == 0) {
+        gateway_retry();
+        voice_retry();
+        reply(c, "202 Accepted", "application/json", "{}", 2);
     } else if (post && strcmp(path, "/api/signout") == 0) {
         LOG("sign out requested");
-        if (core_sign_out() != 0) {
+        char token[256];
+        chat_token(token, sizeof token);
+        if (!token[0]) { // nobody signed in (a second press): nothing to end, no restart
+            reply(c, "200 OK", "application/json", "{\"ok\":true}", 11);
+        } else if (core_sign_out() != 0) {
             refuse(c, "502 Bad Gateway", "Could not reach Discord to sign out. Try again.");
         } else {
+            status_state("signing_out"); // not "ready" while the calls end: the app would go back
             reply(c, "200 OK", "application/json", "{\"ok\":true}", 11);
             close(c);
             core_quit(1);
@@ -780,6 +852,27 @@ static void handle(int c, int local)
         api_change(c, body, 1);
     } else if (get && strcmp(path, "/api/dlsym") == 0) {
         api_dlsym(c, query);
+    } else if (post && strcmp(path, "/api/update/check") == 0) {
+        update_check(strstr(body, "\"force\":true") != NULL);
+        reply(c, "202 Accepted", "application/json", "{\"ok\":true}", 11);
+    } else if (post && strcmp(path, "/api/update/start") == 0) {
+        char why[96], out[160];
+        if (update_start(why, sizeof why) == 0) {
+            reply(c, "202 Accepted", "application/json", "{\"ok\":true}", 11);
+        } else {
+            int n = snprintf(out, sizeof out, "{\"error\":\"%s\"}", why); // fixed texts, no quotes
+            reply(c, "409 Conflict", "application/json", out, (size_t)n);
+        }
+    } else if (post && strcmp(path, "/api/update/apply") == 0) {
+        if (update_apply() == 0)
+            reply(c, "200 OK", "application/json", "{\"ok\":true}", 11);
+        else
+            reply(c, "409 Conflict", "application/json", "{\"ok\":false}", 12);
+    } else if (post && strcmp(path, "/api/update/restore") == 0) {
+        if (update_restore() == 0)
+            reply(c, "200 OK", "application/json", "{\"ok\":true}", 11);
+        else
+            reply(c, "409 Conflict", "application/json", "{\"ok\":false}", 12);
     } else if (post && strcmp(path, "/api/quit") == 0) {
         reply(c, "200 OK", "application/json", "{\"ok\":true}", 11);
         LOG("quit requested");
@@ -790,8 +883,8 @@ static void handle(int c, int local)
     }
 }
 
-// ponytail: one connection at a time; an image fetch (~0.3 s) holds the next request.
-// Threads need mbedTLS threading (shared DRBG) first.
+// A thread per connection, MAX_CONNECTIONS at most (503 past that): an image fetch or a
+// long poll does not hold the others. mbedTLS threading covers the shared DRBG.
 struct conn {
     int c, local;
 };
@@ -813,18 +906,27 @@ static void *serve_one(void *arg)
 
 // Each connection on its own thread, so a slow one (an image from the CDN, a
 // history page) does not hold up the app's polling. Capped: past the cap the
-// accept loop serves it itself, which also slows accepting down.
-#define MAX_CONNECTIONS 8
+// request gets 503 at once, so the accept loop (and /api/state) never waits on one.
+#define MAX_CONNECTIONS 16
 
 
 void web_serve(int fd)
 {
-    for (;;) {
+    for (int failures = 0;;) {
         struct sockaddr_in peer;
         socklen_t plen = sizeof peer;
         int c = accept(fd, (struct sockaddr *)&peer, &plen);
-        if (c < 0)
+        if (c < 0) {
+            // One failure is a client that gave up; no descriptors left (EMFILE) passes as
+            // requests finish. A run of anything else is a dead socket: the caller listens again.
+            if (errno != EMFILE && errno != ENFILE && ++failures >= 20) {
+                LOG("control: accept keeps failing (errno %d), listening again", errno);
+                return;
+            }
+            usleep(100000);
             continue;
+        }
+        failures = 0;
         int local = peer.sin_family == AF_INET && ntohl(peer.sin_addr.s_addr) >> 24 == 127;
         struct timeval tv = {.tv_sec = 5};
         setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
@@ -853,7 +955,7 @@ void web_serve(int fd)
         }
         pthread_attr_destroy(&attr);
         free(k);
-        handle(c, local);
+        reply(c, "503 Service Unavailable", "text/plain", "busy", 4);
         close(c);
     }
 }

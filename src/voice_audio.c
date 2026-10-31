@@ -13,6 +13,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "core_key.h"
 #include "log.h"
 #include "pcm_stream.h"
 #include "prefs.h"
@@ -23,7 +24,7 @@
 #define HANG_FRAMES 40    // 800 ms after the last speech frame: no drop-outs between words
 #define MIC_LAG_FRAMES 4  // more mic than this waiting (80 ms): drop the oldest, keep latency low
 #define MIC_GAP_MS 100    // no mic data this long while speaking: fill with silence
-#define MAX_PEERS 64 // speakers we decode at once; matches the 64 users voice.c tracks
+#define MAX_PEERS 99 // speakers we decode at once; matches the 99 users voice.c tracks
 #define MIC_CAP (VAU_RATE / 2) // half a second of mic; older samples go
 #define OUT_CAP 8              // playback frames queued for the app (160 ms)
 #define OUT_FRAME_BYTES (4 * VAU_FRAME) // one stereo 20 ms frame as bytes
@@ -232,6 +233,23 @@ static int listen_fd = -1, client_fd = -1;
 
 // the connection (set by vau_attach / vau_dave_state)
 static int attached, udp = -1;
+// The socket failed for good (the console aborts a process's sockets when the network goes
+// down): the voice thread connects afresh, which brings a new one.
+static _Atomic int udp_dead;
+
+static void udp_error(const char *what)
+{
+    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR || errno == ENOBUFS)
+        return; // full or interrupted: the next one may go
+    if (!udp_dead)
+        LOG("voice audio: UDP %s failed (%d), the voice connection starts afresh", what, errno);
+    udp_dead = 1;
+}
+
+int vau_udp_dead(void)
+{
+    return udp_dead;
+}
 static uint8_t key[32];
 static uint32_t my_ssrc;
 static char self_id[VAU_ID];
@@ -265,7 +283,7 @@ static size_t out_len;
 // The external device (vau_ext_*). Its thread must never wait on the engine, which
 // holds mu through Opus and DAVE, so the two meet only in these rings under ext_mu.
 static pthread_mutex_t ext_mu = PTHREAD_MUTEX_INITIALIZER;
-static volatile int ext_on;
+static _Atomic int ext_on;
 static int16_t ext_mic[MIC_CAP];
 static int ext_mic_head, ext_mic_count;
 static ds5_pcm_stream ext_out; // playback with a 60 ms prefill (tools/ds5-usb-bridge)
@@ -279,8 +297,10 @@ static int64_t now_ms(void)
 
 static void req_push(int speaking)
 {
-    if (req_count == REQ_CAP) // the voice thread is stuck: keep the newest
+    if (req_count == REQ_CAP) { // the voice thread is stuck: the newest replaces the last
+        reqs[(req_head + req_count - 1) % REQ_CAP] = (speak_req){speaking, my_ssrc};
         return;
+    }
     reqs[(req_head + req_count) % REQ_CAP] = (speak_req){speaking, my_ssrc};
     req_count++;
 }
@@ -369,9 +389,56 @@ static void client_drop(void)
     out_len = 0;
 }
 
+// A new connection first sends the core key (core_key.h); until then it is only a
+// candidate, and the app on the link keeps it. One candidate at a time, 2 s to show it.
+static int pending_fd = -1;
+static char pending_key[CORE_KEY_LEN];
+static size_t pending_len;
+static int64_t pending_ms;
+
+static void pending_drop(void)
+{
+    if (pending_fd >= 0)
+        close(pending_fd);
+    pending_fd = -1;
+    pending_len = 0;
+}
+
+static void check_pending(void)
+{
+    if (pending_fd < 0)
+        return;
+    ssize_t r = recv(pending_fd, pending_key + pending_len, sizeof pending_key - pending_len, MSG_DONTWAIT);
+    if (r > 0)
+        pending_len += (size_t)r;
+    else if (r == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
+        pending_drop();
+        return;
+    }
+    if (pending_len < sizeof pending_key) {
+        if (now_ms() - pending_ms > 2000) {
+            LOG("voice audio: refused a connection that sent no key");
+            pending_drop();
+        }
+        return;
+    }
+    if (!core_key_ok(pending_key, pending_len)) {
+        LOG("voice audio: refused a connection with the wrong key");
+        pending_drop();
+        return;
+    }
+    client_drop(); // one app at a time: the newest replaces the old (a restarted app)
+    int one = 1;
+    setsockopt(pending_fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+    client_fd = pending_fd; // what follows the key is mic audio, read by read_mic
+    pending_fd = -1;
+    pending_len = 0;
+    LOG("voice audio: app connected");
+}
+
 static void accept_client(void)
 {
-    if (listen_fd < 0)
+    if (listen_fd < 0 || pending_fd >= 0) // the next waits in the backlog
         return;
     struct sockaddr_in a;
     socklen_t l = sizeof a;
@@ -382,12 +449,9 @@ static void accept_client(void)
         close(fd);
         return;
     }
-    client_drop(); // one app at a time: the newest replaces the old
     fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
-    int one = 1;
-    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
-    client_fd = fd;
-    LOG("voice audio: app connected");
+    pending_fd = fd;
+    pending_ms = now_ms();
 }
 
 static void read_mic(void)
@@ -457,8 +521,8 @@ static void send_opus(const uint8_t *opus, size_t n)
     seq++;
     ts += VAU_FRAME;
     st_sent++;
-    if (send(udp, pkt, len, 0) < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
-        LOG("voice audio: UDP send failed (%d)", errno);
+    if (send(udp, pkt, len, 0) < 0)
+        udp_error("send");
     last_tx_ms = last_self_ms = now_ms();
 }
 
@@ -594,8 +658,10 @@ static void rx(void)
     int16_t pcm[2 * VAU_FRAME];
     for (int i = 0; i < 64 && udp >= 0; i++) {
         ssize_t n = recv(udp, pkt, sizeof pkt, 0);
-        if (n < 0)
+        if (n < 0) {
+            udp_error("receive");
             break;
+        }
         if (n < 12 || deaf || !attached)
             continue;
         st_rx++;
@@ -631,7 +697,8 @@ static void rx(void)
     }
 }
 
-// Mix every speaker's next frame, play it, and flush what the socket takes.
+// Mix every speaker's next frame at the call volume (prefs call_volume), play it, and
+// flush what the socket takes.
 static void play(void)
 {
     int32_t acc[2 * VAU_FRAME] = {0};
@@ -642,6 +709,10 @@ static void play(void)
             vau_mix_add(acc, f);
             any = 1;
         }
+    const int volume = prefs_get("call_volume"); // 5 = as received
+    if (any && volume != 5)
+        for (int i = 0; i < 2 * VAU_FRAME; i++)
+            acc[i] = acc[i] * volume / 5; // vau_mix_out clips
     if (any && ext_on) {
         vau_mix_out(acc, out);
         pthread_mutex_lock(&ext_mu);
@@ -667,7 +738,8 @@ static void keepalive(int64_t now)
     k[2] = (uint8_t)(ka_counter >> 16);
     k[3] = (uint8_t)(ka_counter >> 24);
     ka_counter++;
-    send(udp, k, sizeof k, 0);
+    if (send(udp, k, sizeof k, 0) < 0)
+        udp_error("keepalive");
     last_ka_ms = now;
 }
 
@@ -696,6 +768,7 @@ static void read_ext_mic(void)
 static void tick(void)
 {
     accept_client();
+    check_pending();
     read_mic();
     read_ext_mic();
     if (!attached) { // no call: the mic is not wanted
@@ -777,9 +850,15 @@ void vau_unlock(void)
     pthread_mutex_unlock(&mu);
 }
 
-void vau_attach(int fd, const uint8_t k[32], uint32_t ssrc, const char *self)
+void vau_attach(int fd, const uint8_t k[32], uint32_t ssrc, const char *self, int version)
 {
     pthread_mutex_lock(&mu);
+    // No session from before (its owner may destroy it), and no frame in the clear before
+    // vau_dave_state hands over this connection's.
+    session = NULL;
+    dave_version = version;
+    dave_ready = 0;
+    udp_dead = 0;
     peers_clear();
     if (encryptor)
         daveEncryptorDestroy(encryptor);

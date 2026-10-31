@@ -1,0 +1,6 @@
+ps5-discord-update 1
+version 0.5.0-alpha.0
+asset ps5-discord-app-v0.5.0-alpha.0.zip
+size 33527245
+sha256 7e60828f44f424cda99a0f44ea49e50704899db603e001e53f3b40ff7ae71f5b
+min_from 0.0.0

@@ -137,7 +137,7 @@ static void debug_toast(const char *title, const char *body)
 // "ServiceFeedback" shows during games. It goes to the user on screen, not the system
 // (0xFE), so other console users never find the messages in their list.
 static int (*send_json)(int user, bool logged, const char *json);
-static volatile int32_t owner = -1;
+static _Atomic int32_t owner = -1;
 
 void notify_set_owner(int32_t user)
 {

@@ -18,6 +18,7 @@
 #include "screens/signin.hpp"
 #include "screens/style.hpp"
 #include "screens/settings.hpp"
+#include "screens/update.hpp"
 #include "screens/voice.hpp"
 
 namespace screens
@@ -63,6 +64,7 @@ constexpr app::TourStep kTour[] = {
     {0.4f, 0, Direction::right},
     {0.6f, 0, Direction::none, "settings-voice"},
     {0.4f, 0, Direction::down},
+    {0.4f, 0, Direction::down},
     {0.4f, action_bit(Action::confirm)},
     {0.6f, 0, Direction::none, "settings-pair-users"},
     {0.4f, action_bit(Action::confirm)},
@@ -78,6 +80,8 @@ constexpr app::TourStep kTour[] = {
     {0.4f, action_bit(Action::back)},
     {0.4f, 0, Direction::down},
     {0.4f, 0, Direction::right},
+    {0.6f, 0, Direction::none, "settings-quality"},
+    {0.4f, action_bit(Action::confirm)},
     {0.6f, 0, Direction::none, "settings-paired"},
     {0.4f, action_bit(Action::back)},
     {0.4f, 0, Direction::down},
@@ -90,6 +94,10 @@ constexpr app::TourStep kTour[] = {
     {0.4f, 0, Direction::right},
     {0.6f, 0, Direction::none, "settings-appearance"},
     {0.4f, action_bit(Action::back)},
+    {0.4f, 0, Direction::down},
+    {0.6f, 0, Direction::none, "settings-privacy"},
+    {0.4f, 0, Direction::down},
+    {0.6f, 0, Direction::none, "settings-about"},
     {0.4f, action_bit(Action::back)},
     {0.6f, 0, Direction::none, "home-after-settings"},
     {0.4f, action_bit(Action::back)},
@@ -115,6 +123,11 @@ constexpr app::TourStep kTour[] = {
     {0.6f, 0, Direction::none, "voice-server-room"},
     {0.4f, action_bit(Action::confirm)},
     {0.9f, 0, Direction::none, "voice-room"},
+    {0.4f, 0, Direction::right},
+    {0.4f, 0, Direction::right},
+    {0.4f, action_bit(Action::confirm)},
+    {0.6f, 0, Direction::none, "voice-replug"},
+    {0.4f, action_bit(Action::back)},
     {0.4f, action_bit(Action::back)},
     {0.4f, action_bit(Action::back)},
     {0.6f, 0, Direction::none, "tab-servers-back"},
@@ -214,7 +227,7 @@ class DiscordApp final : public app::Concept
   public:
     explicit DiscordApp(app::Context &context)
         : context_(context), ink_{context.fonts, context.art}, home_(ink_), server_(ink_), chat_(ink_), voice_(ink_),
-          settings_(ink_)
+          settings_(ink_), update_(ink_)
     {
     }
 
@@ -239,7 +252,33 @@ class DiscordApp final : public app::Concept
             dismissed_ring_.clear();
             cued_ring_.clear();
         }
-        if (context_.snapshot.connection != discord::Connection::ready)
+        const bool reconnecting = context_.snapshot.connection == discord::Connection::reconnecting;
+        // The update card takes the input over any screen (not over a ring or the sign-in).
+        if (update_.update(context_.snapshot, input, feedback, requests,
+                           context_.snapshot.connection == discord::Connection::ready && !ring))
+        {
+        }
+        else if (reconnecting && route_ != Route::settings)
+        {
+            // The Reconnecting card: Left and Right pick Retry now or Settings.
+            if ((input.nav == Direction::left && reconnect_focus_ == 1) ||
+                (input.nav == Direction::right && reconnect_focus_ == 0))
+            {
+                reconnect_focus_ ^= 1;
+                feedback.play(hui::audio::Cue::focus);
+            }
+            if (input.is_pressed(Action::confirm) && reconnect_focus_ == 1)
+                open_settings(feedback);
+            else if (input.is_pressed(Action::confirm) && browser_cooldown_ == 0.0f)
+            {
+                discord::Request r;
+                r.kind = discord::Request::Kind::reconnect;
+                requests.push_back(r);
+                browser_cooldown_ = 3.0f;
+                feedback.play(hui::audio::Cue::select);
+            }
+        }
+        else if (context_.snapshot.connection != discord::Connection::ready && !reconnecting)
         {
             const auto &s = context_.snapshot;
             if (s.connection == discord::Connection::signing_in)
@@ -256,6 +295,9 @@ class DiscordApp final : public app::Concept
                 feedback.play(hui::audio::Cue::select);
             }
         }
+        else if (update_voice_wait(input, dt, feedback, requests))
+        {
+        }
         else if (ring && ring->channel_id != dismissed_ring_)
         {
             // An incoming call takes the input: Cross answers, Circle declines.
@@ -271,8 +313,8 @@ class DiscordApp final : public app::Concept
                 r.channel_id = ring->channel_id;
                 requests.push_back(r);
                 dismissed_ring_ = ring->channel_id;
-                open_voice(ring->channel_id);
-                feedback.play(hui::audio::Cue::open);
+                await_voice(context_.snapshot, ring->channel_id);
+                feedback.play(hui::audio::Cue::select);
             }
             else if (input.is_pressed(Action::back))
             {
@@ -293,6 +335,8 @@ class DiscordApp final : public app::Concept
                 fade_.snap(0.0f);
             }
             context_.settings_changed |= changed;
+            if (settings_.take_update_dialog())
+                update_.open();
         }
         else if (quitting_)
         {
@@ -380,8 +424,19 @@ class DiscordApp final : public app::Concept
         {
             if (!voice_.update(context_.snapshot, input, dt, feedback, requests))
             {
-                route_ = voice_from_;
-                fade_.snap(0.0f);
+                const bool left = std::any_of(requests.begin(), requests.end(), [](const discord::Request &r) {
+                    return r.kind == discord::Request::Kind::voice_leave;
+                });
+                if (left) // stay until the call is over
+                {
+                    leaving_ = true;
+                    voice_wait_ = 0.0f;
+                }
+                else
+                {
+                    route_ = voice_from_;
+                    fade_.snap(0.0f);
+                }
             }
             else if (voice_.take_settings()) // Go Live needs the pairing first
                 open_settings(feedback);
@@ -402,8 +457,8 @@ class DiscordApp final : public app::Concept
                         r.channel_id = channel;
                         requests.push_back(r);
                     }
-                    open_voice(channel);
-                    feedback.play(hui::audio::Cue::open);
+                    await_voice(context_.snapshot, channel);
+                    feedback.play(hui::audio::Cue::select);
                 }
                 else if (v.active())
                 {
@@ -417,8 +472,17 @@ class DiscordApp final : public app::Concept
                 fade_.snap(0.0f);
             }
         }
+        // Leave from the chat's call dock too: the spinner until the call is over.
+        if (joining_.empty() && !leaving_ &&
+            std::any_of(requests.begin(), requests.end(),
+                        [](const discord::Request &r) { return r.kind == discord::Request::Kind::voice_leave; }))
+        {
+            leaving_ = true;
+            voice_wait_ = 0.0f;
+        }
+        const bool waiting = !joining_.empty() || leaving_;
         // Square on the home and server pages: back to the voice room you are in.
-        if (input.is_pressed(Action::west) && context_.snapshot.voice.active() &&
+        if (!waiting && input.is_pressed(Action::west) && context_.snapshot.voice.active() &&
             (route_ == Route::home || route_ == Route::server) &&
             context_.snapshot.connection == discord::Connection::ready)
         {
@@ -426,7 +490,7 @@ class DiscordApp final : public app::Concept
             feedback.play(hui::audio::Cue::open);
         }
         // Touchpad: the newest banner's chat.
-        if (input.is_pressed(Action::touch) && !banners_.empty() &&
+        if (!waiting && input.is_pressed(Action::touch) && !banners_.empty() &&
             context_.snapshot.connection == discord::Connection::ready)
         {
             const discord::Notice n = banners_.front().notice;
@@ -450,9 +514,10 @@ class DiscordApp final : public app::Concept
         // A short fade in on every screen change.
         frame.scene.rounded_rect({0, 0, 1920, 1080}, 0.0f, style::kGround);
         frame.scene.push_opacity(std::clamp(fade_.value, 0.0f, 1.0f));
+        const bool reconnecting = context_.snapshot.connection == discord::Connection::reconnecting;
         if (context_.snapshot.connection == discord::Connection::signing_in)
             draw_sign_in(frame.scene, ink_, context_.snapshot, time_);
-        else if (context_.snapshot.connection != discord::Connection::ready)
+        else if (context_.snapshot.connection != discord::Connection::ready && !reconnecting)
             draw_waiting(frame.scene, ink_, context_.snapshot, time_);
         else if (route_ == Route::home)
             home_.draw(context_.snapshot, frame.scene);
@@ -465,13 +530,26 @@ class DiscordApp final : public app::Concept
         else
             chat_.draw(context_.snapshot, frame.scene);
         frame.scene.pop_opacity();
+        if (reconnecting && route_ != Route::settings) // over the screen that was up, dimmed
+            draw_reconnecting(frame.scene, ink_, context_.snapshot, time_, reconnect_focus_);
         if (const discord::Call *ring = discord::ringing_call(context_.snapshot);
             ring && ring->channel_id != dismissed_ring_)
             draw_incoming(frame.scene, ink_, context_.snapshot, *ring);
         if (quitting_)
             confirm_card(frame.scene, ink_, "Quit Discord?", kQuitText, "Quit");
+        if (context_.snapshot.connection == discord::Connection::ready && (leaving_ || !joining_.empty()))
+        {
+            const std::string room = room_title(context_.snapshot, joining_);
+            if (leaving_)
+                busy_card(frame.scene, ink_, "Leaving the call", "", nullptr, time_);
+            else if (!join_error_.empty())
+                busy_card(frame.scene, ink_, "Couldn't join " + room, join_error_, "Close", time_);
+            else
+                busy_card(frame.scene, ink_, "Joining " + room, "", "Cancel", time_);
+        }
         for (int i = static_cast<int>(banners_.size()) - 1; i >= 0; --i)
             draw_banner(frame.scene, banners_[i]);
+        update_.draw(context_.snapshot, frame.scene);
     }
 
     std::span<const app::TourStep> tour() const override
@@ -495,6 +573,7 @@ class DiscordApp final : public app::Concept
     Chat chat_;
     VoiceRoom voice_;
     SettingsScreen settings_;
+    UpdateDialog update_;
     Route route_ = Route::home;
     Route settings_from_ = Route::home; // the screen Circle returns to from settings
     Route voice_from_ = Route::home; // the screen Circle returns to from the voice room
@@ -504,6 +583,14 @@ class DiscordApp final : public app::Concept
     bool quitting_ = false;    // the Quit question is up (Circle on Home)
     float browser_cooldown_ = 0.0f;
     std::string waiting_dm_; // a friend whose new DM is being made, opened when it lands
+    // A call being joined or left: a spinner until the core says it is done, so the voice room
+    // opens only once connected and Leave goes back only once out of the call.
+    std::string joining_;          // the room or DM call being joined
+    std::string join_error_;       // why it failed, shown until Circle
+    bool leaving_ = false;
+    bool join_seen_ = false;       // the core showed this join under way (joining, connecting, securing)
+    int reconnect_focus_ = 0;      // the Reconnecting card: 0 Retry now, 1 Settings
+    float voice_wait_ = 0.0f;      // seconds since the join or leave was asked for
     // Banners at the top right, newest on top: DMs and mentions, and every server message
     // when that is on (Settings › Notifications). A message from a channel already shown
     // joins its banner (the count on the avatar) instead of stacking another.
@@ -616,6 +703,20 @@ class DiscordApp final : public app::Concept
         route_ = Route::voice;
         fade_.snap(0.0f);
     }
+    // The voice room for channel once we are connected to it; a spinner until then.
+    void await_voice(const discord::Snapshot &s, const std::string &channel)
+    {
+        if (s.voice.state == discord::VoiceState::connected && s.voice.channel_id == channel)
+        {
+            open_voice(channel);
+            return;
+        }
+        joining_ = channel;
+        join_error_.clear();
+        join_seen_ = false;
+        leaving_ = false;
+        voice_wait_ = 0.0f;
+    }
     // Joins a server's voice room unless it is the one we are in, then opens its screen.
     void join_voice(const discord::Snapshot &s, const std::string &guild, const std::string &channel,
                     std::vector<discord::Request> &requests)
@@ -628,7 +729,83 @@ class DiscordApp final : public app::Concept
             r.channel_id = channel;
             requests.push_back(r);
         }
-        open_voice(channel);
+        await_voice(s, channel);
+    }
+    // While a join or leave is under way it has the input. Returns false when nothing is.
+    bool update_voice_wait(const hui::InputFrame &input, float dt, app::Feedback &feedback,
+                           std::vector<discord::Request> &requests)
+    {
+        if (joining_.empty() && !leaving_)
+            return false;
+        const discord::Voice &v = context_.snapshot.voice;
+        voice_wait_ += dt;
+        // The core's answer lands on a later voice poll, which waits behind whatever the client
+        // is fetching (a DM's history): until the core shows this join under way, the state on
+        // screen is the old one and says nothing about it.
+        const bool under_way = v.state == discord::VoiceState::joining ||
+                               v.state == discord::VoiceState::connecting || v.state == discord::VoiceState::securing;
+        join_seen_ |= under_way;
+        const bool settled = voice_wait_ > 1.5f;
+        if (!joining_.empty() && v.state == discord::VoiceState::connected && v.channel_id == joining_)
+        {
+            open_voice(joining_); // connected, even after a failure was shown: the call is up
+            joining_.clear();
+            join_error_.clear();
+            feedback.play(hui::audio::Cue::open);
+        }
+        else if (!join_error_.empty())
+        {
+            if (input.is_pressed(Action::back) || input.is_pressed(Action::confirm))
+            {
+                joining_.clear();
+                join_error_.clear();
+                feedback.play(hui::audio::Cue::modal_close);
+            }
+        }
+        else if (!joining_.empty())
+        {
+            if (join_seen_ && v.state == discord::VoiceState::connected && v.channel_id != joining_)
+            {
+                // A switch Discord refused: the core stayed in the call we were in.
+                join_error_ = "Discord did not confirm that channel. You are still in " +
+                              room_title(context_.snapshot, v.channel_id) + ".";
+                feedback.play(hui::audio::Cue::error);
+            }
+            else if ((v.state == discord::VoiceState::error && (join_seen_ || voice_wait_ > 8.0f)) ||
+                     (v.state == discord::VoiceState::idle && join_seen_) || voice_wait_ > 30.0f)
+            {
+                join_error_ = v.state == discord::VoiceState::error && !v.error.empty()
+                                  ? v.error
+                                  : "The call did not connect. Try again in a moment.";
+                if (v.active() && v.channel_id == joining_) // timed out half-way: do not leave it hanging
+                {
+                    discord::Request r;
+                    r.kind = discord::Request::Kind::voice_leave;
+                    requests.push_back(r);
+                }
+                feedback.play(hui::audio::Cue::error);
+            }
+            else if (input.is_pressed(Action::back)) // changed our mind: leave what was started
+            {
+                discord::Request r;
+                r.kind = discord::Request::Kind::voice_leave;
+                requests.push_back(r);
+                joining_.clear();
+                leaving_ = true;
+                voice_wait_ = 0.0f;
+                feedback.play(hui::audio::Cue::back);
+            }
+        }
+        else if ((settled && !v.active()) || voice_wait_ > 10.0f)
+        {
+            leaving_ = false;
+            if (route_ == Route::voice)
+            {
+                route_ = voice_from_;
+                fade_.snap(0.0f);
+            }
+        }
+        return true;
     }
     hui::tween::Spring fade_;
     float time_ = 0.0f;

@@ -10,6 +10,8 @@ int stream_start(void);       // in a connected call; 0 when asked, -1 with stre
 void stream_stop(void);
 // Gateway thread: the next op (18 create, 22 paused, 19 delete) to send, or NULL. Caller frees.
 cJSON *stream_take_gateway(void);
+int stream_gateway_pending(void); // ops queued for the gateway thread
+void stream_forget_gateway(void);  // another account next: the last one's ops must not go out on it
 // Gateway dispatch: STREAM_CREATE, STREAM_SERVER_UPDATE, STREAM_UPDATE, STREAM_DELETE.
 void stream_on_dispatch(const char *type, cJSON *d);
 const char *stream_state(void); // "off", "starting", "live", "error"

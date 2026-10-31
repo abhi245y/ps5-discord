@@ -1,0 +1,16 @@
+# make test on every push and pull request: the host build (no libdave: the no-DAVE stub,
+# as the tests allow) with our sources under -Werror.
+name: test
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Cache the pinned sources
+        uses: actions/cache@v6
+        with:
+          path: .deps
+          key: deps-${{ hashFiles('tools/deps.sh') }}
+      - run: make deps
+      - run: make test

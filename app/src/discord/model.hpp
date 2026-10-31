@@ -268,6 +268,7 @@ struct Voice
     bool output_tv = true;        // the pick while the app is on screen: TV, or the controller
     std::string broadcast;        // Go Live: "off", "starting", "live", "error"
     std::string broadcast_error;  // why it stopped, when it did
+    std::string replug;           // before Go Live: "ok", "replug" or "unknown" (bc_controller)
     bool paired = false;          // Go Live's Remote Play pairing with the console exists
     std::string pair_state;       // "idle", "pairing", "paired", "need_pin", "error"
     std::string pair_error;
@@ -334,11 +335,13 @@ struct Prefs
 {
     int golive_quality = 0; // 0 720p30, 1 720p60, 2 1080p30, 3 1080p60
     int mic_gain = 5;       // 0..10, 5 = as captured
+    int call_volume = 5;    // 0..10, the voices heard: 5 = as received
     bool notify_dm = true;
     int notify_server = 1;     // 0 off, 1 as set in Discord, 2 every message
     bool notify_system = true; // PS5 alerts while the app is not on screen
     bool notify_live = false;  // ... also while Go Live is on
     int quiet_hours = 0;       // 0 off, else a preset (screens/settings.cpp kQuiet)
+    bool share_game = true;    // Discord shows the game in front on this console
 
     void set(const std::string &key, int value) // a set_pref request, applied here
     {
@@ -346,6 +349,8 @@ struct Prefs
             golive_quality = value;
         else if (key == "mic_gain")
             mic_gain = value;
+        else if (key == "call_volume")
+            call_volume = value;
         else if (key == "notify_dm")
             notify_dm = value != 0;
         else if (key == "notify_server")
@@ -356,7 +361,20 @@ struct Prefs
             notify_live = value != 0;
         else if (key == "quiet_hours")
             quiet_hours = value;
+        else if (key == "share_game")
+            share_game = value != 0;
     }
+};
+
+// The core's self-update (/api/state "update"); state "" = an older core, no update UI.
+struct Update
+{
+    std::string state; // none checking available downloading unpacking ready applying restoring failed
+    std::string version, installed, notes, error;
+    std::string check_error; // why the last check found nothing
+    std::string previous;    // the version Settings can go back to
+    std::int64_t done = 0, total = 0; // bytes
+    bool operator==(const Update &) const = default;
 };
 
 struct Snapshot
@@ -370,6 +388,7 @@ struct Snapshot
     bool login_browser = false; // browser login/import attempt is active
     std::string login_note;     // why the last sign-in failed, from the core
     std::int64_t now_ms = 0; // for "12m ago"
+    int reconnect_attempt = 0;  // the core's tries since the session dropped; 0 while it is up
     int utc_offset_minutes = 0; // the console's time zone, for clock times
     User me;
     std::vector<User> friends; // everyone the Home rows can show
@@ -389,6 +408,7 @@ struct Snapshot
     std::vector<Notice> notices; // the latest few, oldest first
     std::string sign_out_error;  // the last sign out failed, and why
     Prefs prefs;
+    Update update;
     Voice voice;
     std::map<std::string, std::vector<VoiceSeat>> seats; // by channel id: rooms and DM calls
     std::vector<Call> calls;

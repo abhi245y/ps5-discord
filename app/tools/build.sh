@@ -162,7 +162,9 @@ for source in "${sources[@]}"; do
     object="$build/obj/$source.o"
     mkdir -p "$(dirname "$object")"
     if [[ $source == *.c ]]; then standard=-std=c11; else standard=-std=c++20; fi
-    args=("$standard" -O2 -Wall -Wextra -ffunction-sections -fdata-sections)
+    # Hardening as the core's (Makefile HARDEN): the SDK's libkernel has __stack_chk_fail.
+    args=("$standard" -O2 -Wall -Wextra -fstack-protector-strong -Wformat=2 -Wformat-security
+          -ffunction-sections -fdata-sections)
     # spot5: C++ is built with exceptions and RTTI (bell and cspot throw;
     # the exception probe proved unwinding works on the console).
     [[ $source == *.c ]] || args+=(-fexceptions -frtti)
@@ -267,6 +269,10 @@ mkdir -p "$app/sce_sys" "$app/sce_module"
     --magic "$fself_magic"
 
 cp "$param" "$app/sce_sys/param.json"
+# The release this is (../VERSION), with -dev+g<commit> unless RELEASE=1, for the About page.
+version=$(cat "$root/../VERSION" 2>/dev/null || echo unknown)
+[[ -n ${RELEASE:-} ]] || version="$version-dev+g${GIT_COMMIT:-$(git -C "$root" rev-parse --short HEAD 2>/dev/null || echo unknown)}"
+printf '%s\n' "$version" > "$app/version.txt"
 # Says which build this is, for an app that reads it; a release has none.
 [[ -z ${BUILD_LABEL:-} ]] || printf '%s\n' "$BUILD_LABEL" > "$app/build-label.txt"
 for asset in icon0.png pic0.dds pic1.dds snd0.at9; do

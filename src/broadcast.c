@@ -21,10 +21,11 @@
 #include "notify.h"
 #include "prefs.h"
 #include "rp_pair.h"
+#include "stream.h"
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static char state[16] = "off", error[160];
-static const bc_sink *volatile sink;
+static _Atomic(const bc_sink *) sink;
 
 static void set_state(const char *s, const char *why)
 {
@@ -54,7 +55,7 @@ void bc_set_sink(const bc_sink *s)
 static const struct {
     int w, h, fps;
 } profiles[] = {{1280, 720, 30}, {1280, 720, 60}, {1920, 1080, 30}, {1920, 1080, 60}};
-static volatile int profile;
+static _Atomic int profile;
 
 void bc_profile(int *w, int *h, int *fps)
 {
@@ -79,8 +80,17 @@ int bc_holds_controller(void)
     return 0;
 }
 
+void bc_rescue_controller(void)
+{
+}
+
 void bc_request_keyframe(void)
 {
+}
+
+const char *bc_controller(void)
+{
+    return "ok";
 }
 
 #else
@@ -98,8 +108,13 @@ void bc_request_keyframe(void)
 #include "voice_audio.h"
 
 static ChiakiSession session;
-static volatile int want, running, connected, quit, ds5_done, live, holding;
+static _Atomic int want, running, connected, quit, ds5_done, live, holding;
 static unsigned frames, audio_frames, keyframes;
+// bc_start's test-and-set of running, and the worker's way out: two presses on two request
+// threads must not both start a session on the one struct above.
+static pthread_mutex_t run_lock = PTHREAD_MUTEX_INITIALIZER;
+static int exiting; // the worker is past run(): a start now would find nothing to keep it
+static unsigned starts; // bc_start calls: one during run()'s teardown runs it again
 
 static void rp_log(ChiakiLogLevel level, const char *msg, void *user)
 {
@@ -158,10 +173,16 @@ static void audio_frame_cb(uint8_t *buf, size_t size, void *user)
         s->audio(buf, size);
 }
 
+// live changes under it: a keyframe request (a stream thread) never reaches a session
+// being torn down.
+static pthread_mutex_t live_lock = PTHREAD_MUTEX_INITIALIZER;
+
 void bc_request_keyframe(void)
 {
+    pthread_mutex_lock(&live_lock);
     if (live)
         chiaki_session_request_idr(&session);
+    pthread_mutex_unlock(&live_lock);
 }
 
 // DualSense USB report 0x01 to chiaki's controller state.
@@ -297,7 +318,8 @@ static const char *run(void)
     ChiakiAudioSink audio = {NULL, audio_header_cb, audio_frame_cb};
     chiaki_session_set_audio_sink(&session, &audio);
     const char *why = NULL;
-    if (chiaki_session_start(&session) != CHIAKI_ERR_SUCCESS)
+    const int started = chiaki_session_start(&session) == CHIAKI_ERR_SUCCESS;
+    if (!started)
         why = "Remote Play could not start.";
     for (int i = 0; !why && !connected && !quit && want && i < 200; i++) // 20 s
         usleep(100000);
@@ -315,7 +337,9 @@ static const char *run(void)
             holding = usb_running;
         } else // another console user's session: the controller stays the user's own
             LOG("broadcast: Remote Play connected as another console user; the controller stays yours");
+        pthread_mutex_lock(&live_lock);
         live = 1;
+        pthread_mutex_unlock(&live_lock);
         set_state("live", "");
         unsigned tick = 0;
         while (want && !quit && !(usb_running && ds5_done) && voice_wanted()) {
@@ -323,20 +347,40 @@ static const char *run(void)
             if (++tick % 25 == 0)
                 LOG("broadcast: %u video frames (%u keyframes), %u audio frames", frames, keyframes, audio_frames);
         }
+        pthread_mutex_lock(&live_lock);
         live = 0;
+        pthread_mutex_unlock(&live_lock);
         if (usb_running && ds5_done && want && !quit)
             why = "Plug the controller in by USB to broadcast.";
         else if (quit && want)
             why = "Remote Play ended.";
     }
     if (usb_running) {
+        // The hand-back runs on the USB thread; a wedged ioctl must not keep the pad (and
+        // Quit) waiting for ever: after 10 s re-enumerate it from here.
         ds5_usb_request_stop();
-        pthread_join(usb, NULL);
+        for (int i = 0; i < 100 && !ds5_done; i++)
+            usleep(100000);
+        if (!ds5_done) {
+            LOG("broadcast: the controller's USB thread is stuck, re-enumerating it");
+            ds5_usb_rescue();
+            for (int i = 0; i < 20 && !ds5_done; i++)
+                usleep(100000);
+        }
+        if (ds5_done)
+            pthread_join(usb, NULL);
+        else {
+            pthread_detach(usb);
+            LOG("broadcast: the USB thread is still stuck; Go Live cannot take the controller again "
+                "until the core restarts");
+        }
         holding = 0;
     }
     vau_ext_set(0);
-    chiaki_session_stop(&session);
-    chiaki_session_join(&session);
+    if (started) { // its thread exists only then
+        chiaki_session_stop(&session);
+        chiaki_session_join(&session);
+    }
     chiaki_session_fini(&session);
     return why;
 }
@@ -344,13 +388,37 @@ static const char *run(void)
 static void *worker(void *arg)
 {
     (void)arg;
-    const char *why = run();
+    const char *why;
+    for (;;) {
+        pthread_mutex_lock(&run_lock);
+        const unsigned seen = starts;
+        pthread_mutex_unlock(&run_lock);
+        why = run();
+        pthread_mutex_lock(&run_lock);
+        // Stopped, then started again while run() was handing everything back: it saw the
+        // stop, so it runs once more for the start (which was told yes).
+        const int again = !why && want && starts != seen && voice_wanted();
+        if (!again)
+            exiting = 1;
+        else
+            profile = prefs_get("golive_quality");
+        pthread_mutex_unlock(&run_lock);
+        if (!again)
+            break;
+        LOG("broadcast: started again while stopping");
+        set_state("starting", "");
+    }
     LOG("broadcast: off%s%s", why ? ": " : "", why ? why : "");
     set_state(why ? "error" : "off", why ? why : "");
-    if (why)
+    if (why) {
+        stream_stop(); // the picture is gone: no frozen stream left in the call
         app_alert("Go Live stopped", why, NULL, 1); // the game is in front: say so there
+    }
+    pthread_mutex_lock(&run_lock);
     want = 0;
     running = 0;
+    exiting = 0;
+    pthread_mutex_unlock(&run_lock);
     return NULL;
 }
 
@@ -364,9 +432,18 @@ int bc_start(void)
         set_state("error", "Remote Play is not paired with this console.");
         return -1;
     }
+    pthread_mutex_lock(&run_lock);
+    if (running && exiting) {
+        pthread_mutex_unlock(&run_lock);
+        set_state("error", "Go Live is stopping, try again.");
+        return -1;
+    }
     want = 1;
-    if (running)
+    starts++;
+    if (running) {
+        pthread_mutex_unlock(&run_lock);
         return 0;
+    }
     running = 1;
     profile = prefs_get("golive_quality");
     set_state("starting", "");
@@ -374,8 +451,12 @@ int bc_start(void)
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-    if (pthread_create(&t, &attr, worker, NULL) != 0) {
-        running = 0;
+    int failed = pthread_create(&t, &attr, worker, NULL) != 0;
+    pthread_attr_destroy(&attr);
+    if (failed)
+        want = running = 0;
+    pthread_mutex_unlock(&run_lock);
+    if (failed) {
         set_state("error", "Broadcasting could not start.");
         return -1;
     }
@@ -390,5 +471,31 @@ void bc_stop(void)
 int bc_holds_controller(void)
 {
     return holding;
+}
+
+void bc_rescue_controller(void)
+{
+    ds5_usb_rescue();
+}
+
+const char *bc_controller(void)
+{
+    static const char *last = "ok";
+    static time_t at;
+    static pthread_mutex_t once = PTHREAD_MUTEX_INITIALIZER;
+    // Only Go Live as the user on screen takes the controller, and not while it runs.
+    if (strcmp(bc_state(), "off") != 0 && strcmp(bc_state(), "error") != 0)
+        return last;
+    if (rp_used() < 0 || rp_used() != rp_foreground())
+        return "ok";
+    pthread_mutex_lock(&once);
+    if (time(NULL) - at >= 2) { // the app asks every poll; a scan opens USB devices
+        static const char *const names[] = {"ok", "replug", "unknown"};
+        last = names[ds5_usb_replug_state()];
+        at = time(NULL);
+    }
+    const char *r = last;
+    pthread_mutex_unlock(&once);
+    return r;
 }
 #endif

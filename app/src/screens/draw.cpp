@@ -561,4 +561,41 @@ void confirm_card(DrawList &list, const Ink &ink, const std::string &title, cons
     ui::draw_hints(list, ink.fonts, hint_glyphs(), hints, 2, card.x + card.w - 48.0f, true, layout);
 }
 
+void spinner(DrawList &list, float cx, float cy, float r, float t)
+{
+    list.ring(cx, cy, r, 7.0f, style::kRaisedHigh);
+    list.arc(cx, cy, r, 7.0f, t * 4.2f, 1.6f, style::kCoral);
+}
+
+void busy_card(DrawList &list, const Ink &ink, const std::string &title, const std::string &note, const char *back,
+               float t)
+{
+    namespace ui = hui::ui;
+    list.rounded_rect({0, 0, 1920, 1080}, 0.0f, Color::rgb(0x0d0e12, 0.78f));
+    const Rect card{560.0f, 380.0f, 800.0f, 320.0f};
+    list.shadow(card, 28.0f, 50.0f, Color::rgb(0, 0.5f));
+    list.rounded_rect(card, 28.0f, style::kRaised);
+    if (note.empty())
+    {
+        spinner(list, card.cx(), card.y + 110.0f, 40.0f, t);
+        ui::text(list, ink.fonts.display, fit(ink.fonts.display, title, 44.0f, card.w - 112.0f), card.cx(),
+                 card.y + 222.0f, 44.0f, style::kText, hui::gfx::Align::center);
+    }
+    else
+    {
+        ui::text(list, ink.fonts.display, fit(ink.fonts.display, title, 50.0f, card.w - 112.0f), card.x + 56.0f,
+                 card.y + 92.0f, 50.0f, style::kText);
+        ui::paragraph(list, ink.fonts.regular, note, card.x + 58.0f, card.y + 150.0f, 26.0f, card.w - 116.0f, 36.0f,
+                      style::kDim, 3, hui::gfx::Align::left);
+    }
+    if (!back)
+        return;
+    const ui::Hint hints[] = {{ui::Button::circle, back}};
+    ui::HintLayout layout;
+    layout.size = 34.0f;
+    layout.text_size = 23.0f;
+    layout.cy = card.y + card.h - 44.0f;
+    ui::draw_hints(list, ink.fonts, hint_glyphs(), hints, 1, card.x + card.w - 48.0f, true, layout);
+}
+
 } // namespace screens

@@ -93,10 +93,11 @@ void EmojiPicker::open(const discord::Snapshot &s, const std::string &guild_id, 
 
 void EmojiPicker::close()
 {
+    // All of them, GIF sheets above all (megabytes each): one also showing in the chat is
+    // simply downloaded again.
     if (ink_.art.forget)
         for (const std::string &url : previews_)
-            if (url.find("?still") != std::string::npos) // its own; a PNG one may show in the chat too
-                ink_.art.forget(url);
+            ink_.art.forget(url);
     previews_.clear();
 }
 

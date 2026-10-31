@@ -46,7 +46,7 @@ static void path(char *out, size_t cap, int32_t user, const char *ext)
     snprintf(out, cap, "%s/remoteplay-%08x.%s", dir, (unsigned)user, ext);
 }
 
-static int exists(const char *p)
+__attribute__((unused)) static int exists(const char *p) // the console's half only
 {
     FILE *f = fopen(p, "rb"); // access() refuses payloads on the console
     if (f)
@@ -55,7 +55,7 @@ static int exists(const char *p)
 }
 
 // The .txt beside a pairing: console name, user name, time.
-static void read_info(const char *p, char console[64], char user[64], long long *since)
+__attribute__((unused)) static void read_info(const char *p, char console[64], char user[64], long long *since)
 {
     console[0] = user[0] = 0;
     *since = 0;
@@ -184,16 +184,20 @@ static void chiaki_log_cb(ChiakiLogLevel level, const char *msg, void *user)
 }
 
 // The user service, started here: the core does not use it otherwise.
+static void *user_lib_handle;
+
+static void user_lib_open(void)
+{
+    sceUserServiceInitialize(NULL); // already started is fine
+    user_lib_handle = dlopen("libSceUserService.sprx", RTLD_LAZY);
+}
+
+// Once, and a second caller waits for the first (watch_user and a pairing may race here).
 static void *user_lib(void)
 {
-    static void *lib;
-    static int started;
-    if (!started) {
-        started = 1;
-        sceUserServiceInitialize(NULL); // already started is fine
-        lib = dlopen("libSceUserService.sprx", RTLD_LAZY);
-    }
-    return lib;
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    pthread_once(&once, user_lib_open);
+    return user_lib_handle;
 }
 
 int32_t rp_foreground(void)
@@ -354,7 +358,7 @@ typedef struct {
     uint32_t pin;
 } pair_job;
 
-static volatile int regist_done;
+static _Atomic int regist_done;
 static ChiakiRegisteredHost regist_host;
 
 static void regist_cb(ChiakiRegistEvent *e, void *user)

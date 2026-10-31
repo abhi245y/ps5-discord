@@ -1,4 +1,5 @@
 #include "chat.h"
+#include "json_num.h"
 #include "log.h"
 #include "notify.h"
 #include "prefs.h"
@@ -22,6 +23,10 @@ static char token[256];
 //   voice{channel_id: [states]}, reads{channel_id: {last_read, mentions}},
 //   calls{channel_id: {ringing[ids], message_id}} (DM calls in progress or ringing)
 static cJSON *tree;
+// Bumped on every change to tree (/api/chat?v= answers 304 while it holds), seeded from the
+// clock at READY so a restarted core never repeats a number the app holds.
+static long tree_version;
+static time_t pruned; // when users was last cut down to the people still referenced
 static char *events[EVENT_RING];
 static long next_event; // sequence number of the next event
 
@@ -41,9 +46,11 @@ void chat_reset(void)
     pthread_mutex_unlock(&lock);
 }
 
-const char *chat_token(void)
+void chat_token(char *out, size_t cap)
 {
-    return token; // written once per login before the gateway starts
+    pthread_mutex_lock(&lock); // chat_reset clears it from the main thread
+    snprintf(out, cap, "%s", token);
+    pthread_mutex_unlock(&lock);
 }
 
 static void copy(cJSON *dst, cJSON *src, const char *key)
@@ -89,7 +96,7 @@ static void set_presence(const char *user_id, const char *status, cJSON *activit
     cJSON *a;
     cJSON_ArrayForEach(a, activities)
     {
-        if ((int)cJSON_GetNumberValue(cJSON_GetObjectItem(a, "type")) == 0 && str(a, "name"))
+        if ((int)json_int(a, "type", 0) == 0 && str(a, "name"))
         {
             cJSON_AddStringToObject(p, "activity", str(a, "name"));
             break;
@@ -229,7 +236,7 @@ static uint64_t channel_permissions(uint64_t base, cJSON *c, const char *gid, co
     cJSON_ArrayForEach(o, cJSON_GetObjectItem(c, "permission_overwrites"))
     {
         const char *id = str(o, "id");
-        int type = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "type"));
+        int type = (int)json_int(o, "type", 0);
         if (id && type == 0 && strcmp(id, gid ? gid : "") != 0 && has_role(my_roles, id)) {
             allow |= perm_bits(o, "allow");
             deny |= perm_bits(o, "deny");
@@ -239,7 +246,7 @@ static uint64_t channel_permissions(uint64_t base, cJSON *c, const char *gid, co
     cJSON_ArrayForEach(o, cJSON_GetObjectItem(c, "permission_overwrites"))
     {
         const char *id = str(o, "id");
-        int type = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(o, "type"));
+        int type = (int)json_int(o, "type", 0);
         if (id && me && type == 1 && strcmp(id, me) == 0)
             base = (base & ~perm_bits(o, "deny")) | perm_bits(o, "allow");
     }
@@ -277,7 +284,7 @@ static void put_channel(cJSON *og, cJSON *c)
     const char *me = str(cJSON_GetObjectItem(tree, "me"), "id");
     const uint64_t base = perm_bits(og, "_base");
     const uint64_t perms = channel_permissions(base, c, str(og, "id"), me, cJSON_GetObjectItem(og, "_my_roles"));
-    int type = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(c, "type"));
+    int type = (int)json_int(c, "type", 0);
     // ponytail: categories are kept regardless; their children carry their own overwrites.
     if (type != 4 && !(perms & PERM_VIEW_CHANNEL))
         return; // hidden from this account, as in the official client
@@ -415,7 +422,9 @@ static void load_ready(cJSON *d)
     int gi = -1;
     cJSON_ArrayForEach(g, cJSON_GetObjectItem(d, "guilds"))
     {
-        ++gi;
+        ++gi; // merged_members follows READY's guild order, unavailable ones included
+        if (cJSON_IsTrue(cJSON_GetObjectItem(g, "unavailable")))
+            continue; // only an id; GUILD_CREATE brings it when it is back
         cJSON_AddItemToArray(guilds, guild_tree(g, me, my_roles_in(d, gi, me)));
     }
 
@@ -434,7 +443,7 @@ static void load_ready(cJSON *d)
     cJSON *friends = cJSON_AddArrayToObject(t, "friends");
     cJSON_ArrayForEach(c, cJSON_GetObjectItem(d, "relationships"))
     {
-        if ((int)cJSON_GetNumberValue(cJSON_GetObjectItem(c, "type")) != 1) // 1 = friend
+        if ((int)json_int(c, "type", 0) != 1) // 1 = friend
             continue;
         const char *id = str(c, "id");
         if (!id)
@@ -460,9 +469,8 @@ static void load_ready(cJSON *d)
         cJSON *r = read_state(id);
         set_string(r, "last_read", str(c, "last_message_id"));
         cJSON_DeleteItemFromObject(r, "mentions");
-        const double count = cJSON_GetNumberValue(cJSON_GetObjectItem(c, "mention_count"));
-        cJSON_AddNumberToObject(r, "mentions",
-                               count >= 0 && count <= INT_MAX ? count : 0);
+        const int64_t count = json_int(c, "mention_count", 0);
+        cJSON_AddNumberToObject(r, "mentions", count >= 0 && count <= INT_MAX ? (double)count : 0);
     }
 }
 
@@ -500,12 +508,7 @@ static void push_event(const char *type, cJSON *d)
     copy(e, d, "id");
     copy(e, d, "channel_id");
     copy(e, d, "guild_id");
-    if (strcmp(type, "KEY") == 0) {
-        copy(e, d, "usage");
-        copy(e, d, "mods");
-        copy(e, d, "led");
-    }
-    else if (strncmp(type, "MESSAGE_REACTION_", 17) == 0) {
+    if (strncmp(type, "MESSAGE_REACTION_", 17) == 0) {
         copy(e, d, "message_id");
         copy(e, d, "user_id");
         cJSON *em = cJSON_GetObjectItem(d, "emoji");
@@ -655,11 +658,28 @@ static int has_id(cJSON *list, const char *id)
     return 0;
 }
 
+// The message mentions us as Discord counts it: by name, @everyone/@here (unless the server
+// suppresses it for us), or one of our roles (unless suppressed).
+static int mentions_me(cJSON *d, const char *me)
+{
+    cJSON *m, *e = cJSON_GetObjectItem(cJSON_GetObjectItem(tree, "notify"), str(d, "guild_id") ? str(d, "guild_id") : "");
+    cJSON_ArrayForEach(m, cJSON_GetObjectItem(d, "mentions"))
+        if (me && str(m, "id") && strcmp(str(m, "id"), me) == 0)
+            return 1;
+    if (cJSON_IsTrue(cJSON_GetObjectItem(d, "mention_everyone")) && !cJSON_IsTrue(cJSON_GetObjectItem(e, "suppress_everyone")))
+        return 1;
+    if (!cJSON_IsTrue(cJSON_GetObjectItem(e, "suppress_roles")))
+        cJSON_ArrayForEach(m, cJSON_GetObjectItem(d, "mention_roles"))
+            if (has_id(cJSON_GetObjectItem(guild_of(str(d, "guild_id")), "_my_roles"), cJSON_GetStringValue(m)))
+                return 1;
+    return 0;
+}
+
 // What a new message is worth: 0 nothing, 1 a server message, 2 a mention, 3 a DM.
 // ponytail: a thread's parent channel is not looked up, so a muted channel's threads still alert.
 static int notify_kind(cJSON *d, const char *me)
 {
-    int type = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(d, "type"));
+    int type = (int)json_int(d, "type", 0);
     if (type != 0 && type != 19) // plain messages and replies; not joins, pins, calls
         return 0;
     const char *channel = str(d, "channel_id"), *guild = str(d, "guild_id");
@@ -680,18 +700,7 @@ static int notify_kind(cJSON *d, const char *me)
         cJSON *n = cJSON_GetObjectItem(g, "default_message_notifications");
         level = cJSON_IsNumber(n) ? n->valueint : 1;
     }
-    cJSON *m;
-    int mention = 0;
-    cJSON_ArrayForEach(m, cJSON_GetObjectItem(d, "mentions"))
-        if (me && str(m, "id") && strcmp(str(m, "id"), me) == 0)
-            mention = 1;
-    if (cJSON_IsTrue(cJSON_GetObjectItem(d, "mention_everyone")) && !cJSON_IsTrue(cJSON_GetObjectItem(e, "suppress_everyone")))
-        mention = 1;
-    if (!cJSON_IsTrue(cJSON_GetObjectItem(e, "suppress_roles")))
-        cJSON_ArrayForEach(m, cJSON_GetObjectItem(d, "mention_roles"))
-            if (has_id(cJSON_GetObjectItem(g, "_my_roles"), cJSON_GetStringValue(m)))
-                mention = 1;
-    if (mention)
+    if (mentions_me(d, me))
         return level != 2 && prefs_get("notify_dm") ? 2 : 0;
     int server = prefs_get("notify_server"); // 0 off, 1 as set in Discord, 2 every message
     return server == 2 || (server == 1 && level == 0) ? 1 : 0;
@@ -787,7 +796,7 @@ static void message_created(cJSON *d)
         return;
     // A call's ring message (type 3) names who started the call.
     cJSON *call = cJSON_GetObjectItem(cJSON_GetObjectItem(tree, "calls"), channel_id);
-    if (call && (int)cJSON_GetNumberValue(cJSON_GetObjectItem(d, "type")) == 3 &&
+    if (call && (int)json_int(d, "type", 0) == 3 &&
         strcmp(str(call, "message_id") ? str(call, "message_id") : "", id) == 0) {
         const char *who = str(cJSON_GetObjectItem(d, "author"), "id");
         set_string(call, "caller", who ? who : "");
@@ -803,16 +812,13 @@ static void message_created(cJSON *d)
         set_string(r, "last_read", id); // your own message reads the channel
         return;
     }
-    cJSON *m;
-    cJSON_ArrayForEach(m, cJSON_GetObjectItem(d, "mentions"))
+    const int t = (int)json_int(d, "type", 0); // 1, 2, 4-6: a group DM's members, name, icon, pins
+    const int notice = t == 1 || t == 2 || (t >= 4 && t <= 6);
+    if ((!str(d, "guild_id") && !notice) || mentions_me(d, me)) // every DM message counts, as in Discord
     {
-        if (me && str(m, "id") && strcmp(str(m, "id"), me) == 0)
-        {
-            const double n = cJSON_GetNumberValue(cJSON_GetObjectItem(r, "mentions"));
-            cJSON_DeleteItemFromObject(r, "mentions");
-            cJSON_AddNumberToObject(r, "mentions", n + 1);
-            break;
-        }
+        const double n = (double)json_int(r, "mentions", 0);
+        cJSON_DeleteItemFromObject(r, "mentions");
+        cJSON_AddNumberToObject(r, "mentions", n + 1);
     }
     // For the app's banner (notify, quiet) and, sent after the lock, the PS5 alert.
     const int kind = notify_kind(d, me), quiet = kind && notify_quiet_now();
@@ -822,14 +828,25 @@ static void message_created(cJSON *d)
         alert_text(d);
 }
 
+static int dm_listed(const char *id)
+{
+    cJSON *c;
+    cJSON_ArrayForEach(c, cJSON_GetObjectItem(tree, "dms"))
+        if (id && str(c, "id") && strcmp(str(c, "id"), id) == 0)
+            return 1;
+    return 0;
+}
+
 void chat_dispatch(const char *type, cJSON *d)
 {
+    int changed = 1; // the tree changed (tree_version): not for typing, edits, reactions and the rest
     pthread_mutex_lock(&lock);
     if (strcmp(type, "READY") == 0)
     {
         cJSON_Delete(tree);
         tree = NULL;
         load_ready(d);
+        tree_version = (long)time(NULL) << 16;
     }
     else if (!tree)
     {
@@ -852,7 +869,8 @@ void chat_dispatch(const char *type, cJSON *d)
     else if (strcmp(type, "CHANNEL_DELETE") == 0 && guild_of(str(d, "guild_id")))
     {
         cJSON *gone = cJSON_Duplicate(d, 1); // same id, nothing visible: put_channel only removes
-        cJSON_ReplaceItemInObject(gone, "permission_overwrites", cJSON_Parse("[]"));
+        cJSON_DeleteItemFromObject(gone, "permission_overwrites"); // replacing a missing key leaks
+        cJSON_AddArrayToObject(gone, "permission_overwrites");
         cJSON_DeleteItemFromObject(gone, "type");
         cJSON_AddNumberToObject(gone, "type", 99);
         put_channel(guild_of(str(d, "guild_id")), gone);
@@ -866,12 +884,14 @@ void chat_dispatch(const char *type, cJSON *d)
         cJSON_DeleteItemFromObject(r, "mentions");
         cJSON_AddNumberToObject(r, "mentions", 0);
     }
-    else if (strcmp(type, "CHANNEL_CREATE") == 0 && (int)cJSON_GetNumberValue(cJSON_GetObjectItem(d, "type")) == 1)
+    else if (strcmp(type, "CHANNEL_CREATE") == 0 && (json_int(d, "type", 0) == 1 || json_int(d, "type", 0) == 3) &&
+             !dm_listed(str(d, "id"))) // a DM (1) or group DM (3), once: Discord resends a known one
     {
         cJSON *oc = cJSON_CreateObject(), *r;
         copy(oc, d, "id");
         copy(oc, d, "type");
         copy(oc, d, "last_message_id");
+        copy(oc, d, "name"); // group DMs only
         cJSON *ids = cJSON_AddArrayToObject(oc, "recipient_ids");
         cJSON_ArrayForEach(r, cJSON_GetObjectItem(d, "recipients"))
         {
@@ -884,7 +904,8 @@ void chat_dispatch(const char *type, cJSON *d)
              (strcmp(type + 8, "CREATE") == 0 || strcmp(type + 8, "UPDATE") == 0 || strcmp(type + 8, "DELETE") == 0 ||
               strcmp(type + 8, "REACTION_ADD") == 0 || strcmp(type + 8, "REACTION_REMOVE") == 0))
     {
-        if (strcmp(type, "MESSAGE_CREATE") == 0)
+        changed = strcmp(type, "MESSAGE_CREATE") == 0; // a new last message, unread counts
+        if (changed)
             message_created(d);
         push_event(type, d);
     }
@@ -893,6 +914,10 @@ void chat_dispatch(const char *type, cJSON *d)
     else if ((strcmp(type, "GUILD_EMOJIS_UPDATE") == 0 || strcmp(type, "GUILD_STICKERS_UPDATE") == 0) &&
              guild_of(str(d, "guild_id")))
         put_emojis(guild_of(str(d, "guild_id")), d, type[6] == 'E' ? "emojis" : "stickers");
+    else
+        changed = 0;
+    if (tree && changed)
+        tree_version++;
     pthread_mutex_unlock(&lock);
     if (alert_title[0]) {
         alert_sink(alert_title, alert_body, alert_icon, alert_urgent);
@@ -922,22 +947,62 @@ int chat_call_active(const char *channel_id)
     return on;
 }
 
-void chat_key(int usage, int mods, int led)
+static int listed(cJSON *array, const char *id)
 {
-    cJSON *d = cJSON_CreateObject();
-    cJSON_AddNumberToObject(d, "usage", usage);
-    cJSON_AddNumberToObject(d, "mods", mods);
-    cJSON_AddNumberToObject(d, "led", led);
+    cJSON *v;
+    cJSON_ArrayForEach(v, array)
+        if (cJSON_IsString(v) && strcmp(v->valuestring, id) == 0)
+            return 1;
+    return 0;
+}
+
+// Lock held. users gains everyone seen (authors, voice, presence) and would only grow: keep
+// me, friends, DM recipients, people in voice and ringing calls. Messages carry their
+// author themselves, so the app needs no others.
+static void prune_users(void)
+{
+    cJSON *users = cJSON_GetObjectItem(tree, "users"), *dms = cJSON_GetObjectItem(tree, "dms");
+    cJSON *voice = cJSON_GetObjectItem(tree, "voice"), *calls = cJSON_GetObjectItem(tree, "calls");
+    const char *me = str(cJSON_GetObjectItem(tree, "me"), "id");
+    cJSON *u = users ? users->child : NULL;
+    while (u) {
+        cJSON *next = u->next, *x, *y;
+        const char *id = u->string;
+        int keep = !id || (me && strcmp(id, me) == 0) || listed(cJSON_GetObjectItem(tree, "friends"), id);
+        cJSON_ArrayForEach(x, dms)
+            keep = keep || listed(cJSON_GetObjectItem(x, "recipient_ids"), id);
+        cJSON_ArrayForEach(x, voice)
+            cJSON_ArrayForEach(y, x)
+                keep = keep || (str(y, "user_id") && strcmp(str(y, "user_id"), id) == 0);
+        cJSON_ArrayForEach(x, calls)
+            keep = keep || listed(cJSON_GetObjectItem(x, "ringing"), id);
+        if (!keep)
+            cJSON_Delete(cJSON_DetachItemViaPointer(users, u));
+        u = next;
+    }
+}
+
+long chat_tree_version(void)
+{
     pthread_mutex_lock(&lock);
-    push_event("KEY", d);
+    long v = tree ? tree_version : -1;
     pthread_mutex_unlock(&lock);
-    cJSON_Delete(d);
+    return v;
 }
 
 char *chat_tree_json(void)
 {
     pthread_mutex_lock(&lock);
-    char *s = tree ? cJSON_PrintUnformatted(tree) : NULL;
+    char *s = NULL;
+    if (tree) {
+        if (time(NULL) - pruned >= 60) { // ponytail: a full scan, once a minute at most
+            prune_users();
+            pruned = time(NULL);
+        }
+        cJSON_DeleteItemFromObject(tree, "version");
+        cJSON_AddNumberToObject(tree, "version", (double)tree_version);
+        s = cJSON_PrintUnformatted(tree);
+    }
     pthread_mutex_unlock(&lock);
     return s;
 }
@@ -961,7 +1026,8 @@ char *chat_events_json(long since, int wait_ms)
                 break;
     }
     long first = next_event > EVENT_RING ? next_event - EVENT_RING : 0;
-    if (since < first)
+    int gap = since < first; // the app missed events (suspended in a game): it reloads
+    if (gap)
         since = first;
     size_t cap = 64;
     for (long i = since; i < next_event; i++)
@@ -969,7 +1035,7 @@ char *chat_events_json(long since, int wait_ms)
     char *out = malloc(cap);
     if (out)
     {
-        size_t n = (size_t)snprintf(out, cap, "{\"next\":%ld,\"events\":[", next_event);
+        size_t n = (size_t)snprintf(out, cap, "{\"next\":%ld,%s\"events\":[", next_event, gap ? "\"gap\":true," : "");
         for (long i = since; i < next_event; i++)
             n += (size_t)snprintf(out + n, cap - n, "%s%s", i > since ? "," : "", events[i % EVENT_RING]);
         snprintf(out + n, cap - n, "]}");
