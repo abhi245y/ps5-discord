@@ -122,9 +122,10 @@ void UpdateDialog::draw(const discord::Snapshot &s, DrawList &list) const
     switch (c)
     {
     case Card::offer:
-        title = version + " is available";
-        body = u.error.empty() ? "You have " + (u.installed.empty() ? std::string("an older version") : u.installed) +
-                                     ". The update downloads in the background; you restart to finish."
+        title = "A new version is available";
+        body = u.error.empty() ? version + " is out; you have " +
+                                     (u.installed.empty() ? std::string("an older one") : u.installed) +
+                                     ". It downloads in the background; you restart to finish."
                                : u.error;
         hints = {{ui::Button::square, "What's new"}, {ui::Button::cross, "Update"}, {ui::Button::circle, "Later"}};
         break;
