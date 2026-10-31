@@ -287,6 +287,14 @@ if [[ -f $root/../build/ps5-discord.elf ]]; then
 else
     echo "warning: ../build/ps5-discord.elf missing; the app will not start the core" >&2
 fi
+# A USB Bluetooth adapter's firmware for the headset (the core reads /app0/firmware), with
+# its licence (tools/deps.sh at the repo root fetches both).
+if [[ -f $root/../.deps/firmware/rtl8761bu_fw.bin ]]; then
+    mkdir -p "$app/firmware"
+    cp "$root/../.deps/firmware/rtl8761bu_fw.bin" "$root/../.deps/firmware/LICENCE.rtlwifi_firmware.txt" "$app/firmware/"
+else
+    echo "warning: ../.deps/firmware missing (run make deps at the repo root); Realtek adapters will not start" >&2
+fi
 # Directory listing returns nothing under /app0 on the console, so each
 # audio folder carries an index of its files (read by save::list_files).
 for dir in "$app/assets/audio/music" "$app"/assets/audio/sfx/*/; do

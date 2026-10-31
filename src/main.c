@@ -247,8 +247,9 @@ static void on_crash(int sig)
     klog_printf("[discord] crashed: signal %d\n", sig);
 #endif
     bc_rescue_controller();
-    signal(sig, SIG_DFL);
-    raise(sig);
+    // End the process here: re-raising the signal left a crashed core alive on the console,
+    // still holding the control port, so the app could not start a new one ("already running").
+    _exit(128 + sig);
 }
 
 int main(void)

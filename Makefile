@@ -140,6 +140,8 @@ build/ps5/src/main.o build/ps5/src/status.o build/ps5/src/web.o build/host/src/m
 # (no LAN, no -dev), the self-checks, the app with that core inside, and their checksums.
 release:
 	@test -f $(DAVE_PS5)/lib/libdave.a || { echo "release: libdave is missing (voice would fail with 4017): run make dave first"; exit 1; }
+	@test -f $(FFMPEG_PS5)/lib/libavcodec.a || { echo "release: FFmpeg is missing (no AirPods mic): run make ffmpeg first"; exit 1; }
+	@test -f .deps/firmware/rtl8761bu_fw.bin || { echo "release: the adapter firmware is missing: run make deps first"; exit 1; }
 	$(MAKE) clean
 	$(MAKE) RELEASE=1 CORE_LAN=0 all
 	$(MAKE) test

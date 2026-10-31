@@ -55,4 +55,14 @@ fetch https://github.com/nlohmann/json/releases/download/v3.11.3/json.hpp \
 fetch https://curl.se/ca/cacert-2026-10-20.pem \
     796f1389bfea13c0ed78f663b765baaff54a508e5483786bd6ece73c5e3e3cbe "$deps/cacert-2026-10-20.pem"
 
+# The firmware a Realtek RTL8761BU Bluetooth adapter (TP-Link UB500 and others) needs at
+# start, for the headset (src/bt): linux-firmware 20260810, redistributable under its
+# licence, which ships next to it in the app.
+FW_URL=https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain
+mkdir -p "$deps/firmware"
+fetch "$FW_URL/rtl_bt/rtl8761bu_fw.bin?h=20260810" \
+    1d7a9597349ad89344fa16c1913d3e39e9a12e966e417ca16871bc79bbe59edb "$deps/firmware/rtl8761bu_fw.bin"
+fetch "$FW_URL/LICENSES/LICENCE.rtlwifi_firmware.txt?h=20260810" \
+    a61351665b4f264f6c631364f85b907d8f8f41f8b369533ef4021765f9f3b62e "$deps/firmware/LICENCE.rtlwifi_firmware.txt"
+
 echo "deps ready in $deps"
