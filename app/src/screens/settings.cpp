@@ -36,6 +36,7 @@ enum class Act
     sign_out,
     quit,
     update, // Check for updates, or open the update dialog
+    restore, // the previous version back (asks first)
     pref, // a console-side setting (Row::key, discord::Prefs)
     ui_volume,
     sfx_volume,
@@ -208,10 +209,15 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
                                : u.state == "unpacking"   ? "Unpacking..."
                                : u.state == "ready"       ? "Ready: restart to finish"
                                : u.state == "applying"    ? "Restarting..."
+                               : u.state == "restoring"   ? "Going back..."
                                : u.state == "failed"      ? (u.error.empty() ? "The last update failed" : u.error)
-                               : u.state == "rolled_back" ? "The last update did not start"
+                               : !u.error.empty()         ? u.error
+                               : !u.check_error.empty()   ? u.check_error
                                                           : "Up to date";
             rows.push_back({Kind::button, "Updates", desc, open ? "Open" : "Check", 0, false, false, Act::update});
+            if (!u.previous.empty() && u.state == "none")
+                rows.push_back({Kind::button, "Previous version", "Go back to " + u.previous, "Restore", 0, false,
+                                false, Act::restore});
         }
         rows.insert(rows.end(), {
             {Kind::value, "License", "", "AGPL-3.0"},
@@ -563,7 +569,9 @@ bool SettingsScreen::update(const discord::Snapshot &s, const hui::InputFrame &i
         else if (input.is_pressed(Action::confirm))
         {
             discord::Request r;
-            r.kind = confirm_ == Confirm::quit ? discord::Request::Kind::quit : discord::Request::Kind::sign_out;
+            r.kind = confirm_ == Confirm::quit      ? discord::Request::Kind::quit
+                     : confirm_ == Confirm::restore ? discord::Request::Kind::update_restore
+                                                    : discord::Request::Kind::sign_out;
             requests.push_back(r);
             feedback.play(hui::audio::Cue::select);
             open();
@@ -694,6 +702,10 @@ bool SettingsScreen::update(const discord::Snapshot &s, const hui::InputFrame &i
                 requests.push_back(r);
             }
             feedback.play(hui::audio::Cue::select);
+            break;
+        case Act::restore:
+            confirm_ = Confirm::restore;
+            feedback.play(hui::audio::Cue::modal_open);
             break;
         case Act::sign_out:
         case Act::quit:
@@ -826,6 +838,11 @@ void SettingsScreen::draw(const discord::Snapshot &s, const hui::Settings &app, 
                      "Sign out");
     else if (confirm_ == Confirm::quit)
         confirm_card(list, ink_, "Quit Discord?", kQuitText, "Quit");
+    else if (confirm_ == Confirm::restore)
+        confirm_card(list, ink_, "Go back to " + s.update.previous + "?",
+                     "The app closes, a call or Go Live ends, and the version before this update comes back. Open "
+                     "Discord again to use it. Check for updates offers this version again.",
+                     "Go back");
     else if (confirm_ == Confirm::quality)
         confirm_card(list, ink_, std::string("Use ") + kQualities[std::clamp(quality_, 0, 3)] + "?",
                      "Discord allows this only with Nitro or in a boosted server. Without them it may lag or fail "

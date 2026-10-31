@@ -1,5 +1,6 @@
 #include "tls.h"
 
+#include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
@@ -94,14 +95,21 @@ static int connect_timed(mbedtls_net_context *net, const char *host, const char 
         }
         int flags = fcntl(fd, F_GETFL, 0);
         fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-        int ok = connect(fd, a->ai_addr, a->ai_addrlen) == 0;
-        if (!ok && errno == EINPROGRESS) {
+        int ok = connect(fd, a->ai_addr, a->ai_addrlen) == 0, err = ok ? 0 : errno, waited = 0;
+        if (!ok && err == EINPROGRESS) {
             struct pollfd p = {.fd = fd, .events = POLLOUT};
-            int err = 0;
             socklen_t len = sizeof err;
-            ok = poll(&p, 1, CONNECT_MS) == 1 && getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len) == 0 && err == 0;
+            waited = poll(&p, 1, CONNECT_MS);
+            if (waited != 1 || getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len) != 0)
+                err = waited == 0 ? ETIMEDOUT : errno;
+            ok = err == 0;
         }
         if (!ok) {
+            char ip[INET6_ADDRSTRLEN] = "?";
+            const void *at = a->ai_family == AF_INET6 ? (const void *)&((struct sockaddr_in6 *)a->ai_addr)->sin6_addr
+                                                      : (const void *)&((struct sockaddr_in *)a->ai_addr)->sin_addr;
+            inet_ntop(a->ai_family, at, ip, sizeof ip);
+            LOG("tls: connect to %s (%s) failed: %s", host, ip, strerror(err));
             close(fd);
             continue;
         }

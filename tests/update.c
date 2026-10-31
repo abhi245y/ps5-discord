@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The updater (src/update.c, included for its statics, and update_verify.c): version
 // order, the manifest, the FIDO signature, the release zip, the swap and its undo, the
-// watch over a new version's first launches, and the restore.
+// restore, and the whole of it on the update thread against a fake GitHub.
+#define http_get_url fake_get_url // GitHub, served from memory (flow())
 #include "../src/update.c"
 #include "../src/update_verify.c"
 
@@ -230,6 +231,11 @@ static void zips(void)
         assert(update_unzip(zip, out, 1 << 20, NULL, why, sizeof why) != 0);
         remove_tree(out);
     }
+    const char *deep[] = {"PPSA99072/1/2/3/4/5/6/7/8/9/10/11/12/13/14/15/16/17"}; // the walks recurse
+    mkdir(out, 0777);
+    make_zip(zip, deep, data + 1, 1, 0);
+    assert(update_unzip(zip, out, 1 << 20, NULL, why, sizeof why) != 0);
+    remove_tree(out);
     const char *twice[] = {"PPSA99072/a", "PPSA99072/a"};
     mkdir(out, 0777);
     make_zip(zip, twice, data + 1, 2, 0);
@@ -326,108 +332,20 @@ static void swaps(void)
     assert(has(p, "old font"));
 }
 
-static void running(int on)
-{
-    char p[300];
-    snprintf(p, sizeof p, "%s/PPSA99072_000", sandbox_dir), mkdir(p, 0777);
-    snprintf(p, sizeof p, "%s/PPSA99072_000/app0", sandbox_dir);
-    if (on)
-        mkdir(p, 0777);
-    else
-        rmdir(p);
-}
-
-static void watches(void)
-{
-    // Two launches that never drew: the previous version goes back, the zip marked bad.
-    folders("0.4.0", "0.5.0", 0);
-    assert(swap_in(0) == 0 && journal_write("done", "0.5.0", "0") == 0);
-    int was = 0;
-    for (int launch = 0; launch < 2; launch++) {
-        running(1), watch_tick(&was);
-        update_seen("0.5.0", 0, 0); // polling, never drawn
-        running(0), watch_tick(&was);
-    }
-    assert(app_has("eboot.bin", "old boot") && app_has("version.txt", "0.4.0") && !exists(work));
-    assert(has(bad_file, "ab00000000000000000000000000000000000000000000000000000000000000 0.5.0"));
-    assert(strcmp(u.state, "rolled_back") == 0);
-    unlink(bad_file);
-
-    // One drawn request to the new core: it stays, and previous/ goes.
-    folders("0.4.0", "0.5.0", 0);
-    assert(swap_in(0) == 0 && journal_write("done", "0.5.0", "0") == 0);
-    was = 0;
-    running(1), watch_tick(&was);
-    update_seen("0.5.0", 1, 0);
-    watch_tick(&was);
-    assert(!exists(work) && app_has("version.txt", "0.5.0"));
-    running(0);
-
-    // Drawn only at the old core (a call kept it): neither proof nor a failed launch.
-    folders("0.4.0", "0.5.0", 0);
-    assert(swap_in(0) == 0 && journal_write("done", "0.5.0", "0") == 0);
-    was = 0;
-    running(1), watch_tick(&was);
-    snprintf(core_version, sizeof core_version, "0.4.0");
-    update_seen("0.5.0", 1, 0);
-    snprintf(core_version, sizeof core_version, "0.5.0");
-    running(0), watch_tick(&was);
-    char state[16], version[64], extra[64];
-    assert(journal_read(state, version, extra) == 0 && strcmp(extra, "0") == 0);
-    // Drawn on the fallback core: no proof, a failed launch.
-    running(1), watch_tick(&was);
-    update_seen("0.5.0", 1, 1);
-    update_seen("0.5.0", 1, 0);
-    running(0), watch_tick(&was);
-    assert(journal_read(state, version, extra) == 0 && strcmp(extra, "1") == 0);
-    // A proven launch that quits cleanly ends the watch at once, before the core stops.
-    running(1), watch_tick(&was);
-    update_seen("0.5.0", 1, 0);
-    update_bye();
-    assert(!exists(work) && app_has("version.txt", "0.5.0"));
-    running(0), watch_tick(&was);
-
-    // Another version installed by FTP meanwhile: the watch ends, nothing goes back.
-    folders("0.4.0", "0.5.0", 0);
-    assert(swap_in(0) == 0 && journal_write("done", "0.5.0", "0") == 0);
-    char p[400];
-    snprintf(p, sizeof p, "%s/version.txt", app_dir), put_file(p, "0.6.0");
-    was = 0;
-    running(1), watch_tick(&was), running(0), watch_tick(&was);
-    assert(!exists(work) && app_has("version.txt", "0.6.0"));
-}
-
-// apply() to the watch: the launch the swap waited out is not the new version's first.
-static void applies(void)
+// The journal's pieces a power cut leaves: a restore's zip marked, an empty swap finished.
+static void journals(void)
 {
     folders("0.4.0", "0.5.0", 0);
-    assert(journal_write("staged", "0.5.0", "0.4.0") == 0);
-    char staged[400];
-    snprintf(staged, sizeof staged, "%s/staged", work);
-    assert(open_modes(staged, 0) == 0 && open_modes(staged, 1) == 0);
-    int was = 1;
-    running(1), watch_tick(&was); // staged: nothing to watch yet
-    running(0);
-    apply(); // waits for the app to be gone (3 s settle)
-    was = app_running();
-    watch_tick(&was);
-    char state[16], version[64], extra[64];
-    assert(journal_read(state, version, extra) == 0 && strcmp(state, "done") == 0 && strcmp(extra, "0") == 0);
-    assert(app_has("version.txt", "0.5.0"));
-
-    // A restore a power cut ended, finished at start, marks the zip too.
-    assert(journal_write("restoring", "0.5.0", "0") == 0);
+    assert(journal_write("restoring", "0.5.0", "0.4.0") == 0);
     mark_bad("0.5.0");
     assert(has(bad_file, "ab00000000000000000000000000000000000000000000000000000000000000 0.5.0"));
     unsigned char sha[32] = {0xab};
     assert(marked_bad(sha));
     unlink(bad_file);
     assert(!marked_bad(sha));
-
-    // A swap that ended before its journal said so: nothing left to move.
     remove_tree(work);
     mkdir(work, 0777);
-    assert(swap_in(1) == 0);
+    assert(swap_in(1) == 0); // a swap that ended before its journal said so: nothing left to move
     remove_tree(work);
 }
 
@@ -481,6 +399,159 @@ static void notes_and_urls(void)
     assert(http_split_url(longhost, host, path) != 0);
 }
 
+// ---- The update thread against a fake GitHub ----
+
+static struct {
+    const char *url;
+    int status;
+    char *body;
+    size_t len;
+} served[4]; // changed only while the thread waits: update_check's lock orders it
+
+int fake_get_url(const char *url, int (*allowed)(const char *), unsigned long long limit, http_sink sink, void *user)
+{
+    char host[256], path[3072];
+    assert(http_split_url(url, host, path) == 0 && allowed(host));
+    for (int i = 0; i < 4 && served[i].url; i++) {
+        if (strcmp(served[i].url, url) != 0)
+            continue;
+        if (served[i].status != 200 || served[i].len > limit)
+            return served[i].status != 200 ? served[i].status : -1;
+        for (size_t at = 0; at < served[i].len; at += 4096)
+            if (!sink(user, served[i].body + at, served[i].len - at < 4096 ? served[i].len - at : 4096))
+                return -1;
+        return 200;
+    }
+    return 404;
+}
+
+static void serve(int i, const char *url, int status, const void *body, size_t len)
+{
+    free(served[i].body);
+    served[i].url = url, served[i].status = status, served[i].len = len;
+    served[i].body = malloc(len + 1);
+    memcpy(served[i].body, body, len);
+}
+
+// Up to 15 s for the thread to get the updater into state (and its check_error set or not).
+static void wait_for(const char *state, int with_error)
+{
+    for (int i = 0; i < 300; i++) {
+        pthread_mutex_lock(&lock);
+        int there = strcmp(u.state, state) == 0 && !u.want_check && !u.want_start && !u.want_apply &&
+                    !u.want_restore && (with_error < 0 || !!u.check_error[0] == with_error);
+        pthread_mutex_unlock(&lock);
+        if (there)
+            return;
+        usleep(50000);
+    }
+    fprintf(stderr, "update: never %s (%s, %s)\n", state, u.state, u.check_error);
+    assert(0);
+}
+
+static void flow(void)
+{
+    char p[400], zip[400];
+    remove_tree(app_dir);
+    remove_tree(work);
+    mkdir(app_dir, 0777);
+    snprintf(p, sizeof p, "%s/assets", app_dir), mkdir(p, 0777);
+    snprintf(p, sizeof p, "%s/assets/ps5-discord.elf", app_dir), put_file(p, "old core");
+    snprintf(p, sizeof p, "%s/eboot.bin", app_dir), put_file(p, "old boot");
+    snprintf(p, sizeof p, "%s/version.txt", app_dir), put_file(p, "0.4.0");
+    // The release: its zip, update.txt signed by a key the test trusts, and the list.
+    snprintf(zip, sizeof zip, "%s/release.zip", tmp);
+    const char *names[] = {"PPSA99072/eboot.bin", "PPSA99072/sce_sys/param.json", "PPSA99072/assets/ps5-discord.elf",
+                           "PPSA99072/version.txt"};
+    const char *data[] = {"new boot", "{}", "new core", "0.5.0"};
+    make_zip(zip, names, data, 4, 8);
+    FILE *f = fopen(zip, "rb");
+    static char bytes[8192];
+    size_t len = fread(bytes, 1, sizeof bytes, f);
+    fclose(f);
+    unsigned char sha[32];
+    mbedtls_sha256((unsigned char *)bytes, len, sha, 0);
+    char text[512], hex[65], list[2048];
+    for (int i = 0; i < 32; i++)
+        snprintf(hex + 2 * i, 3, "%02x", sha[i]);
+    snprintf(text, sizeof text, "ps5-discord-update 1\nversion 0.5.0\nasset app.zip\nsize %zu\nsha256 %s\nmin_from 0.0.0\n",
+             len, hex);
+    mbedtls_ecdsa_context k;
+    mbedtls_ecdsa_init(&k);
+    assert(mbedtls_ecdsa_genkey(&k, MBEDTLS_ECP_DP_SECP256R1, tls_random, NULL) == 0);
+    static unsigned char mine[1][65];
+    size_t n;
+    assert(mbedtls_ecp_point_write_binary(&k.MBEDTLS_PRIVATE(grp), &k.MBEDTLS_PRIVATE(Q), MBEDTLS_ECP_PF_UNCOMPRESSED,
+                                          &n, mine[0], 65) == 0);
+    keys = (const unsigned char(*)[65])mine, key_count = 1;
+    unsigned char sig[69];
+    sign(text, &k, 0x01, sig);
+    mbedtls_ecdsa_free(&k);
+    snprintf(list, sizeof list,
+             "[{\"tag_name\":\"v0.5.0\",\"draft\":false,\"body\":\"What changed\",\"assets\":["
+             "{\"name\":\"update.txt\",\"size\":%zu,\"browser_download_url\":\"https://github.com/r/update.txt\"},"
+             "{\"name\":\"update.sig\",\"size\":69,\"browser_download_url\":\"https://github.com/r/update.sig\"},"
+             "{\"name\":\"app.zip\",\"size\":%zu,\"browser_download_url\":\"https://github.com/r/app.zip\"}]}]",
+             strlen(text), len);
+    serve(0, RELEASES, -1, "", 0); // GitHub cannot be reached
+    serve(1, "https://github.com/r/update.txt", 200, text, strlen(text));
+    serve(2, "https://github.com/r/update.sig", 200, sig, sizeof sig);
+    serve(3, "https://github.com/r/app.zip", 200, bytes, len);
+
+    // On the update thread, its own stack: a check that fails says why and is not "Up to date".
+    char app[256], to[256], bad[256]; // update_init copies them over these
+    snprintf(app, sizeof app, "%s", app_dir), snprintf(to, sizeof to, "%s", work), snprintf(bad, sizeof bad, "%s", bad_file);
+    update_init(app, to, bad);
+    update_check(1);
+    wait_for("none", 1);
+    assert(strcmp(u.check_error, "Could not reach GitHub") == 0);
+    serve(0, RELEASES, 200, list, strlen(list));
+    update_check(1);
+    wait_for("available", 0);
+    assert(strcmp(u.version, "0.5.0") == 0 && strcmp(u.notes, "What changed") == 0);
+    // A check that fails later keeps the offer.
+    serve(0, RELEASES, -1, "", 0);
+    update_check(1);
+    wait_for("available", 1);
+    serve(0, RELEASES, 200, list, strlen(list));
+    char why[96];
+    assert(update_start(why, sizeof why) == 0);
+    wait_for("ready", -1);
+    char state[16], version[64], from[64];
+    assert(journal_read(state, version, from) == 0 && strcmp(state, "staged") == 0 && strcmp(from, "0.4.0") == 0);
+    update_check(1); // the staged version again: nothing new, no error
+    wait_for("ready", 0);
+    // A newer release that cannot be fetched leaves the staged one.
+    char newer[2048];
+    snprintf(newer, sizeof newer, "%s", list);
+    memcpy(strstr(newer, "v0.5.0"), "v0.6.0", 6);
+    serve(1, "https://github.com/r/update.txt", 500, "", 0);
+    serve(0, RELEASES, 200, newer, strlen(newer));
+    update_check(1);
+    wait_for("ready", 1);
+    // Restart now: the app is closed, the files go in, previous/ keeps 0.4.0.
+    assert(update_apply() == 0);
+    wait_for("none", -1);
+    assert(app_has("eboot.bin", "new boot") && app_has("version.txt", "0.5.0") && app_has("assets/ps5-discord.elf", "new core"));
+    assert(app_has("assets/ps5-discord.prev.elf", "old core"));
+    assert(journal_read(state, version, from) == 0 && strcmp(state, "done") == 0 && strcmp(u.previous, "0.4.0") == 0);
+    // Settings' Restore: 0.4.0 back, the zip kept off the launch check, offered by Check.
+    assert(update_restore() == 0);
+    wait_for("none", -1);
+    assert(app_has("eboot.bin", "old boot") && app_has("version.txt", "0.4.0") && !exists(work) && !u.previous[0]);
+    snprintf(p, sizeof p, "%s 0.5.0", hex);
+    assert(has(bad_file, p));
+    serve(1, "https://github.com/r/update.txt", 200, text, strlen(text));
+    serve(0, RELEASES, 200, list, strlen(list));
+    pthread_mutex_lock(&lock);
+    u.checked = 0; // an hour on
+    pthread_mutex_unlock(&lock);
+    update_check(0); // the launch check: the zip that was put back is not offered
+    wait_for("none", 0);
+    update_check(1);
+    wait_for("available", 0);
+}
+
 int main(void)
 {
     versions();
@@ -493,13 +564,12 @@ int main(void)
     snprintf(sandbox_dir, sizeof sandbox_dir, "%s/sandbox", tmp);
     mkdir(sandbox_dir, 0777);
     zips();
-    snprintf(core_version, sizeof core_version, "0.5.0");
     swaps();
-    watches();
-    applies();
+    journals();
     notes_and_urls();
     small_stack();
+    flow(); // last: its thread stays, waiting
     remove_tree(tmp);
-    puts("update: versions, manifest, signature, zip, swap and undo, apply, watch, restore, notes, URLs passed");
+    puts("update: versions, manifest, signature, zip, swap and undo, restore, notes, URLs, the thread passed");
     return 0;
 }

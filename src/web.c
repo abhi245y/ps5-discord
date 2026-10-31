@@ -693,14 +693,6 @@ static int host_ok(int c, const char *req, const char *body)
            (n == strlen(self) && strncmp(h, self, n) == 0);
 }
 
-// A header's value (up to cap - 1 bytes), or "".
-static void header_value(const char *req, const char *body, const char *name, char *out, size_t cap)
-{
-    const char *h = header_line(req, body, name);
-    size_t n = h ? strcspn(h += strlen(name), "\r\n") : 0;
-    snprintf(out, cap, "%.*s", (int)(n < cap ? n : 0), h ? h : "");
-}
-
 // X-Core-Key: the per-boot key (core_key.h), which only the app can read.
 static int key_header_ok(const char *req, const char *body)
 {
@@ -764,10 +756,6 @@ static void handle(int c, int local)
     if (local && header_line(req, body, "\r\nX-Discord-Native: 1\r\n") && key_header_ok(req, body)) {
         app_seen = time(NULL);
         app_front = !header_line(req, body, "\r\nX-App-Front: 0\r\n");
-        char version[64];
-        header_value(req, body, "\r\nX-App-Version: ", version, sizeof version);
-        update_seen(version, header_line(req, body, "\r\nX-App-Drawn: 1\r\n") != NULL,
-                    header_line(req, body, "\r\nX-Core-Fallback: 1\r\n") != NULL);
     }
     if (!local && strncmp(path, "/api/", 5) == 0 && strcmp(path, "/api/state") != 0 &&
         strcmp(path, "/api/quit") != 0) {
@@ -880,9 +868,11 @@ static void handle(int c, int local)
             reply(c, "200 OK", "application/json", "{\"ok\":true}", 11);
         else
             reply(c, "409 Conflict", "application/json", "{\"ok\":false}", 12);
-    } else if (post && strcmp(path, "/api/bye") == 0) {
-        update_bye();
-        reply(c, "200 OK", "application/json", "{\"ok\":true}", 11);
+    } else if (post && strcmp(path, "/api/update/restore") == 0) {
+        if (update_restore() == 0)
+            reply(c, "200 OK", "application/json", "{\"ok\":true}", 11);
+        else
+            reply(c, "409 Conflict", "application/json", "{\"ok\":false}", 12);
     } else if (post && strcmp(path, "/api/quit") == 0) {
         reply(c, "200 OK", "application/json", "{\"ok\":true}", 11);
         LOG("quit requested");

@@ -42,6 +42,7 @@ struct Request
         update_check, // ask the core to look for a new version: on = from Settings (force)
         update_start, // download and unpack the offered version
         update_apply, // swap the files in; the core answers 200 and the app closes itself
+        update_restore, // the previous version back: as update_apply
     };
     Kind kind = Kind::open_channel;
     std::string guild_id; // empty for a DM

@@ -143,8 +143,7 @@ Reply failed(Reply reply, const char *stage, int fd = -1)
     return reply;
 }
 
-std::atomic<bool> g_drawn{false};    // Client::set_drawn: 60 frames presented
-std::atomic<bool> g_fallback{false}; // the previous version's core was sent: every request says so
+std::atomic<bool> g_fallback{false}; // the previous version's core was sent
 
 // The core ships inside the app: when nothing answers on its port, hand the
 // bundled payload to elfldr on this console. A core that finds the port taken
@@ -236,8 +235,6 @@ Reply http(int port, const char *method, const std::string &path, const std::str
                           " HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
                           "X-Discord-Native: 1\r\nX-Core-Key: " + hui::ps5::core_key() +
                           "\r\nX-App-Front: " + (g_front ? "1" : "0") +
-                          (bundled_version().empty() ? "" : "\r\nX-App-Version: " + bundled_version()) +
-                          (g_drawn ? "\r\nX-App-Drawn: 1" : "") + (g_fallback ? "\r\nX-Core-Fallback: 1" : "") +
                           "\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
     for (std::size_t sent = 0; sent < request.size();)
     {
@@ -980,11 +977,6 @@ bool Client::front() const
     return g_front;
 }
 
-void Client::set_drawn()
-{
-    g_drawn = true;
-}
-
 void Client::test_notice(const std::string &text)
 {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -1169,8 +1161,8 @@ void Client::poll_state()
     const json state = json::parse(reply.body, nullptr, false);
     if (state.is_discarded())
         return;
-    // Read before the API check: an older core's API must not hide "rolled back". A missing
-    // object is an older core (no update UI). Dev builds never look for an update themselves.
+    // A missing object is an older core (no update UI). Dev builds never look for an update
+    // themselves; the launch check shows only an offer, never a failure.
     Update update;
     if (state.contains("update") && state["update"].is_object())
     {
@@ -1180,6 +1172,8 @@ void Client::poll_state()
         update.installed = text(u, "installed");
         update.notes = text(u, "notes");
         update.error = text(u, "error");
+        update.check_error = text(u, "check_error");
+        update.previous = text(u, "previous");
         update.done = static_cast<std::int64_t>(num(u, "done", 0.0));
         update.total = static_cast<std::int64_t>(num(u, "total", 0.0));
     }
@@ -1920,18 +1914,10 @@ void Client::handle(const Request &request)
         hui::sys::log("[CLIENT] /api/reconnect answered %d", http(port_, "POST", "/api/reconnect").status);
         break;
     case Request::Kind::quit: // the core stops (Go Live and the call first), then the app closes
-        // bye first: a clean exit is the new version's proof that it ran (the core replacement's quit is not)
-        hui::sys::log("[CLIENT] /api/bye answered %d", http(port_, "POST", "/api/bye").status);
         hui::sys::log("[CLIENT] /api/quit answered %d", http(port_, "POST", "/api/quit").status);
         quit_ = true;
         break;
     case Request::Kind::update_check: {
-        if (request.on) // Settings: "Checking..." at once, not after the next poll
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            snapshot_.update.state = "checking";
-            publish();
-        }
         const Reply reply = http(port_, "POST", "/api/update/check", request.on ? "{\"force\":true}" : "");
         hui::sys::log("[CLIENT] /api/update/check answered %d", reply.status);
         break;
@@ -1947,9 +1933,10 @@ void Client::handle(const Request &request)
         break;
     }
     case Request::Kind::update_apply: // the app must go for the core to swap its files
-    {
-        const int status = http(port_, "POST", "/api/update/apply").status;
-        hui::sys::log("[CLIENT] /api/update/apply answered %d", status);
+    case Request::Kind::update_restore: {
+        const char *path = request.kind == Request::Kind::update_apply ? "/api/update/apply" : "/api/update/restore";
+        const int status = http(port_, "POST", path).status;
+        hui::sys::log("[CLIENT] %s answered %d", path, status);
         quit_ = status == 200;
         break;
     }

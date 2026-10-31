@@ -1,6 +1,6 @@
 // The in-app updater (docs/updater-plan.md): finds a signed release on GitHub, unpacks it
 // beside the app, swaps the app folder's entries once the app has closed, and puts the
-// previous version back when the new one does not prove it starts.
+// previous version back when Settings asks.
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
@@ -10,15 +10,12 @@
 // The project's repository by id, so a rename or transfer keeps updates coming.
 #define UPDATE_REPO_ID "1425363066"
 
-// At core start: finishes a swap or a restore cut short, and starts the watch thread.
-void update_init(const char *app_dir, const char *work_dir, const char *bad_file, const char *core_version);
+// At core start: finishes a swap or a restore cut short, and starts the update thread.
+void update_init(const char *app_dir, const char *work_dir, const char *bad_file);
 void update_check(int force);           // asks GitHub (at most once an hour unless forced)
 int update_start(char *why, size_t cap); // download and unpack the release found; 0 started
 int update_apply(void);                 // ready: swap once the app has closed; 0 accepted
-// Every request from the app: its version.txt, whether it has presented 60 frames, whether
-// it started the fallback core. bye: its own Quit.
-void update_seen(const char *app_version, int drawn, int fallback);
-void update_bye(void);
+int update_restore(void);               // the previous version back once the app has closed; 0 accepted
 cJSON *update_json(void); // the "update" object of /api/state
 
 // ---- The pure parts (update_verify.c), for the tests ----

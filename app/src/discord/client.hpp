@@ -63,8 +63,6 @@ class Client
     // menu). The core shows the PS5's own alert while it is not.
     void set_front(bool front);
     bool front() const;
-    // The first frame was presented: requests say so (the core's proof that a new build runs).
-    void set_drawn();
     bool quit_wanted() const { return quit_; }
 
   private:

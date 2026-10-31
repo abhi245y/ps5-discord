@@ -228,15 +228,17 @@ static int fail(char *why, size_t cap, const char *what)
     return -1;
 }
 
-// A path inside PPSA99072/: no "..", no empty part, no backslash; "" for the folder itself.
+// A path inside PPSA99072/: no "..", no empty part, no backslash, at most 16 deep (the
+// folder walks recurse once a level on the update thread's stack); "" for the folder itself.
 static const char *inside(const char *name)
 {
     if (strncmp(name, "PPSA99072/", 10) != 0 || strchr(name, '\\'))
         return NULL;
     const char *rest = name + 10;
-    for (const char *p = rest; *p;) {
+    int depth = 0;
+    for (const char *p = rest; *p; depth++) {
         size_t n = strcspn(p, "/");
-        if (n == 0 || (n == 1 && p[0] == '.') || (n == 2 && p[0] == '.' && p[1] == '.'))
+        if (n == 0 || (n == 1 && p[0] == '.') || (n == 2 && p[0] == '.' && p[1] == '.') || depth == 16)
             return NULL;
         p += n + (p[n] == '/');
     }

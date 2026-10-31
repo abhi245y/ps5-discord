@@ -36,8 +36,6 @@ std::string trimmed(const std::string &text)
 UpdateDialog::Card UpdateDialog::card(const discord::Snapshot &s, bool idle) const
 {
     const Update &u = s.update;
-    if (u.state == "rolled_back")
-        return rolled_back_seen_ ? Card::none : Card::rolled_back;
     if (!idle)
         return Card::none;
     if (u.state == "failed")
@@ -102,13 +100,9 @@ bool UpdateDialog::update(const discord::Snapshot &s, const hui::InputFrame &inp
         else if (no)
             ready_later_ = true;
         break;
-    case Card::failed:
+    default: // failed
         if (yes || no)
             failed_seen_ = u.error;
-        break;
-    default: // rolled_back
-        if (yes || no)
-            rolled_back_seen_ = true;
         break;
     }
     return true;
@@ -159,14 +153,9 @@ void UpdateDialog::draw(const discord::Snapshot &s, DrawList &list) const
         if (u.state == "ready")
             hints = {{ui::Button::cross, "Restart now"}, {ui::Button::circle, "Later"}};
         break;
-    case Card::failed:
+    default: // failed
         title = "The update failed";
         body = u.error.empty() ? "Something went wrong." : u.error;
-        hints = {{ui::Button::cross, "OK"}};
-        break;
-    default:
-        title = "Update undone";
-        body = "The update did not start; the previous version is back.";
         hints = {{ui::Button::cross, "OK"}};
         break;
     }

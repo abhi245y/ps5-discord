@@ -1,16 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The updater's I/O (docs/updater-plan.md). One thread does everything in order: a check,
-// a download, a swap, the watch over the first launches of a new version, a restore.
+// a download, a swap, and going back to the previous version when asked.
 //
 // The work folder sits beside the app folder (same filesystem, so renames are atomic) and
-// holds a one-line journal: "staged V installed", "swapping V 0", "done V fails" or
-// "restoring V 0". A core of any version reads it at start and carries on.
+// holds a one-line journal: "staged V F", "swapping V F", "done V F" or "restoring V F",
+// F the version before V. A core of any version reads it at start and carries on. After a
+// swap, previous/ keeps F until the next download: Settings can put it back.
 #include "update.h"
 
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,34 +35,26 @@
 #define MAX_UNPACKED (1ull << 30)
 
 static char app_dir[256], work[256], bad_file[256], sandbox_dir[64] = "/mnt/sandbox";
-static char core_version[64]; // this core's: only a core of the new version takes its proof
 static const char *registered[] = {"/user/appmeta/PPSA99072", "/user/app/PPSA99072/sce_sys"};
+// The keys a release must be signed by: the tests put their own in.
+static const unsigned char (*keys)[65] = update_keys;
+static int key_count = (int)(sizeof update_keys / sizeof *update_keys);
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t wake = PTHREAD_COND_INITIALIZER;
 static struct {
-    const char *state; // none checking available downloading unpacking ready applying failed rolled_back
+    const char *state; // none checking available downloading unpacking ready applying restoring failed
     char version[64], installed[64], error[96];
+    char check_error[96]; // why the last check found nothing ("" when it worked)
+    char previous[64];    // the version previous/ holds, which Settings can put back
     char *notes;
     uint64_t done, total;
-    int want_check, force, want_start, want_apply;
+    int want_check, force, want_start, want_apply, want_restore;
     time_t checked;
     // The release found: its manifest, checked, and where its zip is.
     update_manifest manifest;
     char zip_url[1024];
-    // The watch: the launch now running.
-    char watch[64];
-    int64_t proof_first; // the new version's app drew its first 60 frames, talking to its own core
-    int fallback;
-    int drawn_old; // ... drew, but only at the old core (a call kept the app from replacing it)
 } u = {.state = "none"};
-
-static int64_t now_ms(void)
-{
-    struct timespec t;
-    clock_gettime(CLOCK_MONOTONIC, &t);
-    return (int64_t)t.tv_sec * 1000 + t.tv_nsec / 1000000;
-}
 
 static void set_state(const char *state, const char *error)
 {
@@ -471,33 +465,38 @@ static char *notes_of(const char *body)
     return notes;
 }
 
-// One release, checked: signed by our keys, newer than installed, for it, not marked bad.
-static int try_release(cJSON *rel, const char *installed, int force)
+// The newest release, checked: signed by our keys, for this version, not marked bad. 0 and
+// it is offered; else why (empty: nothing to say, a zip that was put back).
+static int try_release(cJSON *rel, const char *installed, int force, char *why, size_t cap)
 {
     const char *txt_url = asset_url(rel, "update.txt", NULL), *sig_url = asset_url(rel, "update.sig", NULL);
     const char *tag = cJSON_GetStringValue(cJSON_GetObjectItem(rel, "tag_name"));
-    if (!txt_url || !sig_url || !tag || tag[0] != 'v')
+    snprintf(why, cap, "%s is not a valid release", tag);
+    if (!txt_url || !sig_url)
         return -1;
-    buffer txt, sig;
-    if (fetch(txt_url, 4096, &txt) != 200)
-        return -1;
-    int ok = fetch(sig_url, 128, &sig) == 200;
+    buffer txt, sig = {0};
+    int status = fetch(txt_url, 4096, &txt);
+    if (status == 200)
+        status = fetch(sig_url, 128, &sig);
     update_manifest m;
     double size = 0;
     const char *zip = NULL;
-    if (ok && !update_signature_ok(txt.data, txt.len, (unsigned char *)sig.data, sig.len, update_keys,
-                                   (int)(sizeof update_keys / sizeof *update_keys))) {
+    int ok = status == 200 && update_signature_ok(txt.data, txt.len, (unsigned char *)sig.data, sig.len, keys, key_count);
+    if (status == 200 && !ok)
         LOG("update: %s is not signed by the project's keys", tag);
-        ok = 0;
-    }
     ok = ok && update_manifest_parse(txt.data, &m) == 0 && strcmp(m.version, tag + 1) == 0 &&
-         update_version_cmp(m.version, installed) > 0 && update_version_cmp(installed, m.min_from) >= 0 &&
-         (force || !marked_bad(m.sha256)) && (zip = asset_url(rel, m.asset, &size)) && size == (double)m.size &&
-         strlen(zip) < sizeof u.zip_url;
+         (zip = asset_url(rel, m.asset, &size)) && size == (double)m.size && strlen(zip) < sizeof u.zip_url;
     free(txt.data);
     free(sig.data);
+    if (status != 200)
+        snprintf(why, cap, "Could not reach GitHub");
+    else if (ok && update_version_cmp(installed, m.min_from) < 0)
+        snprintf(why, cap, "%s must be installed by hand", tag), ok = 0;
+    else if (ok && !force && marked_bad(m.sha256))
+        why[0] = 0, ok = 0;
     if (!ok)
         return -1;
+    why[0] = 0;
     char *notes = notes_of(cJSON_GetStringValue(cJSON_GetObjectItem(rel, "body")));
     pthread_mutex_lock(&lock);
     u.manifest = m;
@@ -507,56 +506,67 @@ static int try_release(cJSON *rel, const char *installed, int force)
     u.notes = notes;
     u.total = m.size;
     u.done = 0;
+    u.error[0] = 0;
     u.state = "available";
     pthread_mutex_unlock(&lock);
     LOG("update: %s is available", m.version);
     return 0;
 }
 
+// A check never takes away what is there: an offer or a staged update stays when GitHub
+// cannot be reached, and why goes to check_error.
 static void check(int force)
 {
-    char installed[64];
+    char installed[64], why[96] = "", staged[64] = "";
     installed_version(installed, sizeof installed);
+    pthread_mutex_lock(&lock);
+    const char *keep = strcmp(u.state, "available") == 0 || strcmp(u.state, "ready") == 0 ? u.state : "none";
+    if (strcmp(keep, "ready") == 0)
+        snprintf(staged, sizeof staged, "%s", u.version);
+    if (strcmp(keep, "none") == 0)
+        u.state = "checking";
+    pthread_mutex_unlock(&lock);
+    cJSON *rels = NULL, *pick = NULL;
     if (!update_version_ok(installed)) {
-        set_state("none", "no installed version to update");
-        return;
+        snprintf(why, sizeof why, "No installed version to update");
+    } else {
+        buffer list;
+        int status = fetch(RELEASES, 2u << 20, &list);
+        rels = status == 200 ? cJSON_Parse(list.data) : NULL;
+        free(list.data);
+        if (!cJSON_IsArray(rels))
+            snprintf(why, sizeof why, status == 403 || status == 429 ? "GitHub is busy; try later" : "Could not reach GitHub");
     }
-    set_state("checking", NULL);
-    buffer list;
-    int status = fetch(RELEASES, 2u << 20, &list);
-    cJSON *rels = status == 200 ? cJSON_Parse(list.data) : NULL;
-    free(list.data);
-    if (!cJSON_IsArray(rels)) {
-        set_state("none", status == 403 || status == 429 ? "GitHub is busy; try later" : "Could not reach GitHub");
-        cJSON_Delete(rels);
-        return;
+    // The newest only, prereleases only for a prerelease: if it fails, that is the news.
+    cJSON *r, *all = cJSON_IsArray(rels) ? rels : NULL;
+    const char *best = NULL;
+    cJSON_ArrayForEach(r, all)
+    {
+        const char *tag = cJSON_GetStringValue(cJSON_GetObjectItem(r, "tag_name"));
+        if (cJSON_IsTrue(cJSON_GetObjectItem(r, "draft")) || !tag || tag[0] != 'v' || !update_version_ok(tag + 1) ||
+            update_version_cmp(tag + 1, installed) <= 0 || (update_prerelease(tag + 1) && !update_prerelease(installed)))
+            continue;
+        if (!best || update_version_cmp(tag + 1, best) > 0)
+            best = tag + 1, pick = r;
     }
-    // Newest first, prereleases only for a prerelease: up to three tries.
-    int tried = 0, found = -1;
-    for (const char *best = NULL; tried < 3 && found != 0; tried++, best = NULL) {
-        cJSON *r, *pick = NULL;
-        cJSON_ArrayForEach(r, rels)
-        {
-            const char *tag = cJSON_GetStringValue(cJSON_GetObjectItem(r, "tag_name"));
-            if (cJSON_IsTrue(cJSON_GetObjectItem(r, "draft")) || cJSON_IsTrue(cJSON_GetObjectItem(r, "tried")) ||
-                !tag || tag[0] != 'v' || !update_version_ok(tag + 1) || update_version_cmp(tag + 1, installed) <= 0 ||
-                (update_prerelease(tag + 1) && !update_prerelease(installed)))
-                continue;
-            if (!best || update_version_cmp(tag + 1, best) > 0)
-                best = tag + 1, pick = r;
-        }
-        if (!pick)
-            break;
-        cJSON_AddTrueToObject(pick, "tried");
-        found = try_release(pick, installed, force);
+    int found = -1;
+    if (pick && !(staged[0] && update_version_cmp(best, staged) <= 0))
+        found = try_release(pick, installed, force, why, sizeof why);
+    if (found == 0 && staged[0]) { // a newer one than the staged update: that goes
+        LOG("update: %s replaces the staged %s", best, staged);
+        remove_tree(work);
     }
     cJSON_Delete(rels);
     pthread_mutex_lock(&lock);
     snprintf(u.installed, sizeof u.installed, "%s", installed);
-    u.checked = time(NULL);
-    if (found != 0)
-        u.state = "none";
+    snprintf(u.check_error, sizeof u.check_error, "%s", why);
+    if (!why[0])
+        u.checked = time(NULL);
+    if (found != 0) // a list without a newer release ends an offer; a staged update stays
+        u.state = why[0] || strcmp(keep, "ready") == 0 ? keep : "none";
     pthread_mutex_unlock(&lock);
+    if (why[0])
+        LOG("update: check: %s", why);
 }
 
 // ---- Download and stage ----
@@ -593,6 +603,7 @@ static int stage(void)
     u.done = 0;
     u.total = m.size;
     u.state = "downloading";
+    u.previous[0] = 0; // previous/ goes with the old work folder
     pthread_mutex_unlock(&lock);
     installed_version(installed, sizeof installed);
     remove_tree(work);
@@ -654,7 +665,7 @@ static int stage(void)
     return 0;
 }
 
-// ---- Apply, the watch, restore ----
+// ---- Apply and going back ----
 
 static int wait_closed(int seconds)
 {
@@ -669,47 +680,49 @@ static int wait_closed(int seconds)
     return -1;
 }
 
-static void start_watch(const char *version)
+// A clean state first: the app that opens next replaces this core, which it does at once
+// only outside a call. Then the app gone, and still the version the journal is about.
+static int ready_to_swap(const char *version)
 {
-    pthread_mutex_lock(&lock);
-    snprintf(u.watch, sizeof u.watch, "%s", version);
-    u.proof_first = 0;
-    u.fallback = u.drawn_old = 0;
-    pthread_mutex_unlock(&lock);
-}
-
-static void apply(void)
-{
-    char state[16], version[64], from[64], installed[64];
-    if (journal_read(state, version, from) != 0 || strcmp(state, "staged") != 0)
-        return set_state("failed", "Nothing staged");
-    set_state("applying", NULL);
-    // A clean state first: the new app replaces this core at once only outside a call, and
-    // it proves itself only to the new core.
     if (voice_wanted() || strcmp(bc_state(), "off") != 0) {
         LOG("update: leaving the call and Go Live first");
         core_end_calls();
     }
-    if (wait_closed(60) != 0)
-        return set_state("ready", "The app is still open");
+    char installed[64];
+    if (wait_closed(60) != 0 || app_running())
+        return -1;
     installed_version(installed, sizeof installed);
-    char staged[300];
-    snprintf(staged, sizeof staged, "%s/staged", work);
-    if (strcmp(installed[0] ? installed : "-", from) != 0) { // installed by FTP meanwhile
+    if (strcmp(installed[0] ? installed : "-", version) != 0) { // installed by FTP meanwhile
         remove_tree(work);
-        return set_state("none", "Another version was installed; update dropped");
+        return -2;
     }
-    if (app_running()) // opened again in the settle
+    return 0;
+}
+
+static void apply(void)
+{
+    char state[16], version[64], from[64], staged[300];
+    if (journal_read(state, version, from) != 0 || strcmp(state, "staged") != 0)
+        return set_state("failed", "Nothing staged");
+    set_state("applying", NULL);
+    int r = ready_to_swap(from);
+    if (r == -2)
+        return set_state("none", "Another version was installed; update dropped");
+    if (r != 0)
         return set_state("ready", "The app is still open");
-    if (open_modes(staged, 1) != 0 || journal_write("swapping", version, "0") != 0)
+    snprintf(staged, sizeof staged, "%s/staged", work);
+    if (open_modes(staged, 1) != 0 || journal_write("swapping", version, from) != 0)
         return set_state("failed", "Staged files are not ready");
     if (swap_in(0) != 0) {
         journal_write("staged", version, from);
         return set_state("failed", "Could not replace the app's files; nothing changed");
     }
-    journal_write("done", version, "0");
+    journal_write("done", version, from);
     refresh_registered();
-    start_watch(version);
+    pthread_mutex_lock(&lock);
+    snprintf(u.previous, sizeof u.previous, "%s", strcmp(from, "-") ? from : "");
+    snprintf(u.installed, sizeof u.installed, "%s", version);
+    pthread_mutex_unlock(&lock);
     set_state("none", NULL);
     LOG("update: %s in place", version);
     char text[128];
@@ -717,17 +730,8 @@ static void apply(void)
     notify_system("Discord", text, NULL);
 }
 
-static void clear_watch(const char *why)
-{
-    LOG("update: %s; the previous version is removed", why);
-    remove_tree(work);
-    pthread_mutex_lock(&lock);
-    u.watch[0] = 0;
-    pthread_mutex_unlock(&lock);
-}
-
-// The zip of this version, not its number, is kept off the launch check: a fixed one may
-// come under a new tag.
+// The zip of a version put back, not its number, is kept off the launch check: a fixed one
+// may come under a new tag.
 static void mark_bad(const char *version)
 {
     char sha_hex[80] = "", path[300];
@@ -739,103 +743,90 @@ static void mark_bad(const char *version)
     }
 }
 
-static void roll_back(const char *version)
+// Settings' Restore: previous/ back in place once the app has closed.
+static void go_back(void)
 {
-    journal_write("restoring", version, "0");
+    char state[16], version[64], from[64];
+    if (journal_read(state, version, from) != 0 || strcmp(state, "done") != 0)
+        return set_state("none", "No previous version to go back to");
+    int r = ready_to_swap(version);
+    if (r == -2) {
+        pthread_mutex_lock(&lock);
+        u.previous[0] = 0;
+        pthread_mutex_unlock(&lock);
+        return set_state("none", "Another version was installed");
+    }
+    if (r != 0)
+        return set_state("none", "The app is still open");
+    journal_write("restoring", version, from);
     if (restore() != 0) {
         LOG("update: restore of the previous version failed");
-        set_state("failed", "Going back failed: install a release by FTP");
-        return;
+        return set_state("failed", "Going back failed: install a release by FTP");
     }
     refresh_registered();
-    pthread_mutex_lock(&lock);
-    u.watch[0] = 0;
-    pthread_mutex_unlock(&lock);
     mark_bad(version);
     remove_tree(work);
-    set_state("rolled_back", NULL);
-    LOG("update: %s did not start; the previous version is back", version);
-    notify_system("Discord", "The update did not start; the previous version is back.", NULL);
+    pthread_mutex_lock(&lock);
+    u.previous[0] = 0;
+    snprintf(u.installed, sizeof u.installed, "%s", from);
+    pthread_mutex_unlock(&lock);
+    set_state("none", NULL);
+    LOG("update: back to %s from %s", from, version);
+    char text[128];
+    snprintf(text, sizeof text, "Discord went back to %s. Open it again.", from);
+    notify_system("Discord", text, NULL);
 }
 
-// One look at the watch: a launch of the new version must draw its first 60 frames while it
-// talks to the new core; two launches without that and the previous version goes back.
-static void watch_tick(int *was_running)
+// What the journal says previous/ holds, if it still matches the installed version.
+static void load_previous(void)
 {
-    char state[16], version[64], extra[64];
-    if (journal_read(state, version, extra) != 0 || strcmp(state, "done") != 0)
-        return;
-    int running = app_running();
-    pthread_mutex_lock(&lock);
-    if (strcmp(u.watch, version) != 0) { // a core started while the watch is on
-        snprintf(u.watch, sizeof u.watch, "%s", version);
-        u.proof_first = 0;
-        u.fallback = u.drawn_old = 0;
-    }
-    if (running && !*was_running)
-        u.proof_first = 0, u.fallback = u.drawn_old = 0;
-    int proven = !u.fallback && u.proof_first, unsure = !u.fallback && u.drawn_old;
-    pthread_mutex_unlock(&lock);
-    int ended = *was_running && !running;
-    *was_running = running;
-    if (proven)
-        return clear_watch("the new version runs");
-    if (!ended)
-        return;
-    char installed[64];
+    char state[16], version[64], from[64], installed[64], path[300];
     installed_version(installed, sizeof installed);
-    if (strcmp(installed, version) != 0)
-        return clear_watch("another version was installed");
-    if (unsure) { // the new app ran; whether the new core does, the next launch tells
-        LOG("update: %s ran on the old core; not counted", version);
+    snprintf(path, sizeof path, "%s/previous", work);
+    if (journal_read(state, version, from) != 0 || strcmp(state, "done") != 0)
+        return;
+    if (strcmp(installed, version) != 0 || !exists(path) || strcmp(from, "-") == 0) {
+        remove_tree(work); // another version came by FTP: previous/ is not what is behind it
         return;
     }
-    int fails = atoi(extra) + 1;
-    LOG("update: %s stopped without starting (%d of 2)", version, fails);
-    if (fails >= 2)
-        return roll_back(version);
-    snprintf(extra, sizeof extra, "%d", fails);
-    journal_write("done", version, extra);
+    pthread_mutex_lock(&lock);
+    snprintf(u.previous, sizeof u.previous, "%s", from);
+    pthread_mutex_unlock(&lock);
 }
 
 static void *run(void *unused)
 {
     (void)unused;
-    int was_running = app_running(); // the core may start under a running app: that launch counts
+    // A stack of its own for the crash handler, so an overflow here is logged (main.c on_crash).
+    stack_t alt = {.ss_sp = malloc(SIGSTKSZ * 4), .ss_size = SIGSTKSZ * 4};
+    if (alt.ss_sp)
+        sigaltstack(&alt, NULL);
     for (;;) {
         pthread_mutex_lock(&lock);
-        struct timespec t;
-        clock_gettime(CLOCK_REALTIME, &t);
-        t.tv_sec += 1;
-        if (!u.want_check && !u.want_start && !u.want_apply)
-            pthread_cond_timedwait(&wake, &lock, &t);
-        int do_check = u.want_check, do_start = u.want_start, do_apply = u.want_apply, force = u.force;
-        u.want_check = u.want_start = u.want_apply = u.force = 0;
-        int showing = strcmp(u.state, "checking") == 0;
+        while (!u.want_check && !u.want_start && !u.want_apply && !u.want_restore)
+            pthread_cond_wait(&wake, &lock);
+        int do_check = u.want_check, do_start = u.want_start, do_apply = u.want_apply, do_restore = u.want_restore;
+        int force = u.force;
+        u.want_check = u.want_start = u.want_apply = u.want_restore = u.force = 0;
         time_t since = time(NULL) - u.checked;
         pthread_mutex_unlock(&lock);
-        char state[16], version[64], extra[64];
-        int journal = journal_read(state, version, extra) == 0;
-        if (do_check && !journal && (force || since >= 3600))
-            check(force);
-        else if (do_check && showing)
-            set_state("none", NULL); // Check shows "checking" at once; nothing to do this time
+        // The asked-for work first: a check then sees what it left.
         if (do_start)
             stage();
-        if (do_apply) {
+        if (do_apply)
             apply();
-            was_running = app_running(); // the launch the swap waited out is no launch of the new version
-        }
-        watch_tick(&was_running);
+        if (do_restore)
+            go_back();
+        if (do_check && (force || since >= 3600))
+            check(force);
     }
     return NULL;
 }
 
 // ---- At start, and the control API ----
 
-void update_init(const char *app, const char *work_dir, const char *bad, const char *self)
+void update_init(const char *app, const char *work_dir, const char *bad)
 {
-    snprintf(core_version, sizeof core_version, "%s", self);
     snprintf(app_dir, sizeof app_dir, "%s", app);
     snprintf(work, sizeof work, "%s", work_dir);
     snprintf(bad_file, sizeof bad_file, "%s", bad);
@@ -844,11 +835,12 @@ void update_init(const char *app, const char *work_dir, const char *bad, const c
         remove_tree(work); // a download a power cut ended
     } else if (strcmp(state, "swapping") == 0) {
         LOG("update: finishing the swap to %s", version);
-        if (swap_in(1) == 0 && journal_write("done", version, "0") == 0)
+        if (swap_in(1) == 0 && journal_write("done", version, extra) == 0)
             refresh_registered();
     } else if (strcmp(state, "restoring") == 0) {
         LOG("update: finishing going back from %s", version);
         restore();
+        refresh_registered();
         mark_bad(version);
         remove_tree(work);
     } else if (strcmp(state, "staged") == 0) {
@@ -857,6 +849,7 @@ void update_init(const char *app, const char *work_dir, const char *bad, const c
         snprintf(u.version, sizeof u.version, "%s", version);
         pthread_mutex_unlock(&lock);
     }
+    load_previous();
     installed_version(u.installed, sizeof u.installed);
     // A stack of its own size: the console's default is small (a 64 KB buffer overflowed it).
     pthread_t t;
@@ -872,8 +865,6 @@ void update_init(const char *app, const char *work_dir, const char *bad, const c
 void update_check(int force)
 {
     pthread_mutex_lock(&lock);
-    if (strcmp(u.state, "rolled_back") == 0 && !force)
-        u.state = "none"; // the app has shown it
     u.want_check = 1;
     u.force |= force;
     if (force && (strcmp(u.state, "none") == 0 || strcmp(u.state, "failed") == 0))
@@ -888,18 +879,11 @@ int update_start(char *why, size_t cap)
     const char *no = NULL;
     pthread_mutex_lock(&lock);
     uint64_t size = u.manifest.size;
-    if (strcmp(u.state, "available") != 0 && strcmp(u.state, "failed") != 0)
-        no = "No update to start";
-    else if (!size)
+    if ((strcmp(u.state, "available") != 0 && strcmp(u.state, "failed") != 0) || !size)
         no = "No update to start";
     pthread_mutex_unlock(&lock);
     if (!no && statvfs(app_dir, &fs) == 0 && (uint64_t)fs.f_bavail * fs.f_frsize < 3 * size)
         no = "Not enough free space";
-    else if (!no && exists(work)) {
-        char state[16], version[64], extra[64];
-        if (journal_read(state, version, extra) == 0 && strcmp(state, "staged") != 0)
-            no = "An update is still being checked";
-    }
     if (no) {
         snprintf(why, cap, "%s", no);
         return -1;
@@ -912,45 +896,28 @@ int update_start(char *why, size_t cap)
     return 0;
 }
 
-int update_apply(void)
+// The two that close the app: accepted only from a state where nothing else is going on.
+static int ask(int *want, const char *from, const char *state)
 {
     pthread_mutex_lock(&lock);
-    int ok = strcmp(u.state, "ready") == 0;
+    int ok = strcmp(u.state, from) == 0 && (want != &u.want_restore || u.previous[0]);
     if (ok) {
-        u.want_apply = 1;
-        u.state = "applying";
+        *want = 1;
+        u.state = state;
         pthread_cond_signal(&wake);
     }
     pthread_mutex_unlock(&lock);
     return ok ? 0 : -1;
 }
 
-void update_seen(const char *app_version, int drawn, int fallback)
+int update_apply(void)
 {
-    pthread_mutex_lock(&lock);
-    if (u.watch[0]) {
-        u.fallback |= fallback;
-        // Not at the old core the new app talks to until it replaces it: the new core may not start.
-        if (drawn && app_version && strcmp(app_version, u.watch) == 0) {
-            if (strcmp(core_version, u.watch) != 0)
-                u.drawn_old = 1;
-            else if (!u.proof_first)
-                u.proof_first = now_ms();
-        }
-    }
-    pthread_mutex_unlock(&lock);
+    return ask(&u.want_apply, "ready", "applying");
 }
 
-// The app's own Quit, which stops this core next: a proven launch ends the watch now (no tick
-// would see it after the quit), so previous/ does not wait for the next start.
-void update_bye(void)
+int update_restore(void)
 {
-    pthread_mutex_lock(&lock);
-    int proven = u.watch[0] && u.proof_first && !u.fallback;
-    pthread_mutex_unlock(&lock);
-    char state[16], version[64], extra[64];
-    if (proven && journal_read(state, version, extra) == 0 && strcmp(state, "done") == 0)
-        clear_watch("the new version quit cleanly");
+    return ask(&u.want_restore, "none", "restoring");
 }
 
 cJSON *update_json(void)
@@ -964,6 +931,8 @@ cJSON *update_json(void)
     cJSON_AddNumberToObject(o, "done", (double)u.done);
     cJSON_AddNumberToObject(o, "total", (double)u.total);
     cJSON_AddStringToObject(o, "error", u.error);
+    cJSON_AddStringToObject(o, "check_error", u.check_error);
+    cJSON_AddStringToObject(o, "previous", u.previous);
     pthread_mutex_unlock(&lock);
     return o;
 }

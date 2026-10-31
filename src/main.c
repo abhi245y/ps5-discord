@@ -40,6 +40,7 @@
 #define DATA_DIR "/data/ps5-discord"
 #define APP_DIR "/data/homebrew/PPSA99072" // the app's /app0: where it reads the core key
 int sceKernelSetProcessName(const char *name);
+#include <ps5/klog.h>
 #else
 #define DATA_DIR "."
 #define APP_DIR "."
@@ -240,6 +241,10 @@ static void *control_loop(void *arg)
 
 static void on_crash(int sig)
 {
+#ifdef __PROSPERO__
+    // Straight to klog: LOG's copy for the web view takes a lock the crashed thread may hold.
+    klog_printf("[discord] crashed: signal %d\n", sig);
+#endif
     bc_rescue_controller();
     signal(sig, SIG_DFL);
     raise(sig);
@@ -255,8 +260,10 @@ int main(void)
     // A peer that hangs up mid-write (the app, a browser, Discord) must not kill the core.
     signal(SIGPIPE, SIG_IGN);
     // A crash while Go Live holds the controller would leave it dead until a reboot.
+    // SA_ONSTACK: a thread with an alternate stack (the updater's) logs a stack overflow too.
+    struct sigaction crash = {.sa_handler = on_crash, .sa_flags = SA_ONSTACK};
     for (int i = 0; i < 5; i++)
-        signal((int[]){SIGSEGV, SIGBUS, SIGABRT, SIGILL, SIGFPE}[i], on_crash);
+        sigaction((int[]){SIGSEGV, SIGBUS, SIGABRT, SIGILL, SIGFPE}[i], &crash, NULL);
     char token[256];
     int control = claim_instance();
     if (control < 0) {
@@ -283,7 +290,7 @@ int main(void)
         LOG("control: cannot write %s/control.key (errno %d): the app cannot reach the core", APP_DIR, errno);
 #ifdef __PROSPERO__
     // Before the app is served: a swap a power cut ended is finished first.
-    update_init(APP_DIR, "/data/homebrew/.PPSA99072.update", DATA_DIR "/update-bad", CORE_VERSION);
+    update_init(APP_DIR, "/data/homebrew/.PPSA99072.update", DATA_DIR "/update-bad");
 #endif
     // Requests only once TLS, voice and Go Live are set up (the port is ours already).
     pthread_t t;

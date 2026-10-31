@@ -27,7 +27,7 @@ class UpdateDialog
     void draw(const discord::Snapshot &s, DrawList &list) const;
 
   private:
-    enum class Card { none, offer, notes, progress, ready, failed, rolled_back };
+    enum class Card { none, offer, notes, progress, ready, failed };
     Card card(const discord::Snapshot &s, bool idle) const;
 
     const Ink &ink_;
@@ -37,7 +37,6 @@ class UpdateDialog
     bool ready_later_ = false; // Later on "Restart to finish"
     bool notes_ = false;       // the notes are showing
     bool started_ = false;     // Update was pressed: progress until the core says otherwise
-    bool rolled_back_seen_ = false;
     std::string failed_seen_;  // the failure text the user has read
 };
 

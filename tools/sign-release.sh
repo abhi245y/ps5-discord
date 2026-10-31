@@ -43,7 +43,7 @@ with zipfile.ZipFile(path) as z:
     for i in z.infolist():
         n = i.filename
         part = n.split("/")
-        if not n.startswith("PPSA99072/") or ".." in part or n in names or "\\" in n:
+        if not n.startswith("PPSA99072/") or ".." in part or n in names or "\\" in n or len(n.rstrip("/").split("/")) > 17:
             sys.exit(f"sign-release: bad entry {n}")
         if part[1] in ("control.key", "previous", ".PPSA99072.update"):
             sys.exit(f"sign-release: {n} must not be in a release")

@@ -127,7 +127,12 @@ static int get_once(const char *host, const char *path, unsigned long long limit
     if (n <= 0 || (size_t)n >= sizeof head)
         return -1;
     tls_conn c;
-    if (tls_connect(&c, host, "443") != 0 || tls_write_all(&c, head, (size_t)n) != 0) {
+    int ret = tls_connect(&c, host, "443");
+    if (ret != 0) { // once more, with a fresh lookup: one lost SYN must not fail a whole check
+        tls_close(&c);
+        ret = tls_connect(&c, host, "443");
+    }
+    if (ret != 0 || tls_write_all(&c, head, (size_t)n) != 0) {
         tls_close(&c);
         return -1;
     }
@@ -178,7 +183,7 @@ static int get_once(const char *host, const char *path, unsigned long long limit
 int http_get_url(const char *url, int (*allowed)(const char *host), unsigned long long limit, http_sink sink,
                  void *user)
 {
-    char host[256], path[3072], loc[3072];
+    char host[256] = "", path[3072], loc[3072];
     snprintf(loc, sizeof loc, "%s", url);
     for (int hops = 0; hops < 4; hops++) {
         if (http_split_url(loc, host, path) != 0 || !allowed(host)) {
