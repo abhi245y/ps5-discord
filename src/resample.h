@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Rational sample-rate conversion for the Bluetooth headset (mono float): a polyphase
 // windowed-sinc filter, out = in * up / down. The AirPods mic is 64 kHz (up 3, down 4
-// gives 48 kHz), the hands-free link 16 kHz (3/1 and 1/3).
+// gives 48 kHz), the hands-free link 16 kHz (3/1 and 1/3) or 8 kHz (6/1 and 1/6).
 #pragma once
 
 #ifdef __cplusplus
@@ -9,7 +9,7 @@ extern "C" {
 #endif
 
 #define RS_TAPS 16 // per phase
-#define RS_MAX_UP 3
+#define RS_MAX_UP 6
 
 typedef struct {
     int up, down, phase;

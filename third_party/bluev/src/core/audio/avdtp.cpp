@@ -65,13 +65,15 @@ std::size_t buildDiscoverAccept(std::uint8_t label, std::uint8_t* out)
 
 std::size_t buildCapabilitiesAccept(std::uint8_t label, std::uint8_t signal, std::uint8_t* out)
 {
-    static const std::uint8_t kCaps[10] = {0x01, 0x00,              // media transport
-                                           0x07, 0x06, 0x00, 0x00,  // media codec: audio, SBC
-                                           0xff, 0xff, 0x02, 0x35}; // all options, bitpool 2..53
+    static const std::uint8_t kCaps[12] = {0x01, 0x00,             // media transport
+                                           0x07, 0x06, 0x00, 0x00, // media codec: audio, SBC
+                                           0xff, 0xff, 0x02, 0x35, // all options, bitpool 2..53
+                                           0x08, 0x00};            // delay reporting (Get All Capabilities)
     out[0] = firstByte(label, kAccept);
     out[1] = signal;
-    std::memcpy(out + 2, kCaps, sizeof kCaps);
-    return 12;
+    const std::size_t n = signal == kGetAllCapabilities ? 12 : 10;
+    std::memcpy(out + 2, kCaps, n);
+    return 2 + n;
 }
 
 bool parseSetConfiguration(const std::uint8_t* buf, int len, PeerConfig& out)

@@ -17,6 +17,7 @@ enum Signal : std::uint8_t
     kOpen = 6,
     kStart = 7,
     kClose = 8,
+    kDelayReport = 0x0d, // AVDTP 1.3: the sink's playback delay
 };
 
 enum MessageType : std::uint8_t
@@ -43,7 +44,8 @@ std::size_t buildAccept(std::uint8_t label, std::uint8_t signal, std::uint8_t* o
 std::size_t buildReject(std::uint8_t label, std::uint8_t signal, std::uint8_t error, std::uint8_t* out);
 // Answer to Discover: one SBC source endpoint, seid 1, not in use.
 std::size_t buildDiscoverAccept(std::uint8_t label, std::uint8_t* out);
-// Answer to Get Capabilities or Get All Capabilities (`signal`): media transport and SBC.
+// Answer to Get Capabilities or Get All Capabilities (`signal`): media transport and SBC,
+// and delay reporting for Get All Capabilities.
 std::size_t buildCapabilitiesAccept(std::uint8_t label, std::uint8_t signal, std::uint8_t* out);
 
 // What a Set Configuration command carries.

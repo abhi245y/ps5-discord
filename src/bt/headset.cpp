@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "aacp_mic.hpp"
+#include "hfp_ag.hpp"
 #include "core/audio/a2dp_session.hpp"
 #include "core/audio/a2dp_streamer.hpp"
 #include "core/audio/avcap_capture.hpp"
@@ -21,6 +22,7 @@
 #include "core/bluetooth/address.hpp"
 #include "core/bluetooth/bt_stack.hpp"
 #include "core/bluetooth/usb_hci_transport.hpp"
+#include "core/hfp/iso.hpp"
 #include "core/ports/clock.hpp"
 #include "core/ports/log.hpp"
 #include "platform/posix/file_bond_store.hpp"
@@ -118,7 +120,7 @@ struct Snapshot
     bool on = false;
     std::string state = "off", message, adapter;
     std::string name, addr, route, mic = "off";
-    int pps = 0, queueMs = 0;
+    int pps = 0, queueMs = 0, delayReport = -1; // tenths of a ms, the headset's own
     long micFrames = 0, micErrors = 0;
     double decodeUs = 0;
     std::vector<BtDevice> devices;
@@ -270,10 +272,7 @@ class Radio
             publish("off", m_bt.startError().empty() ? "the adapter did not start" : m_bt.startError().c_str());
             return;
         }
-        m_a2dp.reset();
-        m_a2dp.listen();
-        m_avrcp.reset();
-        m_avrcp.listen();
+        listen();
         m_on = true;
         publish("idle", "ready");
     }
@@ -304,6 +303,26 @@ class Radio
         return false;
     }
 
+    // Ready for a headset that dials in: A2DP, AVRCP and hands-free.
+    void listen()
+    {
+        m_a2dp.reset();
+        m_a2dp.listen();
+        m_avrcp.reset();
+        m_avrcp.listen();
+        m_hfp.reset();
+        m_hfp.listen();
+    }
+
+    void route(const char* route, const char* mic)
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        g_snap.route = route;
+        g_snap.mic = mic;
+    }
+
+    // Music mode (A2DP: the game and the call), and hands-free for as long as a call needs
+    // it (tick decides), then music again.
     void session(const BdAddr* addr)
     {
         publish("connecting", addr ? "connecting" : "a paired headset is connecting");
@@ -318,16 +337,34 @@ class Radio
                 std::lock_guard<std::mutex> lock(g_mu);
                 g_snap.name = m_bt.peerName();
                 g_snap.addr = m_bt.peerAddress();
-                g_snap.route = m_airpods ? "airpods" : "a2dp";
-                g_snap.mic = "off";
             }
-            m_micFailed = false;
+            route(m_airpods ? "airpods" : "a2dp", "off");
+            m_micFailed = m_hfpFailed = m_wantSco = m_stopSession = false;
             publish("connected", "connected");
             m_bt.setTick([this] {
                 m_avrcp.service();
                 tick();
             });
-            m_streamer.run(capturing);
+            for (;;)
+            {
+                m_streamer.run(capturing);
+                if (m_stopSession || !m_bt.linkUp() || !m_wantSco)
+                {
+                    break;
+                }
+                handsFree();
+                if (m_stopSession || !m_bt.linkUp())
+                {
+                    break;
+                }
+                route(m_airpods ? "airpods" : "a2dp", m_micFailed ? "failed" : "off");
+                m_a2dp.reset();
+                m_a2dp.listen();
+                if (!m_a2dp.start(true))
+                {
+                    break;
+                }
+            }
             m_bt.setTick(nullptr);
         }
         m_mic.close();
@@ -336,10 +373,7 @@ class Radio
         m_a2dp.stop();
         m_capture.close();
         m_bt.disconnect();
-        m_a2dp.reset();
-        m_a2dp.listen();
-        m_avrcp.reset();
-        m_avrcp.listen();
+        listen();
         if (m_offAfter)
         {
             m_offAfter = false;
@@ -354,6 +388,67 @@ class Radio
             g_snap.mic = "off";
         }
         publish("idle", ok ? "disconnected" : "could not connect");
+    }
+
+    // A call on the hands-free link: the headset's mic to the call, the game and the call
+    // to the headset, until the call ends (or the session does).
+    void handsFree()
+    {
+        m_mic.stop();
+        m_a2dp.stop();
+        int codec = 0;
+        if (m_hfp.slcUp() || m_hfp.connect())
+        {
+            codec = m_hfp.openAudio(true);
+        }
+        if (codec == 0 || !g_iso.start || !g_iso.start())
+        {
+            LOG("bt: hands-free did not start: the call stays on the TV");
+            m_hfp.closeAudio();
+            m_hfpFailed = true;
+            m_wantSco = false;
+            return;
+        }
+        route("hands-free", codec == 2 ? "mSBC" : "CVSD");
+        HfpVoice voice(codec == 2, m_bt.scoHandle());
+        std::vector<float> rec(4096), mono;
+        std::vector<std::int16_t> call;
+        std::uint8_t in[4096];
+        const auto mic = [this](const std::int16_t* pcm, int n) {
+            if (m_ownExt)
+            {
+                vau_ext_mic(pcm, static_cast<std::size_t>(n));
+            }
+        };
+        while (m_bt.linkUp() && m_wantSco && !m_stopSession)
+        {
+            m_bt.poll(2);
+            const int got = m_capture.read(rec.data(), static_cast<std::uint32_t>(rec.size() * sizeof(float)));
+            const std::size_t frames = got > 0 ? static_cast<std::size_t>(got) / 8 : 0;
+            if (frames > 0)
+            {
+                call.assign(frames * 2, 0);
+                if (m_ownExt)
+                {
+                    vau_ext_playback(call.data(), frames);
+                }
+                mono.resize(frames);
+                for (std::size_t i = 0; i < frames; i++)
+                {
+                    mono[i] = 0.5f * (rec[2 * i] + rec[2 * i + 1] + (call[2 * i] + call[2 * i + 1]) / 32768.0f);
+                }
+                voice.play(mono.data(), static_cast<int>(frames));
+            }
+            voice.pump();
+            const int n = g_iso.read(in, sizeof in);
+            if (n > 0)
+            {
+                voice.receive(in, n, mic);
+            }
+        }
+        LOG("bt: hands-free ended: %ld frames from the headset", voice.frames());
+        g_iso.stop();
+        m_hfp.closeAudio();
     }
 
     void releaseExt()
@@ -375,6 +470,7 @@ class Radio
             if (r.cmd == Cmd::Disconnect || r.cmd == Cmd::PowerOff)
             {
                 m_offAfter = r.cmd == Cmd::PowerOff;
+                m_stopSession = true;
                 m_a2dp.requestStop();
             }
         }
@@ -388,6 +484,18 @@ class Radio
         m_mix.call = want;
 
         const bool inCall = want && voice_wanted();
+        // Hands-free while in a call when there is no AirPods mic (or it failed).
+        const bool sco = inCall && (!m_airpods || m_micFailed) && !m_hfpFailed;
+        if (sco && !m_wantSco)
+        {
+            m_wantSco = true;
+            m_a2dp.requestStop(); // the music stream ends; session() opens hands-free
+        }
+        m_wantSco = sco;
+        if (m_wantSco)
+        {
+            return;
+        }
         if (m_airpods && inCall && !m_mic.running() && !m_micFailed)
         {
             m_mic.start();
@@ -398,7 +506,7 @@ class Radio
         }
         if (m_mic.silentSeconds() >= kMicSilentLimit)
         {
-            LOG("bt: no AirPods mic audio for %d s: the mic counts as failed", kMicSilentLimit);
+            LOG("bt: no AirPods mic audio for %d s: the mic counts as failed, hands-free takes over", kMicSilentLimit);
             m_micFailed = true;
             m_mic.stop();
         }
@@ -407,6 +515,7 @@ class Radio
         g_snap.micFrames = m_mic.frames();
         g_snap.micErrors = m_mic.errors();
         g_snap.decodeUs = m_mic.decodeUs();
+        g_snap.delayReport = m_a2dp.delayReport();
     }
 
     UgenDevice m_device;
@@ -423,7 +532,9 @@ class Radio
     MixSource m_mix;
     A2dpStreamer m_streamer;
     AacpMic m_mic;
+    HfpAg m_hfp{m_bt};
     bool m_on = false, m_avcapLoaded = false, m_airpods = false, m_micFailed = false;
+    bool m_hfpFailed = false, m_wantSco = false, m_stopSession = false;
     bool m_ownExt = false, m_offAfter = false;
     std::string m_adapterName;
 };
@@ -523,6 +634,8 @@ extern "C" cJSON* hs_state_json(void)
         cJSON_AddNumberToObject(h, "decode_us", g_snap.decodeUs);
         cJSON_AddNumberToObject(h, "packets_per_s", g_snap.pps);
         cJSON_AddNumberToObject(h, "queue_ms", g_snap.queueMs);
+        // what the headset says it adds after our queue (-1: it does not say)
+        cJSON_AddNumberToObject(h, "headset_delay_ms", g_snap.delayReport < 0 ? -1 : g_snap.delayReport / 10.0);
     }
     cJSON* list = cJSON_AddArrayToObject(o, "devices");
     for (const BondEntry& b : g_snap.bonds)

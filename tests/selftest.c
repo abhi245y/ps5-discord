@@ -720,7 +720,8 @@ static void test_resample(void)
     assert(fabs(tone_amp(48000, 1, 3, 1000) - 0.5) < 0.01);
     assert(tone_amp(48000, 1, 3, 12000) < 0.05);
     rs_state r;
-    assert(rs_init(&r, 4, 1) == -1);
+    assert(fabs(tone_amp(8000, 6, 1, 1000) - 0.5) < 0.01);
+    assert(rs_init(&r, 7, 1) == -1);
 }
 
 int main(void)

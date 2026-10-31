@@ -83,6 +83,17 @@ class A2dpSession
     std::atomic<int> m_quality{0};
 
     std::uint8_t m_sinkSeid = 0;       // the device's SBC sink endpoint
+    bool m_delayReporting = false;     // the sink offered delay reporting (category 8)
+
+  public:
+    // The sink's last reported playback delay in tenths of a millisecond, -1 when none.
+    int delayReport() const
+    {
+        return m_delayReport.load();
+    }
+
+  private:
+    std::atomic<int> m_delayReport{-1};
     std::uint8_t m_label = 0;          // transaction label of the next command
     std::uint8_t m_response[256] = {}; // the answer to the command in flight
     std::uint32_t m_responseLength = 0;

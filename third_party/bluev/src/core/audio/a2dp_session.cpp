@@ -227,10 +227,17 @@ bool A2dpSession::findSbcSink(std::uint32_t& caps)
         {
             continue;
         }
-        if (command(avdtp::kGetCapabilities, &seidByte, 1) != 2 || static_cast<int>(m_responseLength) < 4 ||
+        // Get All Capabilities (AVDTP 1.3) also lists delay reporting, which Get
+        // Capabilities leaves out
+        if (command(avdtp::kGetAllCapabilities, &seidByte, 1) != 2 || static_cast<int>(m_responseLength) < 4 ||
             !avdtp::findSbcCapabilities(m_response, static_cast<int>(m_responseLength), caps))
         {
             continue;
+        }
+        m_delayReporting = false;
+        for (std::uint32_t at = 2; at + 1 < m_responseLength; at += 2u + m_response[at + 1])
+        {
+            m_delayReporting = m_delayReporting || m_response[at] == 0x08;
         }
         m_sinkSeid = endpoints[i].seid;
         return true;
@@ -257,8 +264,9 @@ bool A2dpSession::driveSetup()
         return false;
     }
 
-    // Set Configuration: media transport, then the SBC codec with our choice
-    const std::uint8_t cfg[12] = {sink,
+    // Set Configuration: media transport, then the SBC codec with our choice, then
+    // delay reporting when the sink offers it
+    const std::uint8_t cfg[14] = {sink,
                                   0x04,
                                   0x01,
                                   0x00,
@@ -269,9 +277,12 @@ bool A2dpSession::driveSetup()
                                   m_config.freqMode,
                                   m_config.cfg,
                                   static_cast<std::uint8_t>(m_config.bitpool),
-                                  static_cast<std::uint8_t>(m_config.bitpool)};
+                                  static_cast<std::uint8_t>(m_config.bitpool),
+                                  0x08,
+                                  0x00};
 
-    if (command(avdtp::kSetConfiguration, cfg, 12) != 2)
+    m_delayReport.store(-1);
+    if (command(avdtp::kSetConfiguration, cfg, m_delayReporting ? 14 : 12) != 2)
     {
         logLine("avdtp: configuration refused (rsp %02x %02x %02x %02x, sent %02x %02x)", m_response[0], m_response[1],
                 m_response[2], m_response[3], cfg[8], cfg[9]);
@@ -340,6 +351,13 @@ void A2dpSession::onSignal(const std::uint8_t* buf, int len)
             m_peerConfigured = true;
         }
         n = avdtp::buildAccept(h.label, avdtp::kSetConfiguration, rsp);
+    }
+    else if (h.signal == avdtp::kDelayReport && len >= 5)
+    {
+        // acceptor seid, then the delay in tenths of a millisecond (big endian)
+        m_delayReport.store((buf[3] << 8) | buf[4]);
+        logLine("avdtp: the headset reports a playback delay of %.1f ms", m_delayReport.load() / 10.0);
+        n = avdtp::buildAccept(h.label, h.signal, rsp);
     }
     else if (h.signal == avdtp::kOpen || h.signal == avdtp::kStart)
     {
