@@ -1150,8 +1150,12 @@ void Client::poll_state()
         if (state_failures_ < 3 && snapshot_.connection != Connection::starting)
             return;
         // Before the first sign-in this is the launch; after it, a drop like any other.
+        // A core this app replaced, or the sign-out, going away is no drop.
+        const bool updating = replaced_core_ && now_ms() - replaced_ms_ < 60000;
         snapshot_.connection = been_ready_ ? Connection::reconnecting : Connection::starting;
-        snapshot_.status_message = signing_out_ ? "Signing out..."
+        snapshot_.waiting_title = signing_out_ ? "Signing out…" : updating ? "Updating…" : "";
+        snapshot_.status_message = signing_out_ ? "Back to the QR code in a moment."
+                                   : updating    ? "Starting the new ps5-discord core."
                                    : been_ready_ ? "Restarting the ps5-discord core."
                                                  : "Starting the ps5-discord core...";
         ready_ = false;
@@ -1208,20 +1212,32 @@ void Client::poll_state()
     {
         core_seen_ = false;
         snapshot_.connection = Connection::starting;
-        snapshot_.status_message = "Updating the ps5-discord core...";
+        snapshot_.waiting_title = "Updating…";
+        snapshot_.status_message = "Starting the new ps5-discord core.";
         ready_ = false;
         publish();
         return;
     }
-    if (!replaced_core_ && !bundled_version().empty() && theirs != bundled_version() &&
-        (!api_ok || (voice_known_ && !snapshot_.voice.active())))
+    const bool other_core = !replaced_core_ && !bundled_version().empty() && theirs != bundled_version();
+    if (other_core && api_ok && !voice_known_)
+    {
+        // Whether a call keeps the old core is not known yet: wait for /api/voice rather than
+        // show Home on the old core and pull it away a second later.
+        snapshot_.connection = Connection::starting;
+        snapshot_.waiting_title = "Updating…";
+        snapshot_.status_message = "Starting the new ps5-discord core.";
+        publish();
+        return;
+    }
+    if (other_core && (!api_ok || !snapshot_.voice.active()))
     {
         replaced_core_ = true;
         replaced_version_ = theirs;
         replaced_ms_ = now_ms();
         core_seen_ = false; // its port going quiet is the cue to start ours at once
         snapshot_.connection = Connection::starting;
-        snapshot_.status_message = "Updating the ps5-discord core...";
+        snapshot_.waiting_title = "Updating…";
+        snapshot_.status_message = "Starting the new ps5-discord core.";
         ready_ = false;
         publish();
         lock.unlock();
@@ -1255,11 +1271,13 @@ void Client::poll_state()
     {
         // The old core still ending its calls; the new one not at the QR yet.
         snapshot_.connection = Connection::starting;
-        snapshot_.status_message = "Signing out...";
+        snapshot_.waiting_title = "Signing out…";
+        snapshot_.status_message = "Back to the QR code in a moment.";
         publish();
         return;
     }
     signing_out_ = false;
+    snapshot_.waiting_title.clear();
     // Signed in before, signing in now: another console user's turn, or signed out. The
     // last account's servers, chats and DMs go.
     const bool signing_in = s == "login" || s == "scanned" || s == "browser";
@@ -1953,7 +1971,8 @@ void Client::handle(const Request &request)
             break;
         }
         snapshot_ = Snapshot{};
-        snapshot_.status_message = "Signing out...";
+        snapshot_.waiting_title = "Signing out…";
+        snapshot_.status_message = "Back to the QR code in a moment.";
         ready_ = false;
         been_ready_ = false; // the core going away is the sign-out, not a drop
         signing_out_ = true;
