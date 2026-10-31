@@ -1,6 +1,6 @@
 # ps5-discord
 
-Native Discord client for PS5. A native app (title PPSA99072) draws the UI; a
+Native Unofficial Discord client for PS5. A native app (title PPSA99072) draws the UI; a
 background core payload, which the app starts itself, holds the Discord session.
 
 Status: alpha. [0.6.0-alpha.1](https://github.com/abhi245y/ps5-discord/releases/tag/v0.6.0-alpha.1)
