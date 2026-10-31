@@ -100,7 +100,12 @@ without a PC.
 - An update from one release to the next and a roll back, on a console, from the release
   build.
 
-### 0.5.x: Voice and Go Live follow-ups
+### 0.6.0: Guides (0.6.0-alpha.1, 2026-10-31)
+
+**Delivered.** Guides for voice calls and Go Live and for troubleshooting, screenshots in the
+README, a shorter update offer.
+
+### 0.7.0: Voice and Go Live follow-ups
 
 **Goal.** Make calls and Go Live work the way people expect from the desktop app.
 
@@ -114,7 +119,7 @@ without a PC.
 **Exit criteria.** The open checks of 0.5.0 above, plus a game played for an hour in a call
 with Go Live on, without touching the cable.
 
-### 0.6.0: Beta hardening
+### 0.8.0: Beta hardening
 
 **Goal.** Ready for people other than the developers.
 
