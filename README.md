@@ -7,15 +7,15 @@ Status: alpha. [0.5.0-alpha.1](https://github.com/abhi245y/ps5-discord/releases/
 is the latest release: text chat, voice calls, Go Live, notifications and updates from inside
 the app. Something not working? See [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
-![Chat while in a voice call](screenshots/13-chat-in-call.jpg)
+![Home](screenshots/02-home.jpg)
 
 ## Screenshots
 
 | | |
 |---|---|
-| ![Sign in with the QR code](screenshots/01-sign-in.jpg) Sign in by scanning a QR code | ![Home](screenshots/02-home.jpg) Home: friends online, live voice rooms, recent chats |
-| ![Friends](screenshots/03-friends.jpg) Friends | ![Servers](screenshots/04-servers.jpg) Servers |
-| ![A server](screenshots/05-server.jpg) A server: voice rooms and text channels | ![Chat](screenshots/06-chat.jpg) Chat with emoji and reactions |
+| ![Sign in with the QR code](screenshots/01-sign-in.jpg) Sign in by scanning a QR code | ![Friends](screenshots/03-friends.jpg) Friends |
+| ![Servers](screenshots/04-servers.jpg) Servers | ![A server](screenshots/05-server.jpg) A server: voice rooms and text channels |
+| ![Chat](screenshots/06-chat.jpg) Chat with emoji and reactions | ![Chat while in a call](screenshots/13-chat-in-call.jpg) Chat while you are in a call |
 | ![Emoji picker](screenshots/07-emoji-picker.jpg) The emoji picker | ![Stickers](screenshots/08-stickers.jpg) Stickers |
 | ![A sticker sent](screenshots/09-sticker-sent.jpg) A sticker in the chat | ![Voice room](screenshots/10-voice-room.jpg) A voice call, with Go Live |
 | ![Notification](screenshots/11-notification.jpg) A message banner | ![Settings](screenshots/12-settings.jpg) Settings |
@@ -24,26 +24,26 @@ Guides: [voice calls and Go Live](VOICE_AND_GO_LIVE.md), [troubleshooting](TROUB
 
 ## What works
 
-- QR code login: no password or token typing, scan with the Discord mobile app
-- Home with friends online, live voice rooms and recent chats; Friends, Servers, Mentions tabs
-- Server pages, channel chat and DMs: read, send, reply, react, edit and delete your own
-- The PS5 system keyboard on Triangle (the app's own keyboard as a fallback)
-- Avatars, server icons, banners, image previews (full screen from a message's menu), many scripts
-- Colour emoji as Discord draws them, an emoji picker (L3 in a chat), reactions with any
-  emoji, server emoji, and stickers (animated ones too)
-- Voice: server voice channels and DM calls, with Discord's end-to-end encryption (DAVE),
+- **QR code login**: no password or token typing, scan with the Discord mobile app
+- **Home** with **friends online**, **live voice rooms** and **recent chats**; Friends, Servers, Mentions tabs
+- **Server pages, channel chat and DMs**: read, send, reply, react, edit and delete your own
+- The **PS5 system keyboard** on Triangle (the app's own keyboard as a fallback)
+- **Avatars, server icons, banners, image previews** (full screen from a message's menu), many scripts
+- **Colour emoji** as Discord draws them, an **emoji picker** (L3 in a chat), **reactions** with any
+  emoji, server emoji, and **stickers** (animated ones too)
+- **Voice**: server voice channels and **DM calls**, with Discord's end-to-end encryption (DAVE),
   mute and deafen. The call stays up while a game covers the app.
-- Go Live: stream the game you are playing into the call (1280x720 H.264 at 30 fps and the
+- **Go Live**: stream the game you are playing into the call (1280x720 H.264 at 30 fps and the
   game's sound, end-to-end encrypted). The picture comes from a Remote Play session with the
   console itself; the DualSense, plugged in by USB, plays the game through it and is your
   headset (its mic and its speaker or headphones) while you are live.
-- Notifications: banners for DMs and mentions in the app, and the PS5's own alerts while the
+- **Notifications**: banners for DMs and mentions in the app, and the PS5's own alerts while the
   app is not in front (home screen, a game). Discord's mutes are followed; quiet hours and
   per-kind switches in Settings, Notifications.
-- "Playing" on Discord: the game in front on the PS5 shows on your profile with its cover.
+- **"Playing" on Discord**: the game in front on the PS5 shows on your profile with its cover.
   Settings, Privacy turns it off.
-- One Discord sign-in per console user: switch users on the PS5 and the app follows.
-- Updates: Settings, About, Updates checks this project's GitHub releases, downloads a signed
+- **One Discord sign-in per console user**: switch users on the PS5 and the app follows.
+- **Updates**: Settings, About, Updates checks this project's GitHub releases, downloads a signed
   one in the background and installs it when you restart the app. Previous version, Roll back
   puts the version before it back.
 
@@ -87,7 +87,7 @@ the tests still pass, but it links a no-DAVE stub and every voice join fails (cl
    existing signed-in session. Closed the browser too soon? Cross opens it again; Square
    cancels and returns to QR login.
 5. The sign-in is kept in `/data/ps5-discord/token-<console user>`, encrypted with a key
-   tied to this console; later runs skip the QR. Each console user signs in to their own
+   tied to your console; later runs skip the QR. Each console user signs in to their own
    Discord account.
 
 ### Updating
@@ -101,8 +101,6 @@ From 0.5.0-alpha.1 on, the app updates itself:
 3. Open the app again. Until the next update, Settings, About, **Previous version, Roll
    back** puts the version before it back the same way.
 
-An older version (0.2.0-alpha.1) cannot update itself: install 0.5.0-alpha.1 by FTP as in
-step 1 above, over the old folder.
 
 Browser login is experimental. It waits up to ten minutes, reads
 WebKit storage without modifying it, and saves the validated session atomically
