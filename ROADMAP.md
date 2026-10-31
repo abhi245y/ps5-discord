@@ -108,9 +108,8 @@ without a PC.
 - Voice while a game is in front without Go Live (the console gives the app the mic only
   while it is on screen today).
 - Push to talk and per-user volume.
-- Go Live: no replug of the controller between streams, resuming a stream after a network
-  drop, quality chosen to fit the connection.
-- Go Live and calls together with a controller on Bluetooth.
+- Go Live: no replug of the controller between streams, and a stream that resumes after a
+  network drop.
 
 **Exit criteria.** The open checks of 0.5.0 above, plus a game played for an hour in a call
 with Go Live on, without touching the cable.
