@@ -110,11 +110,10 @@ void draw_waiting(DrawList &list, const Ink &ink, const discord::Snapshot &s, fl
     list.shadow(card, 28.0f, 50.0f, Color::rgb(0, 0.45f));
     list.rounded_rect(card, 28.0f, kRaised);
     spinner(list, card.cx(), card.y + 110.0f, 44.0f, time);
-    const char *title = "Starting…";
-    if (s.connection == discord::Connection::connecting)
-        title = "Connecting…";
-    else if (s.connection == discord::Connection::reconnecting)
-        title = "Reconnecting…";
+    const char *title = !s.waiting_title.empty()                                ? s.waiting_title.c_str()
+                        : s.connection == discord::Connection::connecting   ? "Connecting…"
+                        : s.connection == discord::Connection::reconnecting ? "Reconnecting…"
+                                                                            : "Starting…";
     ui::text(list, ink.fonts.display, title, card.cx(), card.y + 236.0f, 50.0f, kText, gfx::Align::center);
     // The core's note says why Discord cannot be reached (no network, DNS down).
     const std::string line = !s.status_message.empty() ? s.status_message
