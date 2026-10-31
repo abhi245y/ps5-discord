@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0-alpha.1] - 2026-10-31
+
+Voice, Go Live, notifications and updates in the app.
+
 ### Added
 - Voice: join server voice channels and DM calls (DAVE end-to-end encryption), mute and
   deafen, two-way audio with the app on screen; the call stays up while a game runs.
@@ -234,5 +238,7 @@ First alpha of the native app. Text chat works; voice does not exist yet.
 - The session token is stored unencrypted on the console.
 - The status web UI has no authentication on the local network.
 
-[Unreleased]: https://github.com/abhi245y/ps5-discord/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/abhi245y/ps5-discord/compare/v0.5.0-alpha.1...HEAD
+[0.5.0-alpha.1]: https://github.com/abhi245y/ps5-discord/compare/v0.2.0-alpha.1...v0.5.0-alpha.1
+[0.2.0-alpha.1]: https://github.com/abhi245y/ps5-discord/releases/tag/v0.2.0-alpha.1
 [0.1.0]: https://github.com/abhi245y/ps5-discord/releases/tag/v0.1.0
