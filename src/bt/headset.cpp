@@ -359,7 +359,8 @@ class Radio
                 g_snap.addr = m_bt.peerAddress();
             }
             route(m_airpods ? "airpods" : "a2dp", "off");
-            m_micFailed = m_hfpFailed = m_wantSco = m_stopSession = false;
+            m_micFailed = m_hfpFailed = m_wantSco = m_stopSession = m_resetA2dp = false;
+            m_resetIn = 0;
             publish("connected", "connected");
             m_bt.setTick([this] {
                 m_avrcp.service();
@@ -368,16 +369,25 @@ class Radio
             for (;;)
             {
                 m_streamer.run(capturing);
-                if (m_stopSession || !m_bt.linkUp() || !m_wantSco)
+                if (m_stopSession || !m_bt.linkUp() || (!m_wantSco && !m_resetA2dp))
                 {
                     break;
                 }
-                handsFree();
-                if (m_stopSession || !m_bt.linkUp())
+                if (m_wantSco)
                 {
-                    break;
+                    handsFree();
+                    if (m_stopSession || !m_bt.linkUp())
+                    {
+                        break;
+                    }
+                    route(m_airpods ? "airpods" : "a2dp", m_micFailed ? "failed" : "off");
                 }
-                route(m_airpods ? "airpods" : "a2dp", m_micFailed ? "failed" : "off");
+                else
+                {
+                    LOG("bt: the music stream set up again after the AirPods mic started or stopped");
+                    m_a2dp.stop();
+                }
+                m_resetA2dp = false;
                 m_a2dp.reset();
                 m_a2dp.listen();
                 if (!m_a2dp.start(true))
@@ -517,15 +527,25 @@ class Radio
         m_wantSco = sco;
         if (m_wantSco)
         {
+            m_resetIn = 0; // hands-free sets up the music stream again anyway
             return;
+        }
+        // AirPods can leave one bud silent after their mic starts or stops until the music
+        // stream is set up again (LibrePods resets A2DP 0.8 s after a start, and after a stop).
+        if (m_resetIn > 0 && --m_resetIn == 0)
+        {
+            m_resetA2dp = true;
+            m_a2dp.requestStop();
         }
         if (m_airpods && inCall && !m_mic.running() && !m_micFailed)
         {
             m_mic.start();
+            m_resetIn = 1;
         }
         else if (m_mic.running() && !inCall)
         {
             m_mic.stop();
+            m_resetIn = 1;
         }
         if (m_mic.silentSeconds() >= kMicSilentLimit)
         {
@@ -558,7 +578,8 @@ class Radio
     HfpAg m_hfp{m_bt};
     bool m_on = false, m_avcapLoaded = false, m_airpods = false, m_micFailed = false;
     bool m_hfpFailed = false, m_wantSco = false, m_stopSession = false;
-    bool m_ownExt = false, m_offAfter = false;
+    bool m_ownExt = false, m_offAfter = false, m_resetA2dp = false;
+    int m_resetIn = 0; // ticks until the music stream is set up again (m_resetA2dp)
     std::string m_adapterName;
 };
 
