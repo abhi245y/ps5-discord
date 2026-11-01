@@ -277,6 +277,13 @@ class Radio
         listen();
         m_on = true;
         publish("idle", "ready");
+        // AirPods only call back the host they last used, and not after it dropped them: call
+        // the paired headset. ponytail: the first pairing; the last used one when several matter.
+        const std::vector<BondEntry> bonds = m_bt.bonds();
+        if (!bonds.empty())
+        {
+            session(&bonds.front().peer, 1);
+        }
     }
 
     void powerOff()
@@ -292,9 +299,9 @@ class Radio
     }
 
     // A headset just after a session may refuse the first page (0x0d, limited resources).
-    bool connect(const BdAddr& addr)
+    bool connect(const BdAddr& addr, int attempts)
     {
-        for (int attempt = 0; attempt < 3; attempt++)
+        for (int attempt = 0; attempt < attempts; attempt++)
         {
             if (m_bt.connectTo(addr))
             {
@@ -325,10 +332,11 @@ class Radio
 
     // Music mode (A2DP: the game and the call), and hands-free for as long as a call needs
     // it (tick decides), then music again.
-    void session(const BdAddr* addr)
+    // attempts: 1 when the adapter comes on and calls the paired headset (it may be in its case).
+    void session(const BdAddr* addr, int attempts = 3)
     {
         publish("connecting", addr ? "connecting" : "a paired headset is connecting");
-        bool ok = addr ? connect(*addr) : m_bt.adoptIncoming();
+        bool ok = addr ? connect(*addr, attempts) : m_bt.adoptIncoming();
         ok = ok && m_a2dp.start(addr != nullptr);
         if (ok)
         {
@@ -389,7 +397,9 @@ class Radio
             g_snap.route.clear();
             g_snap.mic = "off";
         }
-        publish("idle", ok ? "disconnected" : "Could not connect. Is the headset on and close by?");
+        publish("idle", ok              ? "disconnected"
+                        : attempts == 1 ? "the paired headset did not answer"
+                                        : "Could not connect. Is the headset on and close by?");
     }
 
     // A call on the hands-free link: the headset's mic to the call, the game and the call
