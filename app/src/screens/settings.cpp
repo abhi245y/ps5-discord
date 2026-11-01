@@ -11,6 +11,7 @@
 #include "screens/settings.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <ctime>
 
 #include "core/save_file.hpp"
@@ -38,6 +39,8 @@ enum class Act
     update, // Check for updates, or open the update dialog
     restore, // the previous version back (asks first)
     pref, // a console-side setting (Row::key, discord::Prefs)
+    bt_power,
+    bt_devices, // the headset dialog
     ui_volume,
     sfx_volume,
     motion,
@@ -103,6 +106,7 @@ struct Section
 constexpr Section kSections[] = {
     {"Account", "Who is signed in on this console."},
     {"Voice & audio", "Your microphone, the call's sound and Go Live."},
+    {"Headset", "A Bluetooth headset for the game and calls."},
     {"Notifications", "What shows a banner while you are elsewhere."},
     {"Appearance", "How the app sounds and moves."},
     {"Privacy", "What is kept on the console and who can see it."},
@@ -165,7 +169,38 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
                        "golive_quality", kQualities, s.prefs.golive_quality),
         };
     }
-    case 2:
+    case 2: {
+        const discord::Bluetooth &b = s.bt;
+        if (b.state.empty() || b.state == "unavailable")
+            return {{Kind::info, "Bluetooth", "Not in this build.", ""}};
+        Row power{Kind::toggle, "Bluetooth",
+                  !b.enabled                    ? "Uses a USB Bluetooth adapter, not the PS5's own."
+                  : b.on                        ? b.adapter
+                  : std::isupper(static_cast<unsigned char>(b.message[0])) ? b.message
+                                                : "Starting the adapter…",
+                  "", 0, b.enabled, false, Act::bt_power};
+        if (!b.on)
+            return {power};
+        Row headset{Kind::value, "Headset", "", "None", 0, false, false, Act::bt_devices};
+        if (!b.name.empty())
+        {
+            headset.value = b.name;
+            headset.desc = b.mic == "failed"       ? "Its mic did not start, so calls use hands-free"
+                           : b.route == "airpods"  ? "Sound and mic in high quality"
+                           : b.route == "a2dp"     ? "Calls switch it to hands-free"
+                                                   : "Hands-free for this call";
+            if (b.delay_ms > 0 && b.route != "hands-free")
+                headset.desc += " · " + std::to_string(b.delay_ms) + " ms delay";
+        }
+        else if (b.state == "connecting")
+            headset.value = "Connecting…", headset.desc = "A paired headset is coming on.";
+        else
+            headset.desc = "Select to connect or pair one.";
+        return {power, headset,
+                toggle_row("Hands-free in calls", "Less delay, phone-quality sound. Try it if others can't hear you.",
+                           "bt_handsfree", s.prefs.bt_handsfree)};
+    }
+    case 3:
         return {
             toggle_row("Direct messages and mentions", "DMs and @mentions. Chats muted in Discord stay quiet.", "notify_dm", s.prefs.notify_dm),
             choice_row("Server messages", "As in Discord follows each server's notification setting.",
@@ -177,7 +212,7 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
             choice_row("Quiet hours", "No sounds and no PS5 alerts; banners in the app still show.", "quiet_hours",
                        kQuiet, s.prefs.quiet_hours),
         };
-    case 3:
+    case 4:
         return {
             {Kind::slider, "Interface sounds", "Moving around, selecting and going back.", "", app.ui_volume, false, false,
              Act::ui_volume},
@@ -188,7 +223,7 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
             {Kind::toggle, "Swap Cross and Circle", "Circle selects, Cross goes back.", "", 0, app.swap_confirm, false,
              Act::swap},
         };
-    case 4:
+    case 5:
         return {
             toggle_row("Show what I'm playing", "Your PS5 game on Discord. Covers: prosperopatches.com",
                        "share_game", s.prefs.share_game),
@@ -263,16 +298,25 @@ void section_icon(DrawList &list, int section, float cx, float cy, Color c)
     case 1:
         speaking_bars(list, cx, cy, 28.0f, c);
         break;
-    case 2: // a bell
+    case 2: // headphones
+        list.line(cx - 14.0f, cy + 2.0f, cx - 14.0f, cy - 6.0f, 4.0f, c);
+        list.line(cx - 14.0f, cy - 6.0f, cx - 6.0f, cy - 15.0f, 4.0f, c);
+        list.line(cx - 6.0f, cy - 15.0f, cx + 6.0f, cy - 15.0f, 4.0f, c);
+        list.line(cx + 6.0f, cy - 15.0f, cx + 14.0f, cy - 6.0f, 4.0f, c);
+        list.line(cx + 14.0f, cy - 6.0f, cx + 14.0f, cy + 2.0f, 4.0f, c);
+        list.rounded_rect({cx - 19.0f, cy, 10.0f, 17.0f}, 4.0f, c);
+        list.rounded_rect({cx + 9.0f, cy, 10.0f, 17.0f}, 4.0f, c);
+        break;
+    case 3: // a bell
         list.rounded_rect({cx - 12.0f, cy - 14.0f, 24.0f, 24.0f}, 10.0f, c);
         list.rounded_rect({cx - 16.0f, cy + 6.0f, 32.0f, 6.0f}, 3.0f, c);
         list.circle(cx, cy + 16.0f, 4.0f, c);
         break;
-    case 3: // a brush
+    case 4: // a brush
         list.line(cx + 12.0f, cy - 14.0f, cx - 4.0f, cy + 4.0f, 6.0f, c);
         list.circle(cx - 8.0f, cy + 9.0f, 7.0f, c);
         break;
-    case 4: // a shield
+    case 5: // a shield
         list.rounded_rect({cx - 13.0f, cy - 15.0f, 26.0f, 22.0f}, 5.0f, c);
         list.line(cx - 13.0f, cy + 4.0f, cx, cy + 17.0f, 6.0f, c);
         list.line(cx + 13.0f, cy + 4.0f, cx, cy + 17.0f, 6.0f, c);
@@ -333,6 +377,7 @@ void SettingsScreen::open()
     in_rows_ = false;
     confirm_ = Confirm::none;
     pair_ = Pair::none;
+    bt_open_ = false;
 }
 
 void SettingsScreen::start_pin()
@@ -530,6 +575,58 @@ void SettingsScreen::update_pair(const discord::Snapshot &s, const hui::InputFra
     }
 }
 
+// The headset dialog. One headset at a time: while one is connected, the others wait.
+void SettingsScreen::update_bt(const discord::Snapshot &s, const hui::InputFrame &input, hui::ui::Feedback &feedback,
+                               std::vector<discord::Request> &requests)
+{
+    const discord::Bluetooth &b = s.bt;
+    const int n = std::min(5, static_cast<int>(b.devices.size()));
+    const bool busy = b.state == "scanning" || b.state == "connecting";
+    auto send = [&](const char *what, const std::string &addr = {}) {
+        discord::Request r;
+        r.kind = discord::Request::Kind::bt;
+        r.content = what;
+        r.user_id = addr;
+        requests.push_back(r);
+    };
+    bt_at_ = std::clamp(bt_at_, 0, std::max(0, n - 1));
+    const discord::Bluetooth::Device *d = bt_at_ < n ? &b.devices[bt_at_] : nullptr;
+    const bool this_one = d && d->addr == b.addr;
+    if (input.is_pressed(Action::back) || !b.on)
+    {
+        bt_open_ = false;
+        feedback.play(hui::audio::Cue::modal_close);
+    }
+    else if ((input.nav == Direction::up || input.nav == Direction::down) && n > 0)
+    {
+        bt_at_ = (bt_at_ + (input.nav == Direction::down ? 1 : n - 1)) % n;
+        feedback.play(hui::audio::Cue::focus);
+    }
+    else if (input.is_pressed(Action::confirm) && d)
+    {
+        if (this_one)
+            send("disconnect"), feedback.play(hui::audio::Cue::toggle);
+        else if (busy || !b.addr.empty())
+            feedback.play(hui::audio::Cue::error);
+        else
+            send("connect", d->addr), feedback.play(hui::audio::Cue::select);
+    }
+    else if (input.is_pressed(Action::west))
+    {
+        if (busy || !b.addr.empty())
+            feedback.play(hui::audio::Cue::error);
+        else
+            send("scan"), feedback.play(hui::audio::Cue::select);
+    }
+    else if (input.is_pressed(Action::north) && d && d->paired)
+    {
+        if (busy || this_one)
+            feedback.play(hui::audio::Cue::error);
+        else
+            send("forget", d->addr), feedback.play(hui::audio::Cue::favorite_off);
+    }
+}
+
 bool SettingsScreen::update(const discord::Snapshot &s, const hui::InputFrame &input, float dt, hui::ui::Feedback &feedback,
                       std::vector<discord::Request> &requests, hui::Settings &app, bool &changed)
 {
@@ -537,6 +634,11 @@ bool SettingsScreen::update(const discord::Snapshot &s, const hui::InputFrame &i
     if (pair_ != Pair::none)
     {
         update_pair(s, input, feedback, requests);
+        return true;
+    }
+    if (bt_open_)
+    {
+        update_bt(s, input, feedback, requests);
         return true;
     }
     auto set_pref = [&](const char *key, int value) {
@@ -703,6 +805,20 @@ bool SettingsScreen::update(const discord::Snapshot &s, const hui::InputFrame &i
             }
             feedback.play(hui::audio::Cue::select);
             break;
+        case Act::bt_power: {
+            discord::Request r;
+            r.kind = discord::Request::Kind::bt;
+            r.content = "power";
+            r.on = !row.on;
+            requests.push_back(r);
+            feedback.play(hui::audio::Cue::toggle);
+            break;
+        }
+        case Act::bt_devices:
+            bt_open_ = true;
+            bt_at_ = 0;
+            feedback.play(hui::audio::Cue::modal_open);
+            break;
         case Act::restore:
             confirm_ = Confirm::restore;
             feedback.play(hui::audio::Cue::modal_open);
@@ -831,6 +947,8 @@ void SettingsScreen::draw(const discord::Snapshot &s, const hui::Settings &app, 
 
     if (pair_ != Pair::none)
         draw_pair(s, list);
+    if (bt_open_)
+        draw_bt(s, list);
     if (confirm_ == Confirm::sign_out)
         confirm_card(list, ink_, "Sign out?",
                      "Discord ends this console's session and the app forgets it. A call or Go Live stops. To "
@@ -848,6 +966,61 @@ void SettingsScreen::draw(const discord::Snapshot &s, const hui::Settings &app, 
                      "Discord allows this only with Nitro or in a boosted server. Without them it may lag or fail "
                      "for viewers, and Discord could act on your account. 720p · 30 fps is recommended.",
                      "Use it");
+}
+
+void SettingsScreen::draw_bt(const discord::Snapshot &s, DrawList &list) const
+{
+    list.rounded_rect({0, 0, 1920, 1080}, 0.0f, Color::rgb(0x0d0e12, 0.78f));
+    const Rect card{410.0f, 150.0f, 1100.0f, 780.0f};
+    list.shadow(card, 28.0f, 50.0f, Color::rgb(0, 0.5f));
+    list.rounded_rect(card, 28.0f, kRaised);
+    const discord::Bluetooth &b = s.bt;
+    const float left = card.x + 58.0f, width = card.w - 116.0f;
+    ui::text(list, ink_.fonts.display, "Headsets", card.x + 56.0f, card.y + 92.0f, 50.0f, kText);
+    const bool failed = b.state == "idle" && std::isupper(static_cast<unsigned char>(b.message[0]));
+    const std::string status = b.state == "scanning"     ? "Searching for 30 seconds…"
+                               : b.state == "connecting" ? "Connecting…"
+                               : failed                  ? b.message
+                               : !b.name.empty()         ? "Disconnect this one to use another."
+                                                         : "Select one to connect it.";
+    ui::text(list, ink_.fonts.regular, fit(ink_.fonts.regular, status, 25.0f, width), left, card.y + 146.0f, 25.0f,
+             failed ? kDnd : kDim);
+    const int n = std::min(5, static_cast<int>(b.devices.size()));
+    if (n == 0)
+        ui::text(list, ink_.fonts.regular, "None yet.", left, card.y + 230.0f, 26.0f, kDim);
+    for (int i = 0; i < n; ++i)
+    {
+        const discord::Bluetooth::Device &d = b.devices[i];
+        const bool connected = d.addr == b.addr;
+        const Rect r{card.x + 56.0f, card.y + 180.0f + i * 84.0f, card.w - 112.0f, 72.0f};
+        list.rounded_rect(r, kCardRadius, kRaisedHigh);
+        ui::text(list, ink_.fonts.semibold, fit(ink_.fonts.semibold, d.name.empty() ? d.addr : d.name, 28.0f, r.w - 300.0f),
+                 r.x + 28.0f, r.cy() + 10.0f, 28.0f, kText);
+        ui::text(list, ink_.fonts.regular, connected ? "Connected" : d.paired ? "Paired" : "New", r.x + r.w - 28.0f,
+                 r.cy() + 9.0f, 24.0f, connected ? kOnline : kDim, gfx::Align::right);
+        if (i == bt_at_)
+            focus_outline(list, r, kCardRadius, 1.0f);
+    }
+    ui::paragraph(list, ink_.fonts.regular,
+                  "To add one, put it in pairing mode (AirPods: in the open case, hold the button on the back), "
+                  "then search. Keep it close to the adapter.",
+                  left, card.y + 620.0f, 22.0f, width, 30.0f, kFaint, 2, gfx::Align::left);
+    const bool busy = b.state == "scanning" || b.state == "connecting";
+    const bool on_connected = bt_at_ < n && b.devices[bt_at_].addr == b.addr;
+    std::vector<ui::Hint> hints;
+    if (n > 0 && (on_connected || (!busy && b.name.empty())))
+        hints.push_back({ui::Button::cross, on_connected ? "Disconnect" : "Connect"});
+    if (!busy && b.name.empty())
+        hints.push_back({ui::Button::square, "Search"});
+    if (n > 0 && !busy && !on_connected && b.devices[bt_at_].paired)
+        hints.push_back({ui::Button::triangle, "Forget"});
+    hints.push_back({ui::Button::circle, "Close"});
+    ui::HintLayout layout;
+    layout.size = 34.0f;
+    layout.text_size = 23.0f;
+    layout.cy = card.y + card.h - 44.0f;
+    ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints.data(), static_cast<int>(hints.size()),
+                   card.x + card.w - 48.0f, true, layout);
 }
 
 void SettingsScreen::draw_pair(const discord::Snapshot &s, DrawList &list) const

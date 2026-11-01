@@ -27,6 +27,7 @@ struct Request
         remoteplay_pair, // pair Go Live's Remote Play for console user user_id ("" on screen): content = the PIN or ""
         remoteplay_unpair, // forget user_id's pairing
         remoteplay_use, // Go Live runs as console user user_id
+        bt, // the headset: content = power (on), scan, connect or forget (user_id = the address), disconnect
         voice_join,   // join a server voice channel: guild_id, channel_id
         voice_call,   // join a DM's call, ringing the other side: channel_id
         voice_answer, // join a DM's call that rings us: channel_id

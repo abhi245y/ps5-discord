@@ -1106,8 +1106,10 @@ void Client::run()
             }
             // Quick while connected (the core's speaking window is ~300 ms, so rings follow it),
             // quick while joining, slower otherwise.
+            const std::string &bt = snapshot_.bt.state; // a search or a connect shows soon
             const std::int64_t voice_every = snapshot_.voice.state == VoiceState::connected ? 250
-                                             : snapshot_.voice.active()                     ? 1000
+                                             : snapshot_.voice.active() || bt == "scanning" ||
+                                                       bt == "connecting"                   ? 1000
                                                                                             : 4000;
             if (now - last_voice_ms_ >= voice_every)
                 poll_voice();
@@ -1449,6 +1451,31 @@ void Client::poll_voice()
             prefs.notify_live = num(p, "notify_live", 0.0) != 0.0;
             prefs.quiet_hours = std::clamp(static_cast<int>(num(p, "quiet_hours", 0.0)), 0, 4);
             prefs.share_game = num(p, "share_game", 1.0) != 0.0;
+            prefs.bt_handsfree = num(p, "bt_handsfree", 0.0) != 0.0;
+        }
+        Bluetooth &bt = snapshot_.bt;
+        bt = Bluetooth{};
+        if (v.contains("bt") && v["bt"].is_object())
+        {
+            const json &b = v["bt"];
+            bt.enabled = flag(b, "enabled", false);
+            bt.on = flag(b, "on", false);
+            bt.state = text(b, "state");
+            bt.message = text(b, "message");
+            bt.adapter = text(b, "adapter");
+            if (b.contains("headset") && b["headset"].is_object())
+            {
+                const json &h = b["headset"];
+                bt.name = text(h, "name");
+                bt.addr = text(h, "addr");
+                bt.route = text(h, "route");
+                bt.mic = text(h, "mic");
+                bt.delay_ms = static_cast<int>(num(h, "headset_delay_ms", -1.0));
+            }
+            if (b.contains("devices") && b["devices"].is_array())
+                for (const json &d : b["devices"])
+                    if (d.is_object())
+                        bt.devices.push_back({text(d, "addr"), text(d, "name"), flag(d, "paired", false)});
         }
         if (v.contains("speaking") && v["speaking"].is_array())
             for (const json &id : v["speaking"])
@@ -1914,6 +1941,15 @@ void Client::handle(const Request &request)
         if (reply.status != 202)
             hui::sys::log("[CLIENT] %s answered %d", path, reply.status);
         last_voice_ms_ = 0; // the pairing state comes on the next poll
+        break;
+    }
+    case Request::Kind::bt: {
+        const std::string path = "/api/bt/" + request.content;
+        const json body = request.content == "power" ? json{{"on", request.on}} : json{{"addr", request.user_id}};
+        const Reply reply = http(port_, "POST", path.c_str(), body.dump());
+        if (reply.status != 202)
+            hui::sys::log("[CLIENT] %s answered %d", path.c_str(), reply.status);
+        last_voice_ms_ = 0;
         break;
     }
     case Request::Kind::set_pref: {

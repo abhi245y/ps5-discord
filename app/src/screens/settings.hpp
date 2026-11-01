@@ -71,6 +71,13 @@ class SettingsScreen
     int pin_[8] = {}; // -1 while empty
     int pin_at_ = 0;
 
+    // The headset dialog: paired and found headsets; connect, disconnect, forget, search.
+    bool bt_open_ = false;
+    int bt_at_ = 0;
+
+    void draw_bt(const discord::Snapshot &snapshot, DrawList &list) const;
+    void update_bt(const discord::Snapshot &snapshot, const hui::InputFrame &input, hui::ui::Feedback &feedback,
+                   std::vector<discord::Request> &requests);
     void draw_pair(const discord::Snapshot &snapshot, DrawList &list) const;
     void update_pair(const discord::Snapshot &snapshot, const hui::InputFrame &input, hui::ui::Feedback &feedback,
                      std::vector<discord::Request> &requests);

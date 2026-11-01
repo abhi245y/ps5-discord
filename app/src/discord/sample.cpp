@@ -103,6 +103,8 @@ Snapshot sample_snapshot()
     s.voice.secure = true;
     // Two console users: the one on screen, and a second one for Go Live over Bluetooth.
     s.voice.replug = "replug"; // the tour shows the question before Go Live
+    s.bt = {true, true, "idle", "", "TP-Link Bluetooth USB Adapter"};
+    s.bt.devices = {{"68:A5:93:00:00:01", "AirPods Pro", true}};
     s.voice.rp_users = {{"10000000", "Ana", true, false, true, "", 0}, {"10000001", "Guest", true, false, false, "", 0}};
     s.voice.since_ms = kNow - 42 * kMinute;
     s.voice.speaking = {"mira", "theo"};
@@ -340,6 +342,24 @@ void apply_sample(Snapshot &s, const Request &r)
     if (r.kind == Request::Kind::set_pref)
     {
         s.prefs.set(r.content, r.value);
+        return;
+    }
+    if (r.kind == Request::Kind::bt) // ponytail: instant, no search wait
+    {
+        Bluetooth &b = s.bt;
+        if (r.content == "power")
+            b.enabled = b.on = r.on, b.state = r.on ? "idle" : "off";
+        else if (r.content == "scan" && b.devices.size() < 2)
+            b.devices.push_back({"00:1B:66:00:00:02", "Headphones", false});
+        else if (r.content == "connect")
+            for (Bluetooth::Device &d : b.devices)
+                if (d.addr == r.user_id)
+                    d.paired = true, b.name = d.name, b.addr = d.addr, b.state = "connected",
+                    b.route = d.name == "AirPods Pro" ? "airpods" : "a2dp", b.delay_ms = 150;
+        if (r.content == "disconnect" || r.content == "forget")
+            b.name.clear(), b.addr.clear(), b.route.clear(), b.state = "idle";
+        if (r.content == "forget")
+            std::erase_if(b.devices, [&](const Bluetooth::Device &d) { return d.addr == r.user_id; });
         return;
     }
     if (r.kind == Request::Kind::sign_out || r.kind == Request::Kind::quit)

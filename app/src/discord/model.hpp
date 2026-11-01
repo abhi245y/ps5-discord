@@ -330,6 +330,26 @@ struct Notice
     bool quiet = false;    // in the quiet hours: no sound
 };
 
+// The Bluetooth headset on a USB adapter (/api/voice "bt"; src/headset.h).
+struct Bluetooth
+{
+    struct Device
+    {
+        std::string addr, name;
+        bool paired = false;
+    };
+    bool enabled = false; // Settings' switch
+    bool on = false;      // the adapter runs
+    std::string state;    // off idle scanning connecting connected; "" = no Bluetooth in this core
+    std::string message;  // for the user when it starts with a capital
+    std::string adapter;
+    std::string name, addr; // the connected headset, empty when none
+    std::string route;      // airpods (its own mic), a2dp, hands-free
+    std::string mic;        // off on failed mSBC CVSD
+    int delay_ms = -1;      // what the headset says it adds, -1 when it does not say
+    std::vector<Device> devices; // paired first, then found by the last search
+};
+
 // The settings kept by the core (its /api/voice "prefs"), so they outlast the app.
 struct Prefs
 {
@@ -342,6 +362,7 @@ struct Prefs
     bool notify_live = false;  // ... also while Go Live is on
     int quiet_hours = 0;       // 0 off, else a preset (screens/settings.cpp kQuiet)
     bool share_game = true;    // Discord shows the game in front on this console
+    bool bt_handsfree = false; // the headset's hands-free link for calls, even on AirPods
 
     void set(const std::string &key, int value) // a set_pref request, applied here
     {
@@ -363,6 +384,8 @@ struct Prefs
             quiet_hours = value;
         else if (key == "share_game")
             share_game = value != 0;
+        else if (key == "bt_handsfree")
+            bt_handsfree = value != 0;
     }
 };
 
@@ -411,6 +434,7 @@ struct Snapshot
     Prefs prefs;
     Update update;
     Voice voice;
+    Bluetooth bt;
     std::map<std::string, std::vector<VoiceSeat>> seats; // by channel id: rooms and DM calls
     std::vector<Call> calls;
     int friends_online = 0;
