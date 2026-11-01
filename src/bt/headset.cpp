@@ -4,6 +4,7 @@
 // the game's sound plus the call, and on AirPods their own mic stream during calls.
 #include "headset.h"
 
+#include <cstdio>
 #include <cstring>
 #include <deque>
 #include <mutex>
@@ -132,6 +133,7 @@ std::mutex g_mu;
 std::deque<Request> g_queue;
 Snapshot g_snap;
 bool g_started = false;
+std::string g_onFile; // exists while Bluetooth is on: on again at the next start
 
 class Radio
 {
@@ -256,21 +258,20 @@ class Radio
             if (d.deviceClass == 0xe0 && d.subClass == 0x01 && d.protocol == 0x01)
             {
                 node = d.node;
-                char name[96];
-                std::snprintf(name, sizeof name, "%04x:%04x %s", d.vid, d.pid, d.product.c_str());
-                m_adapterName = name;
+                m_adapterName = d.product;
+                LOG("bt: adapter %04x:%04x %s", d.vid, d.pid, d.product.c_str());
                 break;
             }
         }
         if (node.empty())
         {
-            publish("off", "no USB Bluetooth adapter");
+            publish("off", "No Bluetooth adapter on USB.");
             return;
         }
         m_bt.useAdapter(node);
         if (!m_bt.start())
         {
-            publish("off", m_bt.startError().empty() ? "the adapter did not start" : m_bt.startError().c_str());
+            publish("off", m_bt.startError().empty() ? "The adapter did not start." : m_bt.startError().c_str());
             return;
         }
         listen();
@@ -388,7 +389,7 @@ class Radio
             g_snap.route.clear();
             g_snap.mic = "off";
         }
-        publish("idle", ok ? "disconnected" : "could not connect");
+        publish("idle", ok ? "disconnected" : "Could not connect. Is the headset on and close by?");
     }
 
     // A call on the hands-free link: the headset's mic to the call, the game and the call
@@ -587,13 +588,33 @@ extern "C" void hs_init(const char* data_dir, const char* firmware_dir)
         LOG("bt: no radio thread (%d)", r);
         return;
     }
-    std::lock_guard<std::mutex> lock(g_mu);
-    g_started = true;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        g_started = true;
+    }
+    g_onFile = bonds + "/on";
+    struct stat st;
+    if (stat(g_onFile.c_str(), &st) == 0)
+    {
+        queue(Cmd::PowerOn);
+    }
 }
 
 extern "C" int hs_power(int on)
 {
-    return queue(on ? Cmd::PowerOn : Cmd::PowerOff);
+    const int r = queue(on ? Cmd::PowerOn : Cmd::PowerOff);
+    if (r == 0 && on)
+    {
+        if (FILE* f = std::fopen(g_onFile.c_str(), "w"))
+        {
+            std::fclose(f);
+        }
+    }
+    else if (r == 0)
+    {
+        std::remove(g_onFile.c_str());
+    }
+    return r;
 }
 
 extern "C" int hs_scan(void)
@@ -621,6 +642,8 @@ extern "C" cJSON* hs_state_json(void)
     std::lock_guard<std::mutex> lock(g_mu);
     cJSON* o = cJSON_CreateObject();
     cJSON_AddBoolToObject(o, "on", g_snap.on);
+    struct stat st;
+    cJSON_AddBoolToObject(o, "enabled", stat(g_onFile.c_str(), &st) == 0); // Settings' switch
     cJSON_AddStringToObject(o, "state", g_snap.state.c_str());
     cJSON_AddStringToObject(o, "message", g_snap.message.c_str());
     cJSON_AddStringToObject(o, "adapter", g_snap.adapter.c_str());

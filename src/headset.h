@@ -23,7 +23,9 @@ int hs_connect(const char *addr);  // "AA:BB:CC:DD:EE:FF"; pairs when needed
 int hs_disconnect(void);
 int hs_forget(const char *addr);
 
-// {"on":..,"state":..,"message":..,"adapter":..,"headset":{..},"devices":[..]}
+// {"on":..,"enabled":..,"state":..,"message":..,"adapter":..,"headset":{..},"devices":[..]}
+// state: off idle scanning connecting connected. A message that starts with a capital is
+// for the user (why it is off, or why connecting failed); the others are for the log.
 cJSON *hs_state_json(void);
 
 #ifdef __cplusplus
