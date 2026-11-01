@@ -203,6 +203,9 @@ void Home::move(const discord::Snapshot &s, int dx, int dy, hui::ui::Feedback &f
 void Home::update(const discord::Snapshot &s, const hui::InputFrame &input, float dt, hui::ui::Feedback &feedback)
 {
     time_ += dt;
+    // ponytail: eases even with reduced motion (Home has no settings); 0.3 s either way.
+    const float target = s.bt.state == "connecting" ? 1.0f : 0.0f;
+    badge_open_ += (target - badge_open_) * std::min(1.0f, dt * 10.0f);
     for (int z = 0; z < kZones; ++z)
         index_[z] = std::clamp(index_[z], 0, std::max(0, row_count(s, z) - 1));
 
@@ -329,9 +332,9 @@ void Home::draw_header(const discord::Snapshot &s, DrawList &list) const
             count_badge(list, ink_, s.mention_count, tx + tw + 12.0f + count_badge_width(ink_, s.mention_count), r.cy());
     }
 
-    voice_pill(list, ink_, s.voice, kHeaderY, kHeaderH);
-    if (!s.voice.active())
-        headset_pill(list, ink_, s.bt, kHeaderY, kHeaderH, time_);
+    const float voice_w = voice_pill(list, ink_, s.voice, kHeaderY, kHeaderH);
+    headset_badge(list, ink_, s.bt, 1920.0f - kMargin - voice_w - (voice_w > 0.0f ? 16.0f : 0.0f), kHeaderY, kHeaderH,
+                  badge_open_, time_);
 }
 
 void Home::draw_friends(const discord::Snapshot &s, DrawList &list) const

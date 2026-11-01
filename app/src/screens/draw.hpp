@@ -85,9 +85,14 @@ void hang_up(DrawList &list, float cx, float cy, float s, Color c);
 // "In Raid Night · 12", "Call with Theo", "Connecting…": the call in a few words.
 std::string voice_status(const discord::Voice &voice);
 // The pill at the top right of every screen while in voice: room, count, muted.
-void voice_pill(DrawList &list, const Ink &ink, const discord::Voice &voice, float y, float h);
-// In its place while not in voice: the Bluetooth headset coming on (a spinner).
-void headset_pill(DrawList &list, const Ink &ink, const discord::Bluetooth &bt, float y, float h, float t);
+// Returns its width, 0 when not in voice.
+float voice_pill(DrawList &list, const Ink &ink, const discord::Voice &voice, float y, float h);
+// The paired Bluetooth headset, its right edge at right: a round badge (lit with a green dot
+// when connected, grey when not) that widens into "Connecting headset…" (open 0..1).
+void headset_badge(DrawList &list, const Ink &ink, const discord::Bluetooth &bt, float right, float y, float h,
+                   float open, float t);
+// Headphones, about 40 px across.
+void headphones(DrawList &list, float cx, float cy, Color c);
 // The same on a chat or server page: the room's faces too. Nothing while idle.
 void voice_dock(DrawList &list, const Ink &ink, const discord::Snapshot &snapshot, float y, float h, float right);
 

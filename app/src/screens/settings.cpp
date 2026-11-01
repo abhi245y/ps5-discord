@@ -298,14 +298,8 @@ void section_icon(DrawList &list, int section, float cx, float cy, Color c)
     case 1:
         speaking_bars(list, cx, cy, 28.0f, c);
         break;
-    case 2: // headphones
-        list.line(cx - 14.0f, cy + 2.0f, cx - 14.0f, cy - 6.0f, 4.0f, c);
-        list.line(cx - 14.0f, cy - 6.0f, cx - 6.0f, cy - 15.0f, 4.0f, c);
-        list.line(cx - 6.0f, cy - 15.0f, cx + 6.0f, cy - 15.0f, 4.0f, c);
-        list.line(cx + 6.0f, cy - 15.0f, cx + 14.0f, cy - 6.0f, 4.0f, c);
-        list.line(cx + 14.0f, cy - 6.0f, cx + 14.0f, cy + 2.0f, 4.0f, c);
-        list.rounded_rect({cx - 19.0f, cy, 10.0f, 17.0f}, 4.0f, c);
-        list.rounded_rect({cx + 9.0f, cy, 10.0f, 17.0f}, 4.0f, c);
+    case 2:
+        headphones(list, cx, cy, c);
         break;
     case 3: // a bell
         list.rounded_rect({cx - 12.0f, cy - 14.0f, 24.0f, 24.0f}, 10.0f, c);

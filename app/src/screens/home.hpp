@@ -80,7 +80,8 @@ class Home
     Rect item_rect(const discord::Snapshot &snapshot, int zone, int index) const;
     void move(const discord::Snapshot &snapshot, int dx, int dy, hui::ui::Feedback &feedback);
 
-    float time_ = 0.0f; // the headset pill's spinner
+    float time_ = 0.0f;       // the headset badge's spinner
+    float badge_open_ = 0.0f; // the headset badge: 0 round, 1 "Connecting headset…"
     void draw_header(const discord::Snapshot &snapshot, DrawList &list) const;
     void draw_friends(const discord::Snapshot &snapshot, DrawList &list) const;
     void draw_rooms(const discord::Snapshot &snapshot, DrawList &list) const;

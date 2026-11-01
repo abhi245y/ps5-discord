@@ -322,10 +322,10 @@ Color voice_dot(const discord::Voice &voice)
     return voice.state == discord::VoiceState::connected ? kCoral : kDim;
 }
 
-void voice_pill(DrawList &list, const Ink &ink, const discord::Voice &voice, float y, float h)
+float voice_pill(DrawList &list, const Ink &ink, const discord::Voice &voice, float y, float h)
 {
     if (!voice.active())
-        return;
+        return 0.0f;
     const std::string text = voice_status(voice) + (voice.muted && voice.state == discord::VoiceState::connected ? " · muted" : "");
     const float right = 1920.0f - style::kMargin;
     const float tw = ink.fonts.regular.measure(text, 24.0f);
@@ -337,20 +337,47 @@ void voice_pill(DrawList &list, const Ink &ink, const discord::Voice &voice, flo
     hui::ui::text(list, ink.fonts.regular, text, pill.x + 60.0f, pill.cy() + 9.0f, 24.0f, kText);
     if (muted)
         mic_off(list, right - 38.0f, pill.cy(), 30.0f, kDim);
+    return w;
 }
 
-void headset_pill(DrawList &list, const Ink &ink, const discord::Bluetooth &bt, float y, float h, float t)
+void headphones(DrawList &list, float cx, float cy, Color c)
 {
-    if (bt.state != "connecting")
+    list.line(cx - 14.0f, cy + 2.0f, cx - 14.0f, cy - 6.0f, 4.0f, c);
+    list.line(cx - 14.0f, cy - 6.0f, cx - 6.0f, cy - 15.0f, 4.0f, c);
+    list.line(cx - 6.0f, cy - 15.0f, cx + 6.0f, cy - 15.0f, 4.0f, c);
+    list.line(cx + 6.0f, cy - 15.0f, cx + 14.0f, cy - 6.0f, 4.0f, c);
+    list.line(cx + 14.0f, cy - 6.0f, cx + 14.0f, cy + 2.0f, 4.0f, c);
+    list.rounded_rect({cx - 19.0f, cy, 10.0f, 17.0f}, 4.0f, c);
+    list.rounded_rect({cx + 9.0f, cy, 10.0f, 17.0f}, 4.0f, c);
+}
+
+void headset_badge(DrawList &list, const Ink &ink, const discord::Bluetooth &bt, float right, float y, float h,
+                   float open, float t)
+{
+    bool paired = false;
+    for (const discord::Bluetooth::Device &d : bt.devices)
+        paired = paired || d.paired;
+    if (!paired)
         return;
     const char *text = "Connecting headset…";
-    const float right = 1920.0f - style::kMargin;
-    const float w = ink.fonts.regular.measure(text, 24.0f) + 84.0f;
+    const float full = h + 30.0f + ink.fonts.regular.measure(text, 24.0f);
+    const float w = h + (full - h) * open;
     const Rect pill{right - w, y, w, h};
-    list.rounded_rect(pill, pill.h * 0.5f, kRaised);
-    list.ring(pill.x + 36.0f, pill.cy(), 10.0f, 3.5f, style::kRaisedHigh); // spinner() at pill size
-    list.arc(pill.x + 36.0f, pill.cy(), 10.0f, 3.5f, t * 4.2f, 1.6f, style::kCoral);
-    hui::ui::text(list, ink.fonts.regular, text, pill.x + 60.0f, pill.cy() + 9.0f, 24.0f, kText);
+    const float cx = pill.x + h * 0.5f, cy = pill.cy();
+    const bool connected = !bt.name.empty();
+    list.rounded_rect(pill, h * 0.5f, kRaised);
+    headphones(list, cx, cy - 1.0f, connected ? kText : kFaint);
+    if (connected)
+        list.circle(cx + 16.0f, cy + 16.0f, 7.0f, kOnline);
+    if (bt.state == "connecting") // a spinner around the icon
+        list.arc(cx, cy, h * 0.5f - 6.0f, 3.5f, t * 4.2f, 1.6f, kCoral);
+    const float fade = std::clamp((open - 0.6f) / 0.4f, 0.0f, 1.0f); // the text once there is room
+    if (fade > 0.0f)
+    {
+        list.push_opacity(fade);
+        hui::ui::text(list, ink.fonts.regular, text, pill.x + h + 6.0f, cy + 9.0f, 24.0f, kText);
+        list.pop_opacity();
+    }
 }
 
 void voice_dock(DrawList &list, const Ink &ink, const discord::Snapshot &s, float y, float h, float right)
