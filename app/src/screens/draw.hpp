@@ -86,6 +86,8 @@ void hang_up(DrawList &list, float cx, float cy, float s, Color c);
 std::string voice_status(const discord::Voice &voice);
 // The pill at the top right of every screen while in voice: room, count, muted.
 void voice_pill(DrawList &list, const Ink &ink, const discord::Voice &voice, float y, float h);
+// In its place while not in voice: the Bluetooth headset coming on (a spinner).
+void headset_pill(DrawList &list, const Ink &ink, const discord::Bluetooth &bt, float y, float h, float t);
 // The same on a chat or server page: the room's faces too. Nothing while idle.
 void voice_dock(DrawList &list, const Ink &ink, const discord::Snapshot &snapshot, float y, float h, float right);
 

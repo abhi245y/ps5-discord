@@ -80,6 +80,7 @@ class Home
     Rect item_rect(const discord::Snapshot &snapshot, int zone, int index) const;
     void move(const discord::Snapshot &snapshot, int dx, int dy, hui::ui::Feedback &feedback);
 
+    float time_ = 0.0f; // the headset pill's spinner
     void draw_header(const discord::Snapshot &snapshot, DrawList &list) const;
     void draw_friends(const discord::Snapshot &snapshot, DrawList &list) const;
     void draw_rooms(const discord::Snapshot &snapshot, DrawList &list) const;

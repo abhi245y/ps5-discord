@@ -339,6 +339,20 @@ void voice_pill(DrawList &list, const Ink &ink, const discord::Voice &voice, flo
         mic_off(list, right - 38.0f, pill.cy(), 30.0f, kDim);
 }
 
+void headset_pill(DrawList &list, const Ink &ink, const discord::Bluetooth &bt, float y, float h, float t)
+{
+    if (bt.state != "connecting")
+        return;
+    const char *text = "Connecting headset…";
+    const float right = 1920.0f - style::kMargin;
+    const float w = ink.fonts.regular.measure(text, 24.0f) + 84.0f;
+    const Rect pill{right - w, y, w, h};
+    list.rounded_rect(pill, pill.h * 0.5f, kRaised);
+    list.ring(pill.x + 36.0f, pill.cy(), 10.0f, 3.5f, style::kRaisedHigh); // spinner() at pill size
+    list.arc(pill.x + 36.0f, pill.cy(), 10.0f, 3.5f, t * 4.2f, 1.6f, style::kCoral);
+    hui::ui::text(list, ink.fonts.regular, text, pill.x + 60.0f, pill.cy() + 9.0f, 24.0f, kText);
+}
+
 void voice_dock(DrawList &list, const Ink &ink, const discord::Snapshot &s, float y, float h, float right)
 {
     const discord::Voice &voice = s.voice;

@@ -202,6 +202,7 @@ void Home::move(const discord::Snapshot &s, int dx, int dy, hui::ui::Feedback &f
 
 void Home::update(const discord::Snapshot &s, const hui::InputFrame &input, float dt, hui::ui::Feedback &feedback)
 {
+    time_ += dt;
     for (int z = 0; z < kZones; ++z)
         index_[z] = std::clamp(index_[z], 0, std::max(0, row_count(s, z) - 1));
 
@@ -329,6 +330,8 @@ void Home::draw_header(const discord::Snapshot &s, DrawList &list) const
     }
 
     voice_pill(list, ink_, s.voice, kHeaderY, kHeaderH);
+    if (!s.voice.active())
+        headset_pill(list, ink_, s.bt, kHeaderY, kHeaderH, time_);
 }
 
 void Home::draw_friends(const discord::Snapshot &s, DrawList &list) const
