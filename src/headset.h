@@ -22,6 +22,9 @@ int hs_scan(void);                 // 30 s inquiry
 int hs_connect(const char *addr);  // "AA:BB:CC:DD:EE:FF"; pairs when needed
 int hs_disconnect(void);
 int hs_forget(const char *addr);
+// The core is quitting: hang up the headset and close the adapter (up to 3 s). The
+// switch's saved state stays, so the next start turns it on again.
+void hs_shutdown(void);
 
 // {"on":..,"enabled":..,"state":..,"message":..,"adapter":..,"headset":{..},"devices":[..]}
 // state: off idle scanning connecting connected. A message that starts with a capital is

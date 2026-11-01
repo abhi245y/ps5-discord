@@ -14,6 +14,10 @@ int hs_power(int on)
     return -1;
 }
 
+void hs_shutdown(void)
+{
+}
+
 int hs_scan(void)
 {
     return -1;

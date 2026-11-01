@@ -4,6 +4,7 @@
 // the game's sound plus the call, and on AirPods their own mic stream during calls.
 #include "headset.h"
 
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <deque>
@@ -299,13 +300,22 @@ class Radio
     }
 
     // A headset just after a session may refuse the first page (0x0d, limited resources).
+    // A headset that answers and then refuses (AirPods just after a session: 0x0d, 0x14) is
+    // worth up to three tries even when one was asked for; one in its case never answers
+    // (16 s of paging). ponytail: "answered" = failed in under 12 s.
     bool connect(const BdAddr& addr, int attempts)
     {
-        for (int attempt = 0; attempt < attempts; attempt++)
+        for (int attempt = 0; attempt < 3; attempt++)
         {
+            const auto began = std::chrono::steady_clock::now();
             if (m_bt.connectTo(addr))
             {
                 return true;
+            }
+            const bool answered = std::chrono::steady_clock::now() - began < std::chrono::seconds(12);
+            if (attempt + 1 >= attempts && !answered)
+            {
+                return false;
             }
             m_bt.wait([] { return false; }, 2000, false);
         }
@@ -625,6 +635,26 @@ extern "C" int hs_power(int on)
         std::remove(g_onFile.c_str());
     }
     return r;
+}
+
+extern "C" void hs_shutdown(void)
+{
+    if (queue(Cmd::PowerOff) != 0)
+    {
+        return;
+    }
+    for (int i = 0; i < 30; i++) // the session ends at its next tick (a second), then the adapter
+    {
+        {
+            std::lock_guard<std::mutex> lock(g_mu);
+            if (!g_snap.on)
+            {
+                return;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    LOG("bt: the adapter did not close in 3 s");
 }
 
 extern "C" int hs_scan(void)
