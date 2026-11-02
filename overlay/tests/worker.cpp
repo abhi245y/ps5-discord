@@ -310,6 +310,12 @@ int main(){
         pad_buttons_next=bit_l3|bit_r3;pad_hook(0);assert(chords==1&&gesture_requested.load());
         pad_hook(0);assert(chords==1); // held, no new edge
         pad_buttons_next=0;pad_hook(0);pad_buttons_next=bit_l3|bit_r3;pad_hook(0);assert(chords==2);
+        // Hold Options 0.6 s: one gesture per hold, none for a press.
+        gesture_requested.store(false);pad_buttons_next=0;pad_hook(0);
+        pad_buttons_next=bit_options;pad_hook(0);pad_hook(0);assert(chords==2&&!gesture_requested.load());
+        usleep(650000);pad_hook(0);assert(chords==3&&gesture_requested.load());
+        pad_hook(0);assert(chords==3); // still held: no repeat
+        pad_buttons_next=0;pad_hook(0);gesture_requested.store(false);
         note_share(1000);note_share(1150);assert(double_presses==1);
         note_share(3000);assert(double_presses==1);note_share(3100);assert(double_presses==2);
         assert(share_events==4);

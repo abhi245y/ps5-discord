@@ -18,6 +18,10 @@ using PadCall=PadData(*)(int);
 using ShareCall=void(*)(void*);
 constexpr int kind_void=1,kind_class=0x12,kind_valuetype=0x11;
 constexpr std::uint32_t bit_l3=0x4000,bit_r3=0x8000;
+// Hold Options: the game takes the press first (most open their pause menu), then the
+// panel opens over it: the pause for games that do not pause for the system menu.
+constexpr std::uint32_t bit_options=0x100;
+constexpr std::uint64_t options_hold_ms=600;
 constexpr unsigned create_attempt_limit=3,create_delay_ticks=30,text_period_ticks=12;
 Request request;
 Hook update_hook_store,pad_hook_store,share_hook_store;
@@ -37,7 +41,8 @@ std::atomic<unsigned> scene_attempts{0},create_attempts{0},text_updates{0},share
 std::atomic<std::uint32_t> last_buttons{0};
 std::atomic<std::uint64_t> last_share_at{0};
 std::atomic<int> game_found{0},root_found{0},widgets_created{0},widget_removed{0};
-std::atomic<bool> chord_held{false},gesture_requested{false};
+std::atomic<bool> chord_held{false},gesture_requested{false},options_fired{false};
+std::atomic<std::uint64_t> options_since{0};
 // Capture (the app's panel is open): pad_hook ORs newly pressed buttons in and keeps the
 // left stick; the UI thread hands them to app::on_pad.
 std::atomic<bool> capture{false};
@@ -526,6 +531,13 @@ PadData pad_hook(int device){
             chords.fetch_add(1,std::memory_order_relaxed);
             gesture_requested.store(true,std::memory_order_release);}}
     else chord_held.store(false,std::memory_order_relaxed);
+    if(buttons&bit_options){
+        const std::uint64_t now=now_ms(),since=options_since.load(std::memory_order_relaxed);
+        if(!since)options_since.store(now,std::memory_order_relaxed);
+        else if(now-since>=options_hold_ms&&!options_fired.exchange(true,std::memory_order_relaxed)){
+            chords.fetch_add(1,std::memory_order_relaxed);
+            gesture_requested.store(true,std::memory_order_release);}}
+    else{options_since.store(0,std::memory_order_relaxed);options_fired.store(false,std::memory_order_relaxed);}
     if(capture.load(std::memory_order_acquire)){
         std::uint32_t down=data.down&~(bit_l3|bit_r3);
         if(down){

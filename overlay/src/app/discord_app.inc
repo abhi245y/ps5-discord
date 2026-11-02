@@ -3,7 +3,7 @@
 //  - the glance (C): a small see-through card at the top right while the panel is closed:
 //    LIVE and time, who is talking, your mic. The core decides when it shows (Settings:
 //    always, while someone talks, off).
-//  - the call panel (A): L3+R3 opens it on the right edge: the call, everyone in it with
+//  - the call panel (A): L3+R3 (or holding Options) opens it on the right edge: the call, everyone in it with
 //    talking and muted marks, your mic and Go Live, and four actions (Mute, Deafen, Go
 //    Live, Leave). D-pad or the left stick moves between them, Cross does one, Circle or
 //    L3+R3 closes. The game still gets those presses (no controller focus yet).
