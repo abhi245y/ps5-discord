@@ -31,6 +31,7 @@
 #include "core_key.h"
 #include "notify.h"
 #include "headset.h"
+#include "overlay.h"
 #include "prefs.h"
 #include "rp_pair.h"
 #include "stream.h"
@@ -278,6 +279,7 @@ int main(void)
     cv_init();
     rp_init(DATA_DIR);
     hs_init(DATA_DIR, APP_DIR "/firmware"); // the adapter firmware ships in the app
+    overlay_init(); // the in-game overlay's feed (overlay/)
     chat_set_alert(app_alert);
     stream_init();
     if (tls_global_init() != 0) {

@@ -947,6 +947,51 @@ int chat_call_active(const char *channel_id)
     return on;
 }
 
+// Lock held. The name a person shows: their display name, else their username.
+static const char *display_name(const char *user_id)
+{
+    cJSON *u = user_id ? cJSON_GetObjectItem(cJSON_GetObjectItem(tree, "users"), user_id) : NULL;
+    return str(u, "global_name") ? str(u, "global_name") : str(u, "username") ? str(u, "username") : "Someone";
+}
+
+int chat_call_people(const char *channel_id, char *name, size_t name_cap, chat_person *out, int max)
+{
+    int n = 0;
+    name[0] = 0;
+    pthread_mutex_lock(&lock);
+    if (!tree || !channel_id) {
+        pthread_mutex_unlock(&lock);
+        return 0;
+    }
+    const char *me = str(cJSON_GetObjectItem(tree, "me"), "id");
+    cJSON *g, *c;
+    cJSON_ArrayForEach(g, cJSON_GetObjectItem(tree, "guilds"))
+        cJSON_ArrayForEach(c, cJSON_GetObjectItem(g, "rooms"))
+            if (str(c, "id") && strcmp(str(c, "id"), channel_id) == 0 && str(c, "name"))
+                snprintf(name, name_cap, "%s", str(c, "name"));
+    cJSON_ArrayForEach(c, cJSON_GetObjectItem(tree, "dms"))
+    {
+        if (!str(c, "id") || strcmp(str(c, "id"), channel_id) != 0)
+            continue;
+        cJSON *r = cJSON_GetArrayItem(cJSON_GetObjectItem(c, "recipient_ids"), 0);
+        snprintf(name, name_cap, "%s", str(c, "name") ? str(c, "name") : display_name(cJSON_GetStringValue(r)));
+    }
+    cJSON *s;
+    cJSON_ArrayForEach(s, cJSON_GetObjectItem(cJSON_GetObjectItem(tree, "voice"), channel_id))
+    {
+        const char *id = str(s, "user_id");
+        if (!id || (me && strcmp(id, me) == 0) || n >= max)
+            continue;
+        snprintf(out[n].id, sizeof out[n].id, "%s", id);
+        snprintf(out[n].name, sizeof out[n].name, "%s", display_name(id));
+        out[n].muted = cJSON_IsTrue(cJSON_GetObjectItem(s, "self_mute")) || cJSON_IsTrue(cJSON_GetObjectItem(s, "mute"));
+        out[n].deaf = cJSON_IsTrue(cJSON_GetObjectItem(s, "self_deaf")) || cJSON_IsTrue(cJSON_GetObjectItem(s, "deaf"));
+        n++;
+    }
+    pthread_mutex_unlock(&lock);
+    return n;
+}
+
 static int listed(cJSON *array, const char *id)
 {
     cJSON *v;

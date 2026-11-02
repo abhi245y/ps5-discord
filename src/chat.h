@@ -18,6 +18,14 @@ long chat_tree_version(void); // -1 before READY
 int chat_me_id(char *out, size_t cap);
 // 1 when a call exists in this DM (ringing or running), from the calls entries.
 int chat_call_active(const char *channel_id);
+// The call in channel_id for the in-game overlay: its name (the room, a group DM's name, or
+// the other person) into name, and the others in it (not us) into out. Returns how many.
+typedef struct {
+    char id[24];
+    char name[64];
+    int muted, deaf; // self or server
+} chat_person;
+int chat_call_people(const char *channel_id, char *name, size_t name_cap, chat_person *out, int max);
 // Where a message worth an alert goes (not quiet, not muted), and a ring: who and where,
 // what, the sender's avatar URL, urgent for a ring. main.c: app_alert (notify.h).
 void chat_set_alert(void (*sink)(const char *context, const char *text, const char *icon, int urgent));

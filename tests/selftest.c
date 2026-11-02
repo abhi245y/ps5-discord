@@ -16,6 +16,7 @@
 #include "../src/chat.h"
 #include "../src/gateway.h"
 #include "../src/http.h"
+#include "../src/overlay.h"
 #include "../src/ratelimit.h"
 #include "../src/resample.h"
 #include "../src/voice.h"
@@ -713,6 +714,27 @@ static double tone_amp(int fin, int up, int down, double f)
     return 2 * sqrt(s * s + c * c) / (m - 200);
 }
 
+static void test_overlay_line(void)
+{
+    char line[200];
+    const char names[3][64] = {"Ana", "Ki|m,o~", "Mira"};
+    const char flags[3] = {'m', '-', 't'};
+    overlay_line(line, sizeof line, 'c', 'o', 1, "", "Raid Night", names, flags, 3);
+    assert(strcmp(line, "1|c|o|1||Raid Night|Mira~t,Ana~m,Ki m o ~-") == 0); // talking first; separators spaced
+    overlay_line(line, sizeof line, 'c', 'm', 0, "18:42 3", "R", names, flags, 0);
+    assert(strcmp(line, "1|c|m|0|18:42 3|R|") == 0);
+    // Too many people for 127 bytes: whole entries only, never a cut name.
+    char many[12][64];
+    char f12[12];
+    for (int i = 0; i < 12; i++) {
+        snprintf(many[i], sizeof many[i], "Ünïcödé%02d", i);
+        f12[i] = '-';
+    }
+    const int n = overlay_line(line, sizeof line, 'c', 'o', 1, "", "A room with a rather long name", many, f12, 12);
+    assert(n <= 127 && (int)strlen(line) == n);
+    assert(line[n - 2] == '~' && line[n - 1] == '-');
+}
+
 static void test_resample(void)
 {
     assert(fabs(tone_amp(64000, 3, 4, 1000) - 0.5) < 0.01);
@@ -727,6 +749,7 @@ static void test_resample(void)
 int main(void)
 {
     test_resample();
+    test_overlay_line();
     test_gateway_rules();
     test_http_parse();
     test_h264_packetize();
