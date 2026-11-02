@@ -169,6 +169,8 @@ void reset(){
     for(void*& w:row)w=nullptr;
 }
 
+// Labels go on the overlay's root: a child's X/Y are relative to its parent, and these are
+// screen coordinates. render() shows and hides each one with its card.
 bool build(Builder& b){
     const float w=b.screen_width(),h=b.screen_height();
     // The glance, top right.
@@ -176,20 +178,20 @@ bool build(Builder& b){
     glance=b.add_panel({gx,gy,kGlanceW,kGlanceH},kGlance);
     glance_live=b.add_panel({gx,gy,8,kGlanceH},kCoral); // the live mark: a coral edge
     for(int i=0;i<3;i++)
-        glance_line[i]=b.add_label(glance,{gx+24,gy+12+i*46.0f,kGlanceW-40,40},"");
+        glance_line[i]=b.add_label(nullptr,{gx+24,gy+12+i*46.0f,kGlanceW-40,40},"");
     // The call panel, right edge, top to bottom of the safe area.
     const float px=w-kSafeX-kPanelW,py=kSafeY,ph=h-2*kSafeY;
     panel=b.add_panel({px,py,kPanelW,ph},kPanel);
-    title=b.add_label(panel,{px+32,py+28,kPanelW-64,52},"");
-    status=b.add_label(panel,{px+32,py+90,kPanelW-64,40},"");
+    title=b.add_label(nullptr,{px+32,py+28,kPanelW-64,52},"");
+    status=b.add_label(nullptr,{px+32,py+90,kPanelW-64,40},"");
     for(int i=0;i<kRows;i++)
-        row[i]=b.add_label(panel,{px+32,py+160+i*64.0f,kPanelW-64,48},"");
+        row[i]=b.add_label(nullptr,{px+32,py+160+i*64.0f,kPanelW-64,48},"");
     for(int i=0;i<kActions;i++){
         const float y=py+580+i*84.0f;
         action[i]=b.add_panel({px+24,y,kPanelW-48,72},kButton);
-        action_label[i]=b.add_label(action[i],{px+48,y+16,kPanelW-96,40},"");
+        action_label[i]=b.add_label(nullptr,{px+48,y+16,kPanelW-96,40},"");
         if(!action[i]||!action_label[i])return false;}
-    hint=b.add_label(panel,{px+32,py+ph-56,kPanelW-64,40},"D-pad: move   Cross: select   Circle: close");
+    hint=b.add_label(nullptr,{px+32,py+ph-56,kPanelW-64,40},"D-pad: move   Cross: select   Circle: close");
     if(!glance||!glance_live||!panel||!title||!status||!hint)return false;
     for(void* x:glance_line)if(!x)return false;
     for(void* x:row)if(!x)return false;

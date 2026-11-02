@@ -25,7 +25,9 @@ void on_tick(std::uint64_t frame);             // every rendered frame
 
 Keep a widget handle (`void*`) from `add_panel`/`add_label` to change it
 later. Coordinates are in a 1920x1080 logical space regardless of output
-resolution; `screen_width()`/`screen_height()` report the live values.
+resolution; `screen_width()`/`screen_height()` report the live values. A label
+added to a panel is placed relative to that panel; pass `nullptr` to use
+screen coordinates. Colours are sRGB; the engine converts them for PUI.
 
 Example — the whole demo bar:
 
