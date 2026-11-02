@@ -8,7 +8,7 @@
 #include <unistd.h>
 namespace overlay {
 constexpr std::uint64_t magic=0x31434f504c564f44ULL;
-constexpr unsigned version=9;
+constexpr unsigned version=10;
 constexpr const char* parent_dir="/data/discord-overlay-poc";
 constexpr const char* worker_dir="/user/data/discord-overlay-poc";
 enum Function:unsigned {RootDomain,ThreadAttach,ThreadDetach,AssemblyOpen,AssemblyImage,ClassFromName,
@@ -20,7 +20,7 @@ enum Function:unsigned {RootDomain,ThreadAttach,ThreadDetach,AssemblyOpen,Assemb
     SignatureParams,TypeName,ClassFromType,ClassFields,FieldName,FieldType,FieldOffset,ClassProperties,PropertyName,
     // Optional (0 when ShellUI lacks them; libSceSystemService): the system menu's own way of
     // holding a game while it is over it: the game's app id, the "system UI is over you"
-    // status (games that can pause, pause), and controller focus (-1: the system's).
+    // status (games that can pause, pause), and controller focus (Request::shell_app).
     RunningBigApp,SetImposeStatus,SetControllerFocus,
     FunctionCount};
 constexpr bool optional(unsigned i){return i>=RunningBigApp;}
@@ -50,6 +50,9 @@ struct Request {
     std::uint64_t signature=magic,build=0,token=0,epoch=0;
     std::uint32_t protocol=version,size=sizeof(Request);
     std::int32_t pid=0;
+    // ShellUI's own app id (sceKernelGetAppInfo), whom controller focus goes to while the
+    // panel is open, as Kabuki does; 0 when unknown. -1 is refused from ShellUI (0x80940004).
+    std::int32_t shell_app=0;
     Mode mode=Mode::Resolve;
     std::uint64_t deadline_ms=0,functions[FunctionCount]{};
 };

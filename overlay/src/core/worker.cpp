@@ -341,8 +341,8 @@ void hold_game(){
     if(holding.load()||!request.functions[SetControllerFocus])return;
     int app=request.functions[RunningBigApp]?fn<int(*)()>(RunningBigApp)():-1;
     int impose=request.functions[SetImposeStatus]?fn<int(*)(int)>(SetImposeStatus)(1):-1;
-    int focus=fn<int(*)(int)>(SetControllerFocus)(-1);
-    note("HOLD game=%x impose=%x focus=%x",app,impose,focus);
+    int focus=request.shell_app>0?fn<int(*)(int)>(SetControllerFocus)(request.shell_app):-1;
+    note("HOLD game=%x shell=%x impose=%x focus=%x",app,unsigned(request.shell_app),impose,focus);
     game_app.store(app);last_input_ms.store(now_ms());holding.store(true);
 }
 void release_game(const char* why){
@@ -535,6 +535,10 @@ PadData pad_hook(int device){
             if(pad_logged.fetch_add(1,std::memory_order_relaxed)<200)note("PAD down=%x",down);}
         std::uint32_t x,y;std::memcpy(&x,&data.lx,4);std::memcpy(&y,&data.ly,4);
         stick_x.store(x,std::memory_order_relaxed);stick_y.store(y,std::memory_order_relaxed);}
+    if(holding.load(std::memory_order_acquire)){
+        // ShellUI has the controller for our panel: its own menus get a quiet pad (Kabuki
+        // swallows these events too). We read the presses above.
+        PadData quiet{};quiet.skip=data.skip;return quiet;}
     return data;
 }
 void share_hook(void* event){

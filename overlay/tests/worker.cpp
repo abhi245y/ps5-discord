@@ -324,8 +324,11 @@ int main(){
         // Capture holds the game like the system menu: impose on, focus to the system (-1);
         // closing gives both back.
         assert(focus_now==0x60000001&&impose_now==0);
-        b.set_capture(true);assert(holding.load()&&focus_now==-1&&impose_now==1);
+        request.shell_app=0x60000002;
+        b.set_capture(true);assert(holding.load()&&focus_now==0x60000002&&impose_now==1);
+        {PadData quiet=pad_hook(0);assert(pending_down.load()==0x22&&quiet.buttons==0&&quiet.down==0&&quiet.ly==0);}
         b.set_capture(false);assert(!holding.load()&&focus_now==0x60000001&&impose_now==0);
+        assert(pad_hook(0).down==0x22); // released: ShellUI sees the pad again
         // Teardown never leaves it held.
         b.set_capture(true);release_game("test");assert(focus_now==0x60000001&&impose_now==0);
         input_enabled.store(false);std::uint64_t before=pad_polls.load();pad_hook(0);assert(pad_polls==before);}

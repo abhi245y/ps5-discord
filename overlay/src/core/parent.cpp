@@ -25,7 +25,8 @@
 #error "OVERLAY_MODE must be 0 resolve, 1 observe, 2 widget, 3 input, 4 restart, 5 service"
 #endif
 extern "C" {extern const unsigned char overlay_worker_blob[];extern const unsigned int overlay_worker_blob_size;
-volatile sig_atomic_t overlay_abort_requested=0;}
+volatile sig_atomic_t overlay_abort_requested=0;
+int sceKernelGetAppInfo(pid_t,void*);}
 using namespace overlay;
 // elfldr deploys every payload as payload.elf, so each mode keeps its own USB
 // xlog to keep runs attributable (workspace payload discipline).
@@ -102,6 +103,9 @@ static int run(){
         }
         if(!address(address_value)){note("REFUSED: missing %s",symbols[i]);return 1;}r.functions[i]=address_value;
     }
+    {alignas(16) unsigned char info[256]{};
+     if(sceKernelGetAppInfo(r.pid,info)==0)std::memcpy(&r.shell_app,info,sizeof r.shell_app);
+     note("ShellUI app id 0x%08x",unsigned(r.shell_app));}
     r.token=(now_ms()<<17)^std::uint64_t(getpid());r.deadline_ms=now_ms()+75000;
     if(!write_file(parent_dir,"request.bin",r)){note("request write failed");return 1;}
     Attempt a;a.pid=r.pid;a.epoch=r.epoch;a.token=r.token;
