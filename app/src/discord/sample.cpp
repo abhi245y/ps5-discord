@@ -103,6 +103,8 @@ Snapshot sample_snapshot()
     s.voice.secure = true;
     // Two console users: the one on screen, and a second one for Go Live over Bluetooth.
     s.voice.replug = "replug"; // the tour shows the question before Go Live
+    s.overlay_state = "running";
+    s.prefs.overlay = true;
     s.bt = {true, true, "idle", "", "TP-Link Bluetooth USB Adapter"};
     s.bt.devices = {{"68:A5:93:00:00:01", "AirPods Pro", true}};
     s.voice.rp_users = {{"10000000", "Ana", true, false, true, "", 0}, {"10000001", "Guest", true, false, false, "", 0}};
@@ -342,6 +344,13 @@ void apply_sample(Snapshot &s, const Request &r)
     if (r.kind == Request::Kind::set_pref)
     {
         s.prefs.set(r.content, r.value);
+        if (r.content == "overlay")
+            s.overlay_state = r.value ? "running" : "off";
+        return;
+    }
+    if (r.kind == Request::Kind::overlay_reload)
+    {
+        s.overlay_state = "running";
         return;
     }
     if (r.kind == Request::Kind::bt) // ponytail: instant, no search wait

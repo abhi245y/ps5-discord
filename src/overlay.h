@@ -8,6 +8,11 @@
 
 void overlay_init(void);     // starts the feed thread; once, at startup
 void overlay_shutdown(void); // the core is quitting: the overlay hides (it stays loaded)
+// Settings: off, starting, running, stopped (needs a reload), reloading.
+const char *overlay_state(void);
+// Restart the system UI and load the overlay again (about 45 s, in the background). 0 when
+// started; -1 when one runs already or the overlay is off.
+int overlay_reload(void);
 
 // The line for these inputs, at most 127 bytes (exposed for the selftest). people_flags[i]
 // is 't' talking, 'm' muted, 'd' deafened or '-'; talking people go first.

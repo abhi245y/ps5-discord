@@ -41,6 +41,7 @@ enum class Act
     pref, // a console-side setting (Row::key, discord::Prefs)
     bt_power,
     bt_devices, // the headset dialog
+    overlay_reload,
     ui_volume,
     sfx_volume,
     motion,
@@ -76,6 +77,8 @@ struct Row
 constexpr const char *kQualities[] = {"720p · 30 fps", "720p · 60 fps", "1080p · 30 fps", "1080p · 60 fps"};
 // Prefs::notify_server and quiet_hours (the core's notify.c has the same hours).
 constexpr const char *kServerMessages[] = {"Off", "As in Discord", "Every message"};
+// Prefs::overlay_glance.
+constexpr const char *kGlance[] = {"Off", "While someone talks", "Always"};
 constexpr const char *kQuiet[] = {"Off", "22:00 – 07:00", "23:00 – 08:00", "00:00 – 08:00", "21:00 – 06:00"};
 
 template <int N>
@@ -107,6 +110,7 @@ constexpr Section kSections[] = {
     {"Account", "Who is signed in on this console."},
     {"Voice & audio", "Your microphone, the call's sound and Go Live."},
     {"Headset", "A Bluetooth headset for the game and calls."},
+    {"Overlay", "Your call over your games, without leaving them."},
     {"Notifications", "What shows a banner while you are elsewhere."},
     {"Appearance", "How the app sounds and moves."},
     {"Privacy", "What is kept on the console and who can see it."},
@@ -200,7 +204,31 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
                 toggle_row("Hands-free in calls", "Less delay, phone-quality sound. Try it if others can't hear you.",
                            "bt_handsfree", s.prefs.bt_handsfree)};
     }
-    case 3:
+    case 3: {
+        const std::string &st = s.overlay_state;
+        if (st.empty())
+            return {{Kind::info, "In-game overlay", "Not in this build.", ""}};
+        Row on = toggle_row("In-game overlay",
+                            !s.prefs.overlay      ? "Shows the call over your games."
+                            : st == "running"     ? "Ready in your games."
+                            : st == "starting"    ? "Loading…"
+                            : st == "reloading"   ? "Reloading the home screen…"
+                                                  : "Not loaded. Reload it below.",
+                            "overlay", s.prefs.overlay);
+        if (!s.prefs.overlay)
+            return {on};
+        Row reload{Kind::button, "Reload overlay",
+                   st == "reloading" ? "About half a minute." : "Reloads the PS5 home screen once. Your game keeps running.",
+                   "Reload", 0, false, false, Act::overlay_reload}; // the core refuses one while reloading
+        return {
+            on,
+            choice_row("Talking card", "The small card at the top right while the panel is closed.", "overlay_glance",
+                       kGlance, s.prefs.overlay_glance),
+            {Kind::value, "Open the panel", "Holding Options pauses most games first.", "Hold Options or L3+R3"},
+            reload,
+        };
+    }
+    case 4:
         return {
             toggle_row("Direct messages and mentions", "DMs and @mentions. Chats muted in Discord stay quiet.", "notify_dm", s.prefs.notify_dm),
             choice_row("Server messages", "As in Discord follows each server's notification setting.",
@@ -212,7 +240,7 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
             choice_row("Quiet hours", "No sounds and no PS5 alerts; banners in the app still show.", "quiet_hours",
                        kQuiet, s.prefs.quiet_hours),
         };
-    case 4:
+    case 5:
         return {
             {Kind::slider, "Interface sounds", "Moving around, selecting and going back.", "", app.ui_volume, false, false,
              Act::ui_volume},
@@ -223,7 +251,7 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
             {Kind::toggle, "Swap Cross and Circle", "Circle selects, Cross goes back.", "", 0, app.swap_confirm, false,
              Act::swap},
         };
-    case 5:
+    case 6:
         return {
             toggle_row("Show what I'm playing", "Your PS5 game on Discord. Covers: prosperopatches.com",
                        "share_game", s.prefs.share_game),
@@ -283,7 +311,7 @@ bool focusable(const Row &r)
 
 // ---- drawing pieces ------------------------------------------------------------
 
-constexpr float kSecX = kMargin, kSecY = 140.0f, kSecW = 500.0f, kSecH = 104.0f, kSecGap = 16.0f;
+constexpr float kSecX = kMargin, kSecY = 140.0f, kSecW = 500.0f, kSecH = 92.0f, kSecGap = 12.0f;
 constexpr float kPanelX = 620.0f, kPanelY = 124.0f, kPanelW = 1920.0f - kMargin - kPanelX, kPanelH = 870.0f;
 constexpr float kRowX = kPanelX + 32.0f, kRowW = kPanelW - 64.0f, kRowY = 282.0f, kRowH = 96.0f, kRowGap = 12.0f;
 
@@ -301,16 +329,21 @@ void section_icon(DrawList &list, int section, float cx, float cy, Color c)
     case 2:
         headphones(list, cx, cy, c);
         break;
-    case 3: // a bell
+    case 3: // two layers: the overlay over the game
+        list.rounded_rect({cx - 16.0f, cy - 6.0f, 26.0f, 20.0f}, 5.0f, c);
+        list.rounded_rect({cx - 8.0f, cy - 16.0f, 26.0f, 20.0f}, 5.0f, Color::rgb(0x2a2e36));
+        list.rounded_rect({cx - 6.0f, cy - 14.0f, 22.0f, 16.0f}, 4.0f, c);
+        break;
+    case 4: // a bell
         list.rounded_rect({cx - 12.0f, cy - 14.0f, 24.0f, 24.0f}, 10.0f, c);
         list.rounded_rect({cx - 16.0f, cy + 6.0f, 32.0f, 6.0f}, 3.0f, c);
         list.circle(cx, cy + 16.0f, 4.0f, c);
         break;
-    case 4: // a brush
+    case 5: // a brush
         list.line(cx + 12.0f, cy - 14.0f, cx - 4.0f, cy + 4.0f, 6.0f, c);
         list.circle(cx - 8.0f, cy + 9.0f, 7.0f, c);
         break;
-    case 5: // a shield
+    case 6: // a shield
         list.rounded_rect({cx - 13.0f, cy - 15.0f, 26.0f, 22.0f}, 5.0f, c);
         list.line(cx - 13.0f, cy + 4.0f, cx, cy + 17.0f, 6.0f, c);
         list.line(cx + 13.0f, cy + 4.0f, cx, cy + 17.0f, 6.0f, c);
@@ -806,6 +839,13 @@ bool SettingsScreen::update(const discord::Snapshot &s, const hui::InputFrame &i
             r.on = !row.on;
             requests.push_back(r);
             feedback.play(hui::audio::Cue::toggle);
+            break;
+        }
+        case Act::overlay_reload: {
+            discord::Request r;
+            r.kind = discord::Request::Kind::overlay_reload;
+            requests.push_back(r);
+            feedback.play(hui::audio::Cue::select);
             break;
         }
         case Act::bt_devices:

@@ -184,12 +184,37 @@ static void run_command(const char *what)
     LOG("overlay: %s -> %d %s", what, r, why);
 }
 
-// The overlay service (overlay/, built into the app) to elfldr, once per core run. A second
-// launch exits by itself (its lock), and one per system UI instance is all the engine
-// allows: after a Quit it stays loaded and shows nothing until the core is back.
-static void launch(void)
+static uint64_t mono_ms(void)
 {
-    FILE *f = fopen(APP_ASSETS "/overlay.elf", "rb");
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (uint64_t)t.tv_sec * 1000 + (uint64_t)t.tv_nsec / 1000000;
+}
+
+// The service reports in status.bin (overlay/src/core/protocol.hpp Status: signature,
+// token, at_ms on the shared monotonic clock, updates, state; 2 = running).
+static int running(void)
+{
+    struct {
+        uint64_t signature, token, at_ms, updates;
+        int32_t state;
+    } st;
+    FILE *f = fopen(OVERLAY_DIR "/status.bin", "rb");
+    if (!f)
+        return 0;
+    const int ok = fread(&st, 1, sizeof st, f) == sizeof st;
+    fclose(f);
+    const uint64_t now = mono_ms();
+    return ok && st.signature == OVERLAY_MAGIC && st.state == 2 && st.at_ms <= now + 1000 && now - st.at_ms < 3000;
+}
+
+static uint64_t launched_at;
+static volatile int reloading;
+
+// A payload from the app's assets to elfldr.
+static void send_elf(const char *path)
+{
+    FILE *f = fopen(path, "rb");
     if (!f)
         return;
     static char elf[1 << 20];
@@ -205,7 +230,74 @@ static void launch(void)
         for (ssize_t w; sent < n && (w = send(fd, elf + sent, n - sent, 0)) > 0;)
             sent += (size_t)w;
     close(fd);
-    LOG("overlay: sent the overlay to elfldr (%zu of %zu bytes)", sent, n);
+    LOG("overlay: sent %s to elfldr (%zu of %zu bytes)", path, sent, n);
+}
+
+// The overlay service (overlay/, built into the app), when Settings have it on. A second
+// launch exits by itself (its lock). The engine loads once per system UI instance: after
+// a core restart it may need overlay_reload().
+static void launch(void)
+{
+    send_elf(APP_ASSETS "/overlay.elf");
+    launched_at = mono_ms();
+}
+
+// Stop the running service (its token from request.bin), restart the system UI (the
+// engine's rollback payload; the system brings it back) and load the service again.
+// Asks the running service to stop (stop.bin = its token, from request.bin); its widgets
+// go and the game keeps its controller.
+static void stop_service(void)
+{
+    unsigned char request[24];
+    FILE *f = fopen(OVERLAY_DIR "/request.bin", "rb");
+    const int ok = f && fread(request, 1, sizeof request, f) == sizeof request;
+    if (f)
+        fclose(f);
+    FILE *o = ok ? fopen(OVERLAY_DIR "/stop.bin", "wb") : NULL;
+    if (o) {
+        fwrite(request + 16, 1, 8, o);
+        fclose(o);
+    }
+}
+
+static void *reload_thread(void *arg)
+{
+    (void)arg;
+    if (running()) {
+        stop_service();
+        for (int i = 0; i < 60 && running(); i++)
+            usleep(200000);
+    }
+    send_elf(APP_ASSETS "/overlay-restart.elf");
+    sleep(30); // the home screen comes back
+    launch();
+    reloading = 0;
+    return NULL;
+}
+
+int overlay_reload(void)
+{
+    if (reloading || prefs_get("overlay") != 1)
+        return -1;
+    reloading = 1;
+    pthread_t t;
+    if (pthread_create(&t, NULL, reload_thread, NULL) != 0) {
+        reloading = 0;
+        return -1;
+    }
+    pthread_detach(t);
+    return 0;
+}
+
+const char *overlay_state(void)
+{
+    if (prefs_get("overlay") != 1)
+        return "off";
+    if (reloading)
+        return "reloading";
+    if (running())
+        return "running";
+    return launched_at && mono_ms() - launched_at < 20000 ? "starting" : "stopped";
 }
 
 static void *feed(void *arg)
@@ -218,9 +310,13 @@ static void *feed(void *arg)
     uint64_t seen = read_command(&c); // one left from before this core ran is not new
     mkdir(OVERLAY_DIR, 0755);
     for (;;) {
-        if (!launched && prefs_get("overlay") == 1) {
+        const int on = prefs_get("overlay") == 1;
+        if (on && !launched && !running()) {
             launch();
             launched = 1;
+        } else if (!on && running() && !reloading) {
+            stop_service(); // switched off in Settings
+            launched = 0;
         }
         compose(line, sizeof line, &live_since);
         if (strcmp(line, last) != 0 && write_line(line) == 0)
@@ -257,5 +353,15 @@ void overlay_init(void)
 
 void overlay_shutdown(void)
 {
+}
+
+int overlay_reload(void)
+{
+    return -1;
+}
+
+const char *overlay_state(void)
+{
+    return "off";
 }
 #endif

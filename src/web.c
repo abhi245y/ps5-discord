@@ -30,6 +30,7 @@
 #include "prefs.h"
 #include "build_config.h"
 #include "headset.h"
+#include "overlay.h"
 #include "rp_pair.h"
 #include "stream.h"
 #include "browser_auth.h"
@@ -649,6 +650,7 @@ static char *voice_json(void)
     cJSON_AddStringToObject(bc, "controller", bc_controller());
     cJSON_AddItemToObject(o, "prefs", prefs_json());
     cJSON_AddItemToObject(o, "bt", hs_state_json());
+    cJSON_AddStringToObject(cJSON_AddObjectToObject(o, "overlay"), "state", overlay_state());
     s = cJSON_PrintUnformatted(o);
     cJSON_Delete(o);
     return s;
@@ -856,6 +858,11 @@ static void handle(int c, int local)
         reply_json(c, cJSON_PrintUnformatted(bt));
         cJSON_Delete(bt);
     }
+    } else if (post && strcmp(path, "/api/overlay/reload") == 0) {
+        if (overlay_reload() == 0)
+            reply_ok(c);
+        else
+            refuse(c, "409 Conflict", "The overlay is off, or reloading already.");
     } else if (post && strncmp(path, "/api/bt/", 8) == 0) {
         api_bt(c, path, body);
     } else if (post && strcmp(path, "/api/prefs") == 0) {

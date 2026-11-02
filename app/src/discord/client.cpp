@@ -1107,9 +1107,11 @@ void Client::run()
             // Quick while connected (the core's speaking window is ~300 ms, so rings follow it),
             // quick while joining, slower otherwise.
             const std::string &bt = snapshot_.bt.state; // a search or a connect shows soon
+            const std::string &ov = snapshot_.overlay_state;
             const std::int64_t voice_every = snapshot_.voice.state == VoiceState::connected ? 250
                                              : snapshot_.voice.active() || bt == "scanning" ||
-                                                       bt == "connecting"                   ? 1000
+                                                       bt == "connecting" || ov == "starting" ||
+                                                       ov == "reloading"                    ? 1000
                                                                                             : 4000;
             if (now - last_voice_ms_ >= voice_every)
                 poll_voice();
@@ -1452,7 +1454,11 @@ void Client::poll_voice()
             prefs.quiet_hours = std::clamp(static_cast<int>(num(p, "quiet_hours", 0.0)), 0, 4);
             prefs.share_game = num(p, "share_game", 1.0) != 0.0;
             prefs.bt_handsfree = num(p, "bt_handsfree", 0.0) != 0.0;
+            prefs.overlay = num(p, "overlay", 0.0) != 0.0;
+            prefs.overlay_glance = std::clamp(static_cast<int>(num(p, "overlay_glance", 1.0)), 0, 2);
         }
+        snapshot_.overlay_state =
+            v.contains("overlay") && v["overlay"].is_object() ? text(v["overlay"], "state") : std::string();
         Bluetooth &bt = snapshot_.bt;
         bt = Bluetooth{};
         if (v.contains("bt") && v["bt"].is_object())
@@ -1941,6 +1947,13 @@ void Client::handle(const Request &request)
         if (reply.status != 202)
             hui::sys::log("[CLIENT] %s answered %d", path, reply.status);
         last_voice_ms_ = 0; // the pairing state comes on the next poll
+        break;
+    }
+    case Request::Kind::overlay_reload: {
+        const Reply reply = http(port_, "POST", "/api/overlay/reload");
+        if (reply.status != 202)
+            hui::sys::log("[CLIENT] /api/overlay/reload answered %d", reply.status);
+        last_voice_ms_ = 0;
         break;
     }
     case Request::Kind::bt: {

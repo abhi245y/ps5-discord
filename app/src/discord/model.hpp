@@ -363,6 +363,8 @@ struct Prefs
     int quiet_hours = 0;       // 0 off, else a preset (screens/settings.cpp kQuiet)
     bool share_game = true;    // Discord shows the game in front on this console
     bool bt_handsfree = false; // the headset's hands-free link for calls, even on AirPods
+    bool overlay = false;      // the in-game overlay (overlay/, in the system UI)
+    int overlay_glance = 1;    // its talking card: 0 off, 1 while someone talks, 2 always
 
     void set(const std::string &key, int value) // a set_pref request, applied here
     {
@@ -386,6 +388,10 @@ struct Prefs
             share_game = value != 0;
         else if (key == "bt_handsfree")
             bt_handsfree = value != 0;
+        else if (key == "overlay")
+            overlay = value != 0;
+        else if (key == "overlay_glance")
+            overlay_glance = value;
     }
 };
 
@@ -435,6 +441,7 @@ struct Snapshot
     Update update;
     Voice voice;
     Bluetooth bt;
+    std::string overlay_state; // off starting running stopped reloading; "" = an older core
     std::map<std::string, std::vector<VoiceSeat>> seats; // by channel id: rooms and DM calls
     std::vector<Call> calls;
     int friends_online = 0;
