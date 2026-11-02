@@ -206,6 +206,7 @@ static void bind(){
         reinterpret_cast<std::uintptr_t>(&name_none),reinterpret_cast<std::uintptr_t>(&one_none),
         reinterpret_cast<std::uintptr_t>(&offset_none),reinterpret_cast<std::uintptr_t>(&iter_none),
         reinterpret_cast<std::uintptr_t>(&name_none),
+        reinterpret_cast<std::uintptr_t>(&iter_none),reinterpret_cast<std::uintptr_t>(&name_none),
         reinterpret_cast<std::uintptr_t>(&big_app_fake),reinterpret_cast<std::uintptr_t>(&impose_fake),
         reinterpret_cast<std::uintptr_t>(&focus_fake)};
     static_assert(sizeof values==sizeof request.functions);std::memcpy(request.functions,values,sizeof values);

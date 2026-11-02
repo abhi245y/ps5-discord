@@ -32,6 +32,8 @@ Method* root_getter=nullptr;
 void* class_widget=nullptr,*class_panel=nullptr,*class_label=nullptr,*class_font=nullptr;
 void* class_application=nullptr,*class_scene=nullptr;
 Method* method_append=nullptr,*method_find=nullptr,*method_font_ctor=nullptr;
+// Pictures (optional: without them the overlay has panels and text only).
+void* class_image=nullptr,*class_asset=nullptr;Method* method_asset_ctor=nullptr;
 std::atomic<Update> original{nullptr};
 std::atomic<PadCall> pad_original{nullptr};
 std::atomic<ShareCall> share_original{nullptr};
@@ -59,10 +61,11 @@ constexpr std::uint64_t hold_idle_ms=30000;  // no button reaches us this long: 
 // and the captured Application instance survive GC moves.
 std::uint32_t app_handle=0,root_scene_handle=0,scene_handle=0,scene_root_handle=0;
 bool removal_requested=false,cleanup_retry_used=false;
-char last_text[128]{};                       // UI thread only
+constexpr std::size_t text_limit=2048;      // text.bin, bytes
+char last_text[text_limit]{};                // UI thread only
 float ui_screen_w=1920,ui_screen_h=1080;     // UI thread only
-struct WidgetSlot{std::uint32_t handle=0;bool label=false;};
-constexpr std::uint32_t widget_limit=32;
+struct WidgetSlot{std::uint32_t handle=0,asset=0;bool label=false;char path[160]{};};
+constexpr std::uint32_t widget_limit=96;
 WidgetSlot widget_slots[widget_limit];       // UI thread only, app-facing ids
 static_assert(std::atomic<Update>::is_always_lock_free&&std::atomic<PadCall>::is_always_lock_free&&
     std::atomic<ShareCall>::is_always_lock_free&&std::atomic<std::uint64_t>::is_always_lock_free);
@@ -114,6 +117,21 @@ Method* method_inherited(void* klass,const char* name,int count){
     for(void* walk=klass;walk;){
         if(Method* m=fn<Method*(*)(void*,const char*,int)>(MethodFromName)(walk,name,count))return m;
         walk=fn<void*(*)(void*)>(ClassParent)(walk);}
+    return nullptr;
+}
+// The overload of name whose one parameter has this type (ImageAsset has two 1-argument
+// constructors: a file's URI and a texture).
+Method* method_taking(void* klass,const char* name,const char* param){
+    void* iter=nullptr;
+    for(int i=0;klass&&i<400;i++){
+        Method* m=fn<Method*(*)(void*,void**)>(ClassMethods)(klass,&iter);if(!m)break;
+        const char* n=fn<const char*(*)(void*)>(MethodName)(m);
+        if(!n||std::strcmp(n,name))continue;
+        void* sig=fn<void*(*)(void*)>(MethodSignature)(m);
+        if(!sig||fn<unsigned(*)(void*)>(SignatureCount)(sig)!=1)continue;
+        void* piter=nullptr;void* type=fn<void*(*)(void*,void**)>(SignatureParams)(sig,&piter);
+        const char* t=type?fn<const char*(*)(void*)>(TypeName)(type):nullptr;
+        if(t&&!std::strcmp(t,param))return m;}
     return nullptr;
 }
 bool prop_get_object(void* klass,void* obj,const char* name,void** out){
@@ -191,7 +209,7 @@ bool append_child(void* parent,void* child){
 bool load_text(char* out,std::size_t n){
     char p[256];if(!path(p,sizeof p,worker_dir,"text.bin"))return false;
     FILE* f=std::fopen(p,"rb");if(!f)return false;
-    char raw[128];std::size_t got=std::fread(raw,1,sizeof raw,f);
+    char raw[text_limit];std::size_t got=std::fread(raw,1,sizeof raw,f);
     // A full buffer means the file is too long: never display a silent prefix.
     bool ok=!std::ferror(f)&&got<sizeof raw&&!std::memchr(raw,0,got);
     std::fclose(f);if(!ok||!got)return false;
@@ -214,11 +232,12 @@ std::uint32_t slot_store(void* object,bool label){
     for(auto& slot:widget_slots){
         if(slot.handle)continue;
         slot.handle=fn<std::uint32_t(*)(void*,int)>(GcNew)(object,1);
-        slot.label=label;
+        slot.label=label;slot.asset=0;slot.path[0]=0;
         return slot.handle?std::uint32_t(&slot-widget_slots)+1:0;}
     return 0;}
 void slots_release(){
     for(auto& slot:widget_slots){
+        if(slot.asset){fn<void(*)(std::uint32_t)>(GcFree)(slot.asset);slot.asset=0;}
         if(slot.handle){fn<void(*)(std::uint32_t)>(GcFree)(slot.handle);slot.handle=0;}}
 }
 // Log-only: the value type a property takes on this firmware, field by field (offsets
@@ -283,11 +302,11 @@ void* engine_add_panel(void*,const oui::Rect* r,const oui::Color* c){
 // text colour as float[4], and the system theme's colours off. A missing property only
 // logs (prop_set), the label stays.
 std::atomic<unsigned> font_failures{0};
-void style_label(void* label,float height){
+void style_label(void* label,float height,int weight=0){
     if(void* boxed=method_font_ctor?fn<void*(*)(void*,void*)>(ObjectNew)(domain,class_font):nullptr){
         std::uint32_t pin=fn<std::uint32_t(*)(void*,int)>(GcNew)(boxed,1);
         void* font=pin?fn<void*(*)(void*)>(ObjectUnbox)(fn<void*(*)(std::uint32_t)>(GcTarget)(pin)):nullptr;
-        int size=int(height*0.62f+0.5f),style=0,weight=0;
+        int size=int(height*0.62f+0.5f),style=0;
         void* args[3]={&size,&style,&weight};void* exception=nullptr;bool ok=false;
         if(font)invoke_ex(method_font_ctor,font,args,ok,&exception);
         if(font&&ok)(void)prop_set(class_label,label,"Font",font);
@@ -368,12 +387,75 @@ bool engine_send(void*,const char* text){
     std::snprintf(c.text,sizeof c.text,"%s",text);
     note("COMMAND %s",c.text);
     return write_file(worker_dir,"cmd.bin",c);}
+// Kabuki's picture recipe: an ImageBox whose Image is an ImageAsset made from "file://path".
+WidgetSlot* slot_of(void* widget){
+    auto index=static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(widget));
+    return index&&index<=widget_limit&&widget_slots[index-1].handle?&widget_slots[index-1]:nullptr;}
+bool engine_set_image(void*,void* widget,const char* path){
+    WidgetSlot* slot=slot_of(widget);void* box=slot?slot_object(std::uint32_t(slot-widget_slots)+1):nullptr;
+    if(!box||!path||!class_asset||!method_asset_ctor)return false;
+    if(!std::strcmp(slot->path,path))return true;
+    void* asset=nullptr;std::uint32_t pin=0;
+    if(path[0]&&access(path,R_OK)==0){
+        char uri[200];std::snprintf(uri,sizeof uri,"file://%s",path);
+        void* text=fn<void*(*)(void*,const char*)>(StringNew)(domain,uri);
+        asset=text?fn<void*(*)(void*,void*)>(ObjectNew)(domain,class_asset):nullptr;
+        pin=asset?fn<std::uint32_t(*)(void*,int)>(GcNew)(asset,1):0;
+        void* args[1]={text};void* exception=nullptr;bool ok=false;
+        if(pin)invoke_ex(method_asset_ctor,fn<void*(*)(std::uint32_t)>(GcTarget)(pin),args,ok,&exception);
+        if(!pin||!ok){describe_exception("ImageAsset",exception);if(pin)fn<void(*)(std::uint32_t)>(GcFree)(pin);return false;}
+        asset=fn<void*(*)(std::uint32_t)>(GcTarget)(pin);}
+    if(!prop_set(class_image,box,"Image",asset)){if(pin)fn<void(*)(std::uint32_t)>(GcFree)(pin);return false;}
+    if(slot->asset)fn<void(*)(std::uint32_t)>(GcFree)(slot->asset);
+    slot->asset=pin;std::snprintf(slot->path,sizeof slot->path,"%s",path);
+    return true;}
+void* engine_add_image(void*,const oui::Rect* r,const char* path){
+    void* root=scene_root_handle?fn<void*(*)(std::uint32_t)>(GcTarget)(scene_root_handle):nullptr;
+    if(!root||!r||!class_image||!class_asset)return nullptr;
+    void* box=fn<void*(*)(void*,void*)>(ObjectNew)(domain,class_image);
+    if(!box)return nullptr;
+    fn<void(*)(void*)>(ObjectInit)(box);
+    int no=0,shown=1,stretch=1;
+    if(!prop_set_int(class_image,box,"Focusable",no)||
+       !prop_set_float(class_image,box,"X",r->x)||!prop_set_float(class_image,box,"Y",r->y)||
+       !prop_set_float(class_image,box,"Width",r->w)||!prop_set_float(class_image,box,"Height",r->h)||
+       !prop_set_int(class_image,box,"Visible",shown)){note("UI image props failed");return nullptr;}
+    (void)prop_set_int(class_image,box,"DisposeImageOutOfScreen",no);
+    (void)prop_set_int(class_image,box,"ImageScaleType",stretch);
+    no_skin(class_image,box);
+    if(!append_child(root,box)){note("UI image attach failed");return nullptr;}
+    std::uint32_t id=slot_store(box,false);
+    void* widget=id?reinterpret_cast<void*>(std::uintptr_t(id)):nullptr;
+    if(widget&&path&&path[0]&&!engine_set_image(nullptr,widget,path))note("UI image %s not shown",path);
+    return widget;}
+bool engine_set_tint(void*,void* widget,const oui::Color* c){
+    void* object=slot_object(static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(widget)));
+    if(!object||!c||!class_image)return false;
+    UiColor tint=ui_color(*c);
+    return prop_set(class_image,object,"FilterColor",&tint);}
+bool engine_set_text_style(void*,void* widget,float size,int weight,const oui::Color* c,int align){
+    void* label=slot_object(static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(widget)));
+    if(!label||!c)return false;
+    style_label(label,size/0.62f,weight);
+    UiColor ink=ui_color(*c);
+    (void)prop_set(class_label,label,"TextColor",&ink);
+    int trim=3;
+    (void)prop_set_int(class_label,label,"HorizontalAlignment",align);
+    (void)prop_set_int(class_label,label,"TextTrimming",trim);
+    return true;}
+bool engine_set_rect(void*,void* widget,const oui::Rect* r){
+    void* object=slot_object(static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(widget)));
+    void* type=object?fn<void*(*)(void*)>(ObjectClass)(object):nullptr;
+    // The object's own class: Label overrides Y (its baseline), as Kabuki notes.
+    return type&&r&&prop_set_float(type,object,"X",r->x)&&prop_set_float(type,object,"Y",r->y)&&
+        prop_set_float(type,object,"Width",r->w)&&prop_set_float(type,object,"Height",r->h);}
 constexpr oui::Builder::Vt engine_vt{
     engine_add_panel,engine_add_label,engine_set_text,engine_set_visible,engine_set_color,
-    engine_screen_w,engine_screen_h,engine_set_capture,engine_send};
+    engine_screen_w,engine_screen_h,engine_set_capture,engine_send,
+    engine_add_image,engine_set_image,engine_set_tint,engine_set_text_style,engine_set_rect};
 oui::Builder ui_builder(){return oui::Builder{&engine_vt,nullptr};}
 void refresh_text(){
-    char text[128];
+    char text[text_limit];
     if(load_text(text,sizeof text)&&std::strcmp(text,last_text)){
         std::snprintf(last_text,sizeof last_text,"%s",text);
         oui::Builder b=ui_builder();
@@ -586,7 +668,11 @@ bool resolve_update_methods(){
         method_find=fn<Method*(*)(void*,const char*,int)>(MethodFromName)(class_widget,"FindWidgetByName",1);
         Method* font_ctor=fn<Method*(*)(void*,const char*,int)>(MethodFromName)(class_font,".ctor",3);
         method_font_ctor=font_ctor;
+        class_image=fn<void*(*)(void*,const char*,const char*)>(ClassFromName)(pui,"Sce.PlayStation.PUI.UI2","ImageBox");
+        class_asset=fn<void*(*)(void*,const char*,const char*)>(ClassFromName)(pui,"Sce.PlayStation.PUI","ImageAsset");
+        method_asset_ctor=class_asset?method_taking(class_asset,".ctor","System.String"):nullptr;
         describe_types();
+        note("PICTURES image=%p asset=%p ctor=%p",class_image,class_asset,method_asset_ctor);
         Method* remove_scene=fn<Method*(*)(void*,const char*,int)>(MethodFromName)(class_scene,"RemoveFromSuperScene",0);
         if(!method_append||!font_ctor||!remove_scene||
            !signature(method_append,true,1,kind_void)||!signature(font_ctor,true,3,kind_void)||

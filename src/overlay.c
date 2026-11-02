@@ -16,16 +16,19 @@
 #include <sys/socket.h>
 #endif
 
+#include "broadcast.h"
 #include "chat.h"
 #include "prefs.h"
 #include "stream.h"
+#include "http.h"
 #include "log.h"
+#include "png_circle.h"
 #include "voice.h"
 
 // The overlay engine's data folder (overlay/src/core/protocol.hpp parent_dir).
 #define OVERLAY_DIR "/data/discord-overlay-poc"
 #define APP_ASSETS "/data/homebrew/PPSA99072/assets" // the app's /app0/assets
-#define IDLE_LINE "1|-|o|0|||"
+#define IDLE_LINE "2|-|o|0||0||||"
 // overlay/src/core/protocol.hpp Command, written by the overlay (Builder::send).
 typedef struct {
     uint64_t signature, seq;
@@ -33,6 +36,7 @@ typedef struct {
 } overlay_command;
 #define OVERLAY_MAGIC 0x31434f504c564f44ULL
 #define MAX_PEOPLE 8
+#define AVATAR_PX 128 // round PNGs in OVERLAY_DIR/av, scaled down by the overlay
 
 // Copies at most n bytes of src, whole UTF-8 characters only; '|', ',' and '~' (the line's
 // separators) and control characters become spaces.
@@ -55,33 +59,49 @@ static int put(char *out, int cap, int at, const char *src, int n)
     return at;
 }
 
-int overlay_line(char *out, int cap, char state, char me, int glance, const char *live, const char *call,
-                 const char names[][64], const char *flags, int count)
+static int sep(char *out, int cap, int at, char c)
 {
-    if (cap > 128)
-        cap = 128; // the engine reads 127 bytes at most
-    int at = snprintf(out, (size_t)cap, "1|%c|%c|%d|", state, me, glance ? 1 : 0);
+    if (at + 1 < cap) {
+        out[at++] = c;
+        out[at] = 0;
+    }
+    return at;
+}
+
+int overlay_line(char *out, int cap, char state, char me, int glance, const char *live, int viewers,
+                 const char *call, const char *timer, const char *quality, const overlay_person *people, int count)
+{
+    if (cap > 2048)
+        cap = 2048; // the engine reads 2047 bytes at most
+    int at = snprintf(out, (size_t)cap, "2|%c|%c|%d|", state, me, glance ? 1 : 0);
     at = put(out, cap, at, live, 16);
-    out[at++] = '|';
-    at = put(out, cap, at, call, 30);
-    out[at++] = '|';
-    out[at] = 0;
+    at += snprintf(out + at, (size_t)(cap - at), "|%d|", viewers);
+    at = put(out, cap, at, call, 40);
+    at = sep(out, cap, at, '|');
+    at = put(out, cap, at, timer, 12);
+    at = sep(out, cap, at, '|');
+    at = put(out, cap, at, quality, 24);
+    at = sep(out, cap, at, '|');
     int first = 1;
     for (int pass = 0; pass < 2; pass++) // talking first
         for (int i = 0; i < count; i++) {
-            if ((flags[i] == 't') != (pass == 0))
+            const overlay_person *p = people + i;
+            if ((p->flag == 't') != (pass == 0))
                 continue;
-            char one[40];
-            int n = put(one, (int)sizeof one, 0, names[i], 16);
-            if (at + !first + n + 2 >= cap)
+            char one[160];
+            int n = put(one, (int)sizeof one, 0, p->id, 23);
+            n = sep(one, (int)sizeof one, n, '~');
+            n = put(one, (int)sizeof one, n, p->avatar, 63);
+            n = sep(one, (int)sizeof one, n, '~');
+            n = put(one, (int)sizeof one, n, p->name, 32);
+            n = sep(one, (int)sizeof one, n, '~');
+            n = sep(one, (int)sizeof one, n, p->flag);
+            if (at + !first + n >= cap)
                 return at; // full: the rest do not fit
             if (!first)
                 out[at++] = ',';
-            memcpy(out + at, one, (size_t)n);
+            memcpy(out + at, one, (size_t)n + 1);
             at += n;
-            out[at++] = '~';
-            out[at++] = flags[i];
-            out[at] = 0;
             first = 0;
         }
     return at;
@@ -97,6 +117,90 @@ static int speaking(cJSON *ids, const char *id)
     return 0;
 }
 
+static void clock_text(char *out, size_t cap, long s)
+{
+    if (s >= 3600)
+        snprintf(out, cap, "%ld:%02ld:%02ld", s / 3600, (s / 60) % 60, s % 60);
+    else
+        snprintf(out, cap, "%ld:%02ld", s / 60, s % 60);
+}
+
+// The avatar's file stem: <id>_<hash>, or <id>_e<n> for Discord's default picture.
+static void avatar_key(const chat_person *p, char *out, size_t cap)
+{
+    if (p->avatar[0])
+        snprintf(out, cap, "%s_%s", p->id, p->avatar);
+    else
+        snprintf(out, cap, "%s_e%llu", p->id, (strtoull(p->id, NULL, 10) >> 22) % 6);
+}
+
+static int discord_cdn(const char *host)
+{
+    return strcmp(host, "cdn.discordapp.com") == 0;
+}
+
+typedef struct {
+    unsigned char *data;
+    size_t n;
+} grow_buffer;
+
+static int to_memory(void *user, const void *data, size_t len)
+{
+    grow_buffer *b = user;
+    unsigned char *more = realloc(b->data, b->n + len);
+    if (!more)
+        return 0;
+    memcpy(more + b->n, data, len);
+    b->data = more;
+    b->n += len;
+    return 1;
+}
+
+// One missing avatar per call (a download is a fraction of a second): fetched, cut round and
+// kept under its key. A failed one waits a minute.
+static void fetch_avatars(const chat_person *people, int count)
+{
+    static char failed[16][64];
+    static time_t failed_at[16];
+    for (int i = 0; i < count; i++) {
+        char key[64], path[160], url[200];
+        avatar_key(&people[i], key, sizeof key);
+        snprintf(path, sizeof path, OVERLAY_DIR "/av/%s.png", key);
+        struct stat st;
+        if (stat(path, &st) == 0)
+            continue;
+        int skip = 0;
+        for (int f = 0; f < 16; f++)
+            skip |= strcmp(failed[f], key) == 0 && time(NULL) - failed_at[f] < 60;
+        if (skip)
+            continue;
+        if (people[i].avatar[0])
+            snprintf(url, sizeof url, "https://cdn.discordapp.com/avatars/%s/%s.png?size=%d", people[i].id,
+                     people[i].avatar, AVATAR_PX);
+        else
+            snprintf(url, sizeof url, "https://cdn.discordapp.com/embed/avatars/%s.png", strrchr(key, 'e') + 1);
+        grow_buffer b = {0};
+        int ok = http_get_url(url, discord_cdn, 2u << 20, to_memory, &b) == 200;
+        char tmp[176];
+        snprintf(tmp, sizeof tmp, "%s.tmp", path);
+        FILE *out = ok ? fopen(tmp, "wb") : NULL;
+        ok = out && png_circle(b.data, b.n, AVATAR_PX, out) == 0;
+        if (out)
+            ok = fclose(out) == 0 && ok;
+        ok = ok && rename(tmp, path) == 0;
+        free(b.data);
+        if (!ok) {
+            remove(tmp);
+            static int next;
+            snprintf(failed[next], sizeof failed[next], "%s", key);
+            failed_at[next] = time(NULL);
+            next = (next + 1) % 16;
+            LOG("overlay: avatar %s not fetched", key);
+        }
+        return; // one per call
+    }
+}
+
 static void compose(char *line, int cap, time_t *live_since)
 {
     char *text = voice_state_json();
@@ -108,34 +212,48 @@ static void compose(char *line, int cap, time_t *live_since)
                        : strcmp(st, "idle") == 0 || strcmp(st, "error") == 0 ? '-' : 'j';
     const char me = cJSON_IsTrue(cJSON_GetObjectItem(v, "deaf")) ? 'd'
                     : cJSON_IsTrue(cJSON_GetObjectItem(v, "mute")) ? 'm' : 'o';
+    const double since = cJSON_GetNumberValue(cJSON_GetObjectItem(v, "since_ms"));
     chat_person people[MAX_PEOPLE];
-    char call[64] = "", names[MAX_PEOPLE][64], flags[MAX_PEOPLE];
+    overlay_person shown[MAX_PEOPLE];
+    char call[64] = "";
     int count = state != '-' && channel ? chat_call_people(channel, call, sizeof call, people, MAX_PEOPLE) : 0;
     int talking = 0;
     for (int i = 0; i < count; i++) {
-        snprintf(names[i], sizeof names[i], "%s", people[i].name);
-        flags[i] = speaking(cJSON_GetObjectItem(v, "speaking"), people[i].id) ? 't'
-                   : people[i].deaf ? 'd' : people[i].muted ? 'm' : '-';
-        talking |= flags[i] == 't';
+        overlay_person *p = shown + i;
+        snprintf(p->id, sizeof p->id, "%s", people[i].id);
+        snprintf(p->name, sizeof p->name, "%s", people[i].name);
+        char key[64], path[160];
+        avatar_key(&people[i], key, sizeof key);
+        snprintf(path, sizeof path, OVERLAY_DIR "/av/%s.png", key);
+        struct stat sb;
+        snprintf(p->avatar, sizeof p->avatar, "%s", stat(path, &sb) == 0 ? key : "");
+        p->flag = speaking(cJSON_GetObjectItem(v, "speaking"), people[i].id) ? 't'
+                  : people[i].deaf ? 'd' : people[i].muted ? 'm' : '-';
+        talking |= p->flag == 't';
     }
     cJSON_Delete(v);
+    fetch_avatars(people, count);
 
-    char live[24] = "";
+    char timer[16] = "";
+    if (state == 'c' && since > 0)
+        clock_text(timer, sizeof timer, (long)((double)time(NULL) - since / 1000.0));
+    char live[16] = "";
     if (strcmp(stream_state(), "live") == 0) {
         const time_t now = time(NULL);
         if (!*live_since)
             *live_since = now;
-        const long s = (long)(now - *live_since);
-        if (s >= 3600)
-            snprintf(live, sizeof live, "%ld:%02ld:%02ld %d", s / 3600, (s / 60) % 60, s % 60, stream_viewers());
-        else
-            snprintf(live, sizeof live, "%ld:%02ld %d", s / 60, s % 60, stream_viewers());
+        clock_text(live, sizeof live, (long)(now - *live_since));
     } else
         *live_since = 0;
     // Settings: 0 off, 1 while someone talks (or Go Live is on), 2 always.
     const int pref = prefs_get("overlay_glance");
     const int glance = pref == 2 || (pref == 1 && (talking || live[0]));
-    overlay_line(line, cap, state, me, glance, live, call, (const char(*)[64])names, flags, count);
+    int w = 0, h = 0, fps = 0;
+    bc_profile(&w, &h, &fps);
+    char quality[24];
+    snprintf(quality, sizeof quality, "%dp \xc2\xb7 %d fps", h, fps);
+    overlay_line(line, cap, state, me, glance, live, live[0] ? stream_viewers() : 0, call, timer, quality, shown,
+                 count);
 }
 
 static int write_line(const char *line)
@@ -303,12 +421,13 @@ const char *overlay_state(void)
 static void *feed(void *arg)
 {
     (void)arg;
-    char last[128] = "", line[128];
+    static char last[2048], line[2048];
     time_t live_since = 0;
     int launched = 0;
     overlay_command c;
     uint64_t seen = read_command(&c); // one left from before this core ran is not new
     mkdir(OVERLAY_DIR, 0755);
+    mkdir(OVERLAY_DIR "/av", 0755);
     for (;;) {
         const int on = prefs_get("overlay") == 1;
         if (on && !launched && !running()) {

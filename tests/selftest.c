@@ -17,6 +17,7 @@
 #include "../src/gateway.h"
 #include "../src/http.h"
 #include "../src/overlay.h"
+#include "../src/png_circle.h"
 #include "../src/ratelimit.h"
 #include "../src/resample.h"
 #include "../src/voice.h"
@@ -716,23 +717,77 @@ static double tone_amp(int fin, int up, int down, double f)
 
 static void test_overlay_line(void)
 {
-    char line[200];
-    const char names[3][64] = {"Ana", "Ki|m,o~", "Mira"};
-    const char flags[3] = {'m', '-', 't'};
-    overlay_line(line, sizeof line, 'c', 'o', 1, "", "Raid Night", names, flags, 3);
-    assert(strcmp(line, "1|c|o|1||Raid Night|Mira~t,Ana~m,Ki m o ~-") == 0); // talking first; separators spaced
-    overlay_line(line, sizeof line, 'c', 'm', 0, "18:42 3", "R", names, flags, 0);
-    assert(strcmp(line, "1|c|m|0|18:42 3|R|") == 0);
-    // Too many people for 127 bytes: whole entries only, never a cut name.
-    char many[12][64];
-    char f12[12];
-    for (int i = 0; i < 12; i++) {
-        snprintf(many[i], sizeof many[i], "Ünïcödé%02d", i);
-        f12[i] = '-';
+    char line[4096];
+    overlay_person p[3] = {{"1", "1_ab", "Ana", 'm'}, {"2", "", "Ki|m,o~", '-'}, {"3", "3_cd", "Mira", 't'}};
+    overlay_line(line, sizeof line, 'c', 'o', 1, "", 0, "Raid Night", "42:10", "720p", p, 3);
+    // Talking first; the line's separators in a name become spaces.
+    assert(strcmp(line, "2|c|o|1||0|Raid Night|42:10|720p|3~3_cd~Mira~t,1~1_ab~Ana~m,2~~Ki m o ~-") == 0);
+    overlay_line(line, sizeof line, 'c', 'm', 0, "18:42", 3, "R", "", "", p, 0);
+    assert(strcmp(line, "2|c|m|0|18:42|3|R|||") == 0);
+    // More than fits: whole people only.
+    overlay_person many[40];
+    for (int i = 0; i < 40; i++) {
+        snprintf(many[i].id, sizeof many[i].id, "1234567890123456789");
+        snprintf(many[i].avatar, sizeof many[i].avatar, "1234567890123456789_0123456789abcdef0123456789abcdef");
+        snprintf(many[i].name, sizeof many[i].name, "Ünïcödé %02d", i);
+        many[i].flag = '-';
     }
-    const int n = overlay_line(line, sizeof line, 'c', 'o', 1, "", "A room with a rather long name", many, f12, 12);
-    assert(n <= 127 && (int)strlen(line) == n);
-    assert(line[n - 2] == '~' && line[n - 1] == '-');
+    const int n = overlay_line(line, sizeof line, 'c', 'o', 1, "", 0, "A room", "1:00:00", "1080p", many, 40);
+    assert(n <= 2047 && (int)strlen(line) == n && line[n - 2] == '~' && line[n - 1] == '-');
+}
+
+// A 6x6 RGB PNG (Sub and Paeth filtered rows) through png_circle, and its output decoded.
+static void test_png_circle(void)
+{
+    unsigned char raw[6 * 19];
+    for (int y = 0; y < 6; y++) {
+        raw[y * 19] = y % 2 ? 4 : 1; // Paeth, Sub: the deltas below are what each filter adds
+        for (int x = 0; x < 18; x++)
+            raw[y * 19 + 1 + x] = x < 3 ? (x == 0 ? 200 : 40) : 0;
+    }
+    unsigned char z[256];
+    z_stream d = {0};
+    assert(deflateInit(&d, 9) == Z_OK);
+    d.next_in = raw;
+    d.avail_in = sizeof raw;
+    d.next_out = z;
+    d.avail_out = sizeof z;
+    assert(deflate(&d, Z_FINISH) == Z_STREAM_END);
+    const size_t zn = sizeof z - d.avail_out;
+    deflateEnd(&d);
+    unsigned char png[512];
+    size_t n = 0;
+    static const unsigned char sig[8] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'};
+    memcpy(png, sig, 8);
+    n = 8;
+    const unsigned char ihdr[13] = {0, 0, 0, 6, 0, 0, 0, 6, 8, 2, 0, 0, 0};
+    struct { const char *kind; const unsigned char *data; size_t len; } chunks[] = {
+        {"IHDR", ihdr, 13}, {"IDAT", z, zn}, {"IEND", NULL, 0}};
+    for (int i = 0; i < 3; i++) {
+        png[n++] = 0; png[n++] = 0; png[n++] = (unsigned char)(chunks[i].len >> 8); png[n++] = (unsigned char)chunks[i].len;
+        memcpy(png + n, chunks[i].kind, 4);
+        if (chunks[i].len)
+            memcpy(png + n + 4, chunks[i].data, chunks[i].len);
+        const uLong crc = crc32(0, png + n, 4 + (uInt)chunks[i].len);
+        n += 4 + chunks[i].len;
+        png[n++] = (unsigned char)(crc >> 24); png[n++] = (unsigned char)(crc >> 16);
+        png[n++] = (unsigned char)(crc >> 8); png[n++] = (unsigned char)crc;
+    }
+    unsigned char *px = NULL;
+    int w = 0, h = 0;
+    assert(png_decode(png, n, &px, &w, &h) == 0 && w == 6 && h == 6);
+    assert(px[0] == 200 && px[1] == 40 && px[3] == 255 && px[4] == 200); // Sub: each pixel adds its left one
+    free(px);
+    char *buf = NULL;
+    size_t len = 0;
+    FILE *out = open_memstream(&buf, &len);
+    assert(png_circle(png, n, 32, out) == 0);
+    fclose(out);
+    assert(png_decode((unsigned char *)buf, len, &px, &w, &h) == 0 && w == 32 && h == 32);
+    assert(px[3] == 0);                          // a corner: outside the circle
+    assert(px[(16 * 32 + 16) * 4 + 3] == 255);   // the middle
+    free(px);
+    free(buf);
 }
 
 static void test_resample(void)
@@ -750,6 +805,7 @@ int main(void)
 {
     test_resample();
     test_overlay_line();
+    test_png_circle();
     test_gateway_rules();
     test_http_parse();
     test_h264_packetize();

@@ -14,7 +14,15 @@ const char *overlay_state(void);
 // started; -1 when one runs already or the overlay is off.
 int overlay_reload(void);
 
-// The line for these inputs, at most 127 bytes (exposed for the selftest). people_flags[i]
-// is 't' talking, 'm' muted, 'd' deafened or '-'; talking people go first.
-int overlay_line(char *out, int cap, char state, char me, int glance, const char *live, const char *call,
-                 const char names[][64], const char *flags, int count);
+// One person in the call, as the overlay gets them. avatar: the round PNG's stem in the
+// overlay's av/ folder, "" until it is there.
+typedef struct {
+    char id[24], avatar[64], name[64];
+    char flag; // 't' talking, 'm' muted, 'd' deafened, '-'
+} overlay_person;
+// The line (overlay/src/app/discord_app.inc reads it), at most 2047 bytes; talking people
+// first. live: the Go Live time ("" when off); quality: Go Live's ("720p · 30 fps").
+// Exposed for the selftest.
+int overlay_line(char *out, int cap, char state, char me, int glance, const char *live, int viewers,
+                 const char *call, const char *timer, const char *quality, const overlay_person *people,
+                 int count);

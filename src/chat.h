@@ -23,6 +23,7 @@ int chat_call_active(const char *channel_id);
 typedef struct {
     char id[24];
     char name[64];
+    char avatar[40]; // the avatar hash, "" for Discord's default picture
     int muted, deaf; // self or server
 } chat_person;
 int chat_call_people(const char *channel_id, char *name, size_t name_cap, chat_person *out, int max);

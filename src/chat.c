@@ -984,6 +984,8 @@ int chat_call_people(const char *channel_id, char *name, size_t name_cap, chat_p
             continue;
         snprintf(out[n].id, sizeof out[n].id, "%s", id);
         snprintf(out[n].name, sizeof out[n].name, "%s", display_name(id));
+        cJSON *u = cJSON_GetObjectItem(cJSON_GetObjectItem(tree, "users"), id);
+        snprintf(out[n].avatar, sizeof out[n].avatar, "%s", str(u, "avatar") ? str(u, "avatar") : "");
         out[n].muted = cJSON_IsTrue(cJSON_GetObjectItem(s, "self_mute")) || cJSON_IsTrue(cJSON_GetObjectItem(s, "mute"));
         out[n].deaf = cJSON_IsTrue(cJSON_GetObjectItem(s, "self_deaf")) || cJSON_IsTrue(cJSON_GetObjectItem(s, "deaf"));
         n++;

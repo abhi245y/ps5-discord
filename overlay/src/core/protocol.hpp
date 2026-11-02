@@ -8,7 +8,7 @@
 #include <unistd.h>
 namespace overlay {
 constexpr std::uint64_t magic=0x31434f504c564f44ULL;
-constexpr unsigned version=10;
+constexpr unsigned version=11;
 constexpr const char* parent_dir="/data/discord-overlay-poc";
 constexpr const char* worker_dir="/user/data/discord-overlay-poc";
 enum Function:unsigned {RootDomain,ThreadAttach,ThreadDetach,AssemblyOpen,AssemblyImage,ClassFromName,
@@ -18,6 +18,7 @@ enum Function:unsigned {RootDomain,ThreadAttach,ThreadDetach,AssemblyOpen,Assemb
     ObjectClass,ClassNameGet,ClassParent,
     // Reflection, log-only (worker describe_types): what a property's value type is on this firmware.
     SignatureParams,TypeName,ClassFromType,ClassFields,FieldName,FieldType,FieldOffset,ClassProperties,PropertyName,
+    ClassMethods,MethodName, // picking an overload by its parameter types
     // Optional (0 when ShellUI lacks them; libSceSystemService): the system menu's own way of
     // holding a game while it is over it: the game's app id, the "system UI is over you"
     // status (games that can pause, pause), and controller focus (Request::shell_app).
@@ -33,6 +34,7 @@ inline constexpr const char* symbols[FunctionCount]={"mono_get_root_domain","mon
     "mono_property_get_get_method","mono_property_get_set_method","mono_object_unbox","sceKernelMprotect","mmap","munmap","mono_object_get_class","mono_class_get_name","mono_class_get_parent",
     "mono_signature_get_params","mono_type_get_name","mono_class_from_mono_type","mono_class_get_fields",
     "mono_field_get_name","mono_field_get_type","mono_field_get_offset","mono_class_get_properties","mono_property_get_name",
+    "mono_class_get_methods","mono_method_get_name",
     "sceSystemServiceGetAppIdOfRunningBigApp","sceShellCoreUtilSetImposeStatusFlag","sceLncUtilSetControllerFocus"};
 // Service is Widget without the 60 s window: it runs while the loader keeps
 // keepalive.bin fresh (Keepalive), and tears down within seconds when it stops.
