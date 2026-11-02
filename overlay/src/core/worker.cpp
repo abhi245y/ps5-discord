@@ -26,7 +26,7 @@ Method* find_scene=nullptr;
 Method* root_getter=nullptr;
 void* class_widget=nullptr,*class_panel=nullptr,*class_label=nullptr,*class_font=nullptr;
 void* class_application=nullptr,*class_scene=nullptr;
-Method* method_append=nullptr,*method_find=nullptr;
+Method* method_append=nullptr,*method_find=nullptr,*method_font_ctor=nullptr;
 std::atomic<Update> original{nullptr};
 std::atomic<PadCall> pad_original{nullptr};
 std::atomic<ShareCall> share_original{nullptr};
@@ -207,12 +207,33 @@ void* engine_add_panel(void*,const oui::Rect* r,const oui::Color* c){
        !prop_set_float(class_panel,panel,"Width",r->w)||
        !prop_set_float(class_panel,panel,"Height",r->h)||
        !prop_set_int(class_panel,panel,"Visible",shown)){note("UI panel props failed");return nullptr;}
-    (void)prop_set_float(class_panel,panel,"Opacity",c->a);
-    float back[4]={c->r,c->g,c->b,1.f};
+    // Kabuki's recipe: alpha inside the colour (Opacity would fade the children too).
+    float back[4]={c->r,c->g,c->b,c->a};
     (void)prop_set(class_panel,panel,"BackgroundColor",back);
     if(!append_child(root,panel)){note("UI panel attach failed");return nullptr;}
     std::uint32_t id=slot_store(panel,false);
     return id?reinterpret_cast<void*>(std::uintptr_t(id)):nullptr;}
+// Kabuki's 12.x label recipe (Font and TextColor were left out of the first 13.00 runs):
+// a UIFont value built with its (size, style, weight) constructor and set unboxed, the
+// text colour as float[4], and the system theme's colours off. A missing property only
+// logs (prop_set), the label stays.
+std::atomic<unsigned> font_failures{0};
+void style_label(void* label,float height){
+    if(void* boxed=method_font_ctor?fn<void*(*)(void*,void*)>(ObjectNew)(domain,class_font):nullptr){
+        std::uint32_t pin=fn<std::uint32_t(*)(void*,int)>(GcNew)(boxed,1);
+        void* font=pin?fn<void*(*)(void*)>(ObjectUnbox)(fn<void*(*)(std::uint32_t)>(GcTarget)(pin)):nullptr;
+        int size=int(height*0.62f+0.5f),style=0,weight=0;
+        void* args[3]={&size,&style,&weight};void* exception=nullptr;bool ok=false;
+        if(font)invoke_ex(method_font_ctor,font,args,ok,&exception);
+        if(font&&ok)(void)prop_set(class_label,label,"Font",font);
+        else if(font_failures.fetch_add(1)<3)describe_exception("UIFont.ctor",exception);
+        if(pin)fn<void(*)(std::uint32_t)>(GcFree)(pin);}
+    float white[4]={1,1,1,1};
+    (void)prop_set(class_label,label,"TextColor",white);
+    int no=0,one=1;
+    (void)prop_set_int(class_label,label,"EnableThemedColor",no);
+    (void)prop_set_int(class_label,label,"MaxLineCount",one);
+}
 void* engine_add_label(void*,void* parent,const oui::Rect* r,const char* text){
     void* owner=parent?slot_object(static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(parent)))
                       :(scene_root_handle?fn<void*(*)(std::uint32_t)>(GcTarget)(scene_root_handle):nullptr);
@@ -229,6 +250,7 @@ void* engine_add_label(void*,void* parent,const oui::Rect* r,const char* text){
        !prop_set_int(class_label,label,"Visible",shown)||
        !prop_set(class_label,label,"Text",fn<void*(*)(void*,const char*)>(StringNew)(domain,text))){
         note("UI label props failed");return nullptr;}
+    style_label(label,r->h);
     if(!append_child(owner,label)){note("UI label attach failed");return nullptr;}
     std::uint32_t id=slot_store(label,true);
     return id?reinterpret_cast<void*>(std::uintptr_t(id)):nullptr;}
@@ -463,6 +485,7 @@ bool resolve_update_methods(){
         method_append=fn<Method*(*)(void*,const char*,int)>(MethodFromName)(class_widget,"AppendChild",1);
         method_find=fn<Method*(*)(void*,const char*,int)>(MethodFromName)(class_widget,"FindWidgetByName",1);
         Method* font_ctor=fn<Method*(*)(void*,const char*,int)>(MethodFromName)(class_font,".ctor",3);
+        method_font_ctor=font_ctor;
         Method* remove_scene=fn<Method*(*)(void*,const char*,int)>(MethodFromName)(class_scene,"RemoveFromSuperScene",0);
         if(!method_append||!font_ctor||!remove_scene||
            !signature(method_append,true,1,kind_void)||!signature(font_ctor,true,3,kind_void)||

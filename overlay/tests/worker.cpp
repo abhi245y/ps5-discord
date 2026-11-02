@@ -222,7 +222,7 @@ static void bind_widget_runtime(){
     class_application=ptr(c_application);class_scene=ptr(c_scene);
     class_widget=ptr(c_widget);class_panel=ptr(c_panel);class_label=ptr(c_label);
     class_font=ptr(c_uifont);
-    method_append=ptr(m_append);method_find=ptr(m_find_widget);}
+    method_append=ptr(m_append);method_find=ptr(m_find_widget);method_font_ctor=ptr(m_font_ctor);}
 int main(){
     // Resolver refusal paths (mode Resolve).
     for(scenario=0;scenario<=5;++scenario){reset_runtime();bind();
@@ -244,7 +244,7 @@ int main(){
         for(unsigned i=0;i<200;i++)update_hook(ptr(88)); // instance IS the Application
         assert(prior_calls==200&&updates.load()==200);
         assert(create_attempts==1&&widgets_created==1&&widget_removed==0);
-        assert(object_inits==3&&ctor_calls==0&&add_scene_calls==1); // scene+panel+label
+        assert(object_inits==3&&ctor_calls==1&&add_scene_calls==1); // scene+panel+label; the label's UIFont
         assert(set_recorded("ScreenRenderOverlay",nullptr)||!property_sets.empty());
         bool seen_overlay=false;for(auto&e:property_sets)if(e.first=="ScreenRenderOverlay")seen_overlay=true;
         assert(seen_overlay);

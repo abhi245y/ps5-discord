@@ -5,8 +5,8 @@
 //    always, while someone talks, off).
 //  - the call panel (A): L3+R3 opens it on the right edge: the call, everyone in it with
 //    talking and muted marks, your mic and Go Live, and four actions (Mute, Deafen, Go
-//    Live, Leave). The left stick moves between them, Cross does one, L3+R3 closes. The
-//    game still gets those presses (no controller focus yet).
+//    Live, Leave). D-pad or the left stick moves between them, Cross does one, Circle or
+//    L3+R3 closes. The game still gets those presses (no controller focus yet).
 //
 // The core writes one line to the text channel (src/overlay.c in the core), at most 127
 // bytes, fields split by '|':
@@ -32,9 +32,8 @@ const Color kPanel{0.133f,0.145f,0.173f,0.94f};
 const Color kCoral{1.0f,0.478f,0.349f,1.0f};
 const Color kButton{0.165f,0.18f,0.212f,1.0f};
 
-// GamePadButtons bits: only Cross is known on 13.00 (the engine logs every bit it sees,
-// "PAD down=" in worker.log, for the rest). ponytail: D-pad/Circle once calibrated.
-constexpr std::uint32_t kCross=0x80;
+// GamePadButtons bits, read on 13.00 (worker.log "PAD down=", 2026-11-02).
+constexpr std::uint32_t kUp=0x2,kDown=0x8,kCircle=0x40,kCross=0x80;
 constexpr float kStickMove=0.6f,kStickRest=0.3f;
 
 // 1920x1080 logical; the TV safe area is 48 px at the sides, 27 px top and bottom.
@@ -190,7 +189,7 @@ bool build(Builder& b){
         action[i]=b.add_panel({px+24,y,kPanelW-48,72},kButton);
         action_label[i]=b.add_label(action[i],{px+48,y+16,kPanelW-96,40},"");
         if(!action[i]||!action_label[i])return false;}
-    hint=b.add_label(panel,{px+32,py+ph-56,kPanelW-64,40},"Stick: move   Cross: select   L3+R3: close");
+    hint=b.add_label(panel,{px+32,py+ph-56,kPanelW-64,40},"D-pad: move   Cross: select   Circle: close");
     if(!glance||!glance_live||!panel||!title||!status||!hint)return false;
     for(void* x:glance_line)if(!x)return false;
     for(void* x:row)if(!x)return false;
@@ -209,7 +208,9 @@ void on_pad(std::uint32_t down,float,float ly,Builder& b){
     if(!open)return;
     const int dir=ly<-kStickMove?-1:ly>kStickMove?1:0;
     bool moved=false;
-    if(dir&&dir!=stick){focus=(focus+dir+kActions)%kActions;moved=true;}
+    if(down&kCircle){on_gesture(Gesture::Chord,b);return;}
+    const int step=(dir&&dir!=stick?dir:0)+(down&kDown?1:0)-(down&kUp?1:0);
+    if(step){focus=((focus+step)%kActions+kActions)%kActions;moved=true;}
     if(dir||(ly>-kStickRest&&ly<kStickRest))stick=dir;
     if((down&kCross)&&(st.state=='c'||st.state=='j'))b.send(kCommands[focus]);
     if(moved)render(b);

@@ -73,7 +73,11 @@ int main(){
     on_pad(0,0,0,b);on_pad(0,0,-0.9f,b);on_pad(0,0,0,b);on_pad(0,0,-0.9f,b); // up twice: wraps to Leave
     on_pad(0x80,0,0,b);
     assert(std::strcmp(sent,"leave")==0);
-    on_gesture(oui::Gesture::Chord,b);
+    on_pad(0x8,0,0,b);on_pad(0x80,0,0,b); // D-pad down from Leave wraps to Mute
+    assert(std::strcmp(sent,"mute")==0);
+    on_pad(0x2,0,0,b);on_pad(0x80,0,0,b); // D-pad up: Leave
+    assert(std::strcmp(sent,"leave")==0);
+    on_pad(0x40,0,0,b); // Circle closes
     assert(!capturing&&!w(panel)->visible&&w(glance)->visible&&!w(action[0])->visible);
     // Muted and live: the actions say so.
     on_text("1|c|m|1|0:12 1|Raid Night|",b);
