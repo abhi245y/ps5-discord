@@ -48,6 +48,7 @@ class SettingsScreen
         quit,
         quality, // Go Live above 720p · 30 fps: Nitro's
         restore, // the previous version back
+        overlay_reload, // restarts the PS5 home screen
     };
     bool update_dialog_ = false;
     Confirm confirm_ = Confirm::none; // the question that is up

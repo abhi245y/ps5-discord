@@ -41,7 +41,7 @@ constexpr float kStickMove=0.6f,kStickRest=0.3f;
 // A: the panel.
 constexpr float kDockX=1324,kDockY=34,kDockW=568,kDockH=1002;
 constexpr float kRowX=1347,kRowW=519,kRowH=132,kRowY=184,kRowStep=143,kAvatar=106;
-constexpr float kTileY=767,kTileW=122,kTileH=140,kTileStep=132;
+constexpr float kTileW=122,kTileH=140,kTileStep=132;
 constexpr int kRows=4,kTiles=4;
 // C: the talking card.
 constexpr float kCardX=1574,kCardY=34,kCardW=315;
@@ -134,6 +134,31 @@ bool parse(const char* line,State& s){
 
 namespace {
 
+// The panel follows its rows (n, 0-4): the tiles right under the last one, then the rule
+// and the hints; the art has a panel for each height (overlay_art.py).
+float tiles_y(int n){return kRowY+kRowStep*n+10;}
+float rule_y(int n){return n?tiles_y(n)+172:kDockY+166;}
+float dock_height(int n){return n?tiles_y(n)+236:264;} // its bottom: the hints + 42
+
+void place(Builder& b,int n){
+    char name[16];std::snprintf(name,sizeof name,"dock_%d",n);
+    art(b,dock,name);
+    b.set_rect(dock,{kDockX,kDockY,kDockW,dock_height(n)});
+    const float ty=tiles_y(n);
+    for(int i=0;i<kTiles;i++){
+        const float x=kRowX+kTileStep*i;
+        b.set_rect(tile[i],{x,ty,kTileW,kTileH});
+        b.set_rect(tile_icon[i],{x+38,ty+(i==2?22:28),46,46});
+        b.set_rect(tile_label[i],{x,ty+(i==2?76:86),kTileW,30});}
+    b.set_rect(tile_sub,{kRowX+kTileStep*2,ty+104,kTileW,24});
+    b.set_rect(tile_focus,{kRowX+kTileStep*focus-6,ty-6,134,152});
+    const float ry=rule_y(n),hy=ry+28;
+    b.set_rect(rule,{kRowX,ry,kRowW,2});
+    const Rect glyph_at[3]={{1361,hy+1,37,37},{1510,hy+1,37,37},{1650,hy+5,78,28}};
+    const Rect word_at[3]={{1406,hy,96,40},{1555,hy,90,40},{1736,hy,132,40}};
+    for(int i=0;i<3;i++){b.set_rect(hint_icon[i],glyph_at[i]);b.set_rect(hint_text[i],word_at[i]);}
+}
+
 void set_avatar(Builder& b,void* w,const Person& who){
     char p[160];
     if(who.avatar[0])path(p,sizeof p,kAvatars,who.avatar);else p[0]=0;
@@ -197,7 +222,7 @@ void render(Builder& b){
     b.set_text(tile_label[2],st.live[0]?"Stop":"Go Live");
     b.set_text(tile_label[3],"Leave");
     b.set_text(tile_sub,st.live[0]?st.live:st.quality);
-    b.set_rect(tile_focus,{kRowX+kTileStep*focus-6,kTileY-6,134,152});
+    place(b,in_call?(st.count<kRows?st.count:kRows):0);
     for(int i=0;i<kTiles;i++){show(b,tile[i],open&&in_call);show(b,tile_icon[i],open&&in_call);show(b,tile_label[i],open&&in_call);}
     show(b,tile_sub,open&&in_call);show(b,tile_focus,open&&in_call);
     show(b,dock,open);show(b,title,open);show(b,clock,open&&in_call&&st.timer[0]);show(b,timer,open&&in_call);
@@ -219,7 +244,7 @@ void reset(){
 
 bool build(Builder& b){
     // A: the panel, back to front.
-    dock=image(b,{kDockX,kDockY,kDockW,kDockH},"dock");
+    dock=image(b,{kDockX,kDockY,kDockW,kDockH},"dock_4");
     title=label(b,{kDockX+37,kDockY+40,kDockW-74,54},40,1,kWhite);
     clock=image(b,{kDockX+38,kDockY+94,26,26},"clock");
     if(clock)b.set_tint(clock,kDim);
@@ -234,23 +259,21 @@ bool build(Builder& b){
     }
     const char* icons[kTiles]={"mic","headphones","golive","leave"};
     const char* tiles[kTiles]={"tile","tile","tile_live","tile_leave"};
+    const Rect at{0,0,1,1}; // place() puts them under the rows
     for(int i=0;i<kTiles;i++){
-        const float x=kRowX+kTileStep*i;
-        tile[i]=image(b,{x,kTileY,kTileW,kTileH},tiles[i]);
-        tile_icon[i]=image(b,{x+38,kTileY+(i==2?22:28),46,46},icons[i]);
+        tile[i]=image(b,at,tiles[i]);
+        tile_icon[i]=image(b,at,icons[i]);
         if(i==3&&tile_icon[i])b.set_tint(tile_icon[i],kLeaveInk);
-        tile_label[i]=label(b,{x,kTileY+(i==2?76:86),kTileW,30},19,3,i==3?kLeaveInk:kWhite,1);
+        tile_label[i]=label(b,at,19,3,i==3?kLeaveInk:kWhite,1);
     }
-    tile_sub=label(b,{kRowX+kTileStep*2,kTileY+104,kTileW,24},14,0,kWhite,1);
-    tile_focus=image(b,{kRowX-6,kTileY-6,134,152},"tile_focus");
-    rule=image(b,{kRowX,939,kRowW,2},"line");
+    tile_sub=label(b,at,14,0,kWhite,1);
+    tile_focus=image(b,at,"tile_focus");
+    rule=image(b,at,"line");
     const char* glyphs[3]={"glyph_cross","glyph_circle","chip_options"};
     const char* words[3]={"Select","Close","Hold to close"};
-    const Rect glyph_at[3]={{1361,967,37,37},{1510,967,37,37},{1652,970,82,30}};
-    const Rect word_at[3]={{1406,966,96,40},{1555,966,90,40},{1743,966,125,40}};
     for(int i=0;i<3;i++){
-        hint_icon[i]=image(b,glyph_at[i],glyphs[i]);
-        hint_text[i]=label(b,word_at[i],21,3,kText,0,words[i]);
+        hint_icon[i]=image(b,at,glyphs[i]);
+        hint_text[i]=label(b,at,i==2?19:21,3,kText,0,words[i]);
     }
 
     // C: the talking card.

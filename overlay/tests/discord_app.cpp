@@ -79,7 +79,7 @@ int main(){
     assert(w(row_ring[0])->visible&&!w(row_ring[1])->visible);
     assert(ends(w(row_icon[1])->path,"mic_off.png")&&ends(w(row_icon[2])->path,"headphones_off.png"));
     assert(shows("Mute")&&shows("Deafen")&&shows("Go Live")&&shows("720p \xc2\xb7 30 fps")&&shows("Leave"));
-    assert(w(tile_focus)->r.x==1347-6);
+    assert(w(tile_focus)->r.x==1347-6&&w(tile[0])->r.y==184+143*4+10&&w(dock)->r.h==1002&&ends(w(dock)->path,"dock_4.png"));
     on_pad(0x80,0,0,b);assert(!std::strcmp(sent,"mute"));
     on_pad(0x4,0,0,b);on_pad(0x80,0,0,b);assert(!std::strcmp(sent,"deafen")&&w(tile_focus)->r.x==1347+132-6);
     on_pad(0,0.9f,0,b);on_pad(0,0.9f,0,b);on_pad(0x80,0.9f,0,b);assert(!std::strcmp(sent,"golive")); // held: one step
@@ -87,6 +87,11 @@ int main(){
     assert(!std::strcmp(sent,"leave")); // left from Mute wraps to Leave
     on_pad(0x40,0,0,b); // Circle closes
     assert(!capturing&&!w(dock)->visible&&!w(tile[0])->visible&&w(card)->visible);
+    // One person: the panel ends under them.
+    on_text("2|c|o|1||0|Raid Night|1:00|720p|11~11_ab~Mira~-",b);
+    on_gesture(oui::Gesture::Chord,b);
+    assert(w(tile[0])->r.y==184+143+10&&w(dock)->r.h==573&&ends(w(dock)->path,"dock_1.png")&&w(rule)->r.y==184+143+10+172);
+    on_gesture(oui::Gesture::Chord,b);
 
     // Muted and live: the tiles say so.
     on_text("2|c|m|1|0:12|1|Raid Night||720p|",b);

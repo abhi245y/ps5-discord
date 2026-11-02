@@ -695,6 +695,14 @@ bool SettingsScreen::update(const discord::Snapshot &s, const hui::InputFrame &i
             confirm_ = Confirm::none;
             feedback.play(hui::audio::Cue::select);
         }
+        else if (input.is_pressed(Action::confirm) && confirm_ == Confirm::overlay_reload)
+        {
+            discord::Request r;
+            r.kind = discord::Request::Kind::overlay_reload;
+            requests.push_back(r);
+            confirm_ = Confirm::none;
+            feedback.play(hui::audio::Cue::select);
+        }
         else if (input.is_pressed(Action::confirm))
         {
             discord::Request r;
@@ -841,13 +849,10 @@ bool SettingsScreen::update(const discord::Snapshot &s, const hui::InputFrame &i
             feedback.play(hui::audio::Cue::toggle);
             break;
         }
-        case Act::overlay_reload: {
-            discord::Request r;
-            r.kind = discord::Request::Kind::overlay_reload;
-            requests.push_back(r);
-            feedback.play(hui::audio::Cue::select);
+        case Act::overlay_reload:
+            confirm_ = Confirm::overlay_reload;
+            feedback.play(hui::audio::Cue::modal_open);
             break;
-        }
         case Act::bt_devices:
             bt_open_ = true;
             bt_at_ = 0;
@@ -990,6 +995,11 @@ void SettingsScreen::draw(const discord::Snapshot &s, const hui::Settings &app, 
                      "Sign out");
     else if (confirm_ == Confirm::quit)
         confirm_card(list, ink_, "Quit Discord?", kQuitText, "Quit");
+    else if (confirm_ == Confirm::overlay_reload)
+        confirm_card(list, ink_, "Reload the home screen?",
+                     "The PS5 home screen restarts to load the overlay. Open games and apps keep running; "
+                     "reopen them from the home screen.",
+                     "Reload");
     else if (confirm_ == Confirm::restore)
         confirm_card(list, ink_, "Roll back the update?",
                      "The app closes, a call or Go Live ends, and " + s.update.previous +

@@ -17,7 +17,7 @@ OUT = sys.argv[1] if len(sys.argv) > 1 else "app/assets/overlay"
 FONT = os.path.join(os.path.dirname(__file__), "../../app/third_party/fonts/NunitoSans-Bold.ttf")
 S = 4  # supersampling
 
-DOCK = (28, 30, 35, 245)
+DOCK = (28, 30, 35, 255)
 CARD = (38, 40, 46, 255)
 TILE = (44, 46, 52, 255)
 CORAL = (255, 122, 89, 255)
@@ -138,7 +138,9 @@ def text_pill(name, w, h, fill, text, size, outline=False, dot=False):
 def main():
     os.makedirs(OUT, exist_ok=True)
     # A: the call panel.
-    rounded("dock", 568, 1002, 28, DOCK)
+    # The panel's height follows its rows (discord_app.inc dock_height): 0 to 4.
+    for n in range(5):
+        rounded("dock_%d" % n, 568, 264 if n == 0 else 430 + 143 * n, 28, DOCK)
     rounded("row", 519, 132, 16, CARD)
     rounded("tile", 122, 140, 16, TILE)
     rounded("tile_live", 122, 140, 16, CORAL)
@@ -148,7 +150,7 @@ def main():
     ring("ring", 106, 4, CORAL)
     glyph("glyph_cross", 37, (122, 160, 255, 255), "cross")
     glyph("glyph_circle", 37, (255, 92, 110, 255), "circle")
-    text_pill("chip_options", 82, 30, None, "OPTIONS", 13, outline=True)
+    text_pill("chip_options", 78, 28, None, "OPTIONS", 12, outline=True)
     # C: the glance card, one per number of talking rows (0-3).
     for n in range(4):
         rounded("glance_%d" % n, 315, 205 + 60 * n, 18, GLANCE)
