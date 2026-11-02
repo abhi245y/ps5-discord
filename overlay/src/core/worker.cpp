@@ -148,6 +148,18 @@ bool prop_get_float(void* klass,void* obj,const char* name,float& out){
     if(!unboxed)return false;
     out=*static_cast<float*>(unboxed);return true;
 }
+// Sce.PlayStation.PUI.UIColor on 13.00 (logged by describe_types, 2026-11-03): four floats
+// and an HDR flag, 20 bytes. 12.x's float[4] left the flag to whatever followed on the
+// stack, and a set flag turned every colour white.
+struct UiColor {float r,g,b,a;bool hdr;char pad[3];};
+static_assert(sizeof(UiColor)==20);
+UiColor ui_color(const oui::Color& c){return UiColor{c.r,c.g,c.b,c.a,false,{}};}
+// Our colours, not the system skin's (Widget.FollowSkin*).
+void no_skin(void* klass,void* widget){
+    int no=0;
+    (void)prop_set_int(klass,widget,"FollowSkinBackgroundColor",no);
+    (void)prop_set_int(klass,widget,"FollowSkinFontColor",no);
+}
 void observe_scene(){
     scene_attempts.fetch_add(1,std::memory_order_relaxed);
     auto text=fn<void*(*)(void*,const char*)>(StringNew)(domain,"Game");if(!text)return;
@@ -244,9 +256,10 @@ void* engine_add_panel(void*,const oui::Rect* r,const oui::Color* c){
        !prop_set_float(class_panel,panel,"Width",r->w)||
        !prop_set_float(class_panel,panel,"Height",r->h)||
        !prop_set_int(class_panel,panel,"Visible",shown)){note("UI panel props failed");return nullptr;}
-    // Kabuki's recipe: alpha inside the colour (Opacity would fade the children too).
-    float back[4]={c->r,c->g,c->b,c->a};
-    (void)prop_set(class_panel,panel,"BackgroundColor",back);
+    // Alpha inside the colour (Opacity would fade the children too).
+    no_skin(class_panel,panel);
+    UiColor back=ui_color(*c);
+    (void)prop_set(class_panel,panel,"BackgroundColor",&back);
     if(!append_child(root,panel)){note("UI panel attach failed");return nullptr;}
     std::uint32_t id=slot_store(panel,false);
     return id?reinterpret_cast<void*>(std::uintptr_t(id)):nullptr;}
@@ -265,8 +278,9 @@ void style_label(void* label,float height){
         if(font&&ok)(void)prop_set(class_label,label,"Font",font);
         else if(font_failures.fetch_add(1)<3)describe_exception("UIFont.ctor",exception);
         if(pin)fn<void(*)(std::uint32_t)>(GcFree)(pin);}
-    float white[4]={1,1,1,1};
-    (void)prop_set(class_label,label,"TextColor",white);
+    no_skin(class_label,label);
+    UiColor white=ui_color(oui::Color{});
+    (void)prop_set(class_label,label,"TextColor",&white);
     int no=0,one=1;
     (void)prop_set_int(class_label,label,"EnableThemedColor",no);
     (void)prop_set_int(class_label,label,"MaxLineCount",one);
@@ -307,8 +321,8 @@ bool engine_set_visible(void*,void* widget,bool show){
 bool engine_set_color(void*,void* panel,const oui::Color* c){
     void* object=slot_object(static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(panel)));
     if(!object||!c)return false;
-    float back[4]={c->r,c->g,c->b,c->a};
-    return prop_set(class_panel,object,"BackgroundColor",back);}
+    UiColor back=ui_color(*c);
+    return prop_set(class_panel,object,"BackgroundColor",&back);}
 float engine_screen_w(void*){return ui_screen_w;}
 float engine_screen_h(void*){return ui_screen_h;}
 bool engine_set_capture(void*,bool on){
