@@ -8,21 +8,26 @@
 #include <unistd.h>
 namespace overlay {
 constexpr std::uint64_t magic=0x31434f504c564f44ULL;
-constexpr unsigned version=7;
+constexpr unsigned version=8;
 constexpr const char* parent_dir="/data/discord-overlay-poc";
 constexpr const char* worker_dir="/user/data/discord-overlay-poc";
 enum Function:unsigned {RootDomain,ThreadAttach,ThreadDetach,AssemblyOpen,AssemblyImage,ClassFromName,
     MethodFromName,MethodSignature,SignatureInstance,SignatureCount,SignatureReturn,TypeKind,
     CompileMethod,StringNew,RuntimeInvoke,GcNew,GcTarget,GcFree,QueryProtection,
     ObjectNew,ObjectInit,ClassProperty,PropertyGetter,PropertySetter,ObjectUnbox,TargetMprotect,TargetMmap,TargetMunmap,
-    ObjectClass,ClassNameGet,ClassParent,FunctionCount};
+    ObjectClass,ClassNameGet,ClassParent,
+    // Reflection, log-only (worker describe_types): what a property's value type is on this firmware.
+    SignatureParams,TypeName,ClassFromType,ClassFields,FieldName,FieldType,FieldOffset,ClassProperties,PropertyName,
+    FunctionCount};
 inline constexpr const char* symbols[FunctionCount]={"mono_get_root_domain","mono_thread_attach","mono_thread_detach",
     "mono_domain_assembly_open","mono_assembly_get_image","mono_class_from_name","mono_class_get_method_from_name",
     "mono_method_signature","mono_signature_is_instance","mono_signature_get_param_count","mono_signature_get_return_type",
     "mono_type_get_type","mono_compile_method","mono_string_new","mono_runtime_invoke","mono_gchandle_new",
     "mono_gchandle_get_target","mono_gchandle_free","sceKernelQueryMemoryProtection",
     "mono_object_new","mono_runtime_object_init","mono_class_get_property_from_name",
-    "mono_property_get_get_method","mono_property_get_set_method","mono_object_unbox","sceKernelMprotect","mmap","munmap","mono_object_get_class","mono_class_get_name","mono_class_get_parent"};
+    "mono_property_get_get_method","mono_property_get_set_method","mono_object_unbox","sceKernelMprotect","mmap","munmap","mono_object_get_class","mono_class_get_name","mono_class_get_parent",
+    "mono_signature_get_params","mono_type_get_name","mono_class_from_mono_type","mono_class_get_fields",
+    "mono_field_get_name","mono_field_get_type","mono_field_get_offset","mono_class_get_properties","mono_property_get_name"};
 // Service is Widget without the 60 s window: it runs while the loader keeps
 // keepalive.bin fresh (Keepalive), and tears down within seconds when it stops.
 enum class Mode:std::uint32_t {Resolve=0,Observe=1,Widget=2,Input=3,Service=5};

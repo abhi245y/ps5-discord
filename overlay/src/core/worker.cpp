@@ -194,6 +194,43 @@ void slots_release(){
     for(auto& slot:widget_slots){
         if(slot.handle){fn<void(*)(std::uint32_t)>(GcFree)(slot.handle);slot.handle=0;}}
 }
+// Log-only: the value type a property takes on this firmware, field by field (offsets
+// include the 16-byte object header), and the class's property names. Colours and fonts
+// did not render on 13.00 with 12.x's float[4]; this says what they are.
+void describe_property(void* klass,const char* cls,const char* name){
+    void* prop=klass?fn<void*(*)(void*,const char*)>(ClassProperty)(klass,name):nullptr;
+    Method* setter=prop?fn<Method*(*)(void*)>(PropertySetter)(prop):nullptr;
+    void* sig=setter?fn<void*(*)(void*)>(MethodSignature)(setter):nullptr;
+    void* iter=nullptr;void* type=sig?fn<void*(*)(void*,void**)>(SignatureParams)(sig,&iter):nullptr;
+    const char* type_name=type?fn<const char*(*)(void*)>(TypeName)(type):nullptr;
+    note("TYPE %s.%s = %s (kind %d)",cls,name,type_name?type_name:"?",type?fn<int(*)(void*)>(TypeKind)(type):-1);
+    void* k=type?fn<void*(*)(void*)>(ClassFromType)(type):nullptr;
+    void* fields=nullptr;
+    for(int i=0;k&&i<16;i++){
+        void* f=fn<void*(*)(void*,void**)>(ClassFields)(k,&fields);if(!f)break;
+        void* ft=fn<void*(*)(void*)>(FieldType)(f);
+        const char* fname=fn<const char*(*)(void*)>(FieldName)(f);
+        const char* ftype=ft?fn<const char*(*)(void*)>(TypeName)(ft):nullptr;
+        note("TYPE   field %s : %s @%u",fname?fname:"?",ftype?ftype:"?",fn<unsigned(*)(void*)>(FieldOffset)(f));}
+}
+void describe_properties(void* klass,const char* cls){
+    char line[900];int at=std::snprintf(line,sizeof line,"PROPS %s:",cls);
+    void* iter=nullptr;
+    for(int i=0;klass&&i<120;i++){
+        void* p=fn<void*(*)(void*,void**)>(ClassProperties)(klass,&iter);if(!p)break;
+        const char* n=fn<const char*(*)(void*)>(PropertyName)(p);
+        if(n&&at>0&&at<int(sizeof line)-40)at+=std::snprintf(line+at,sizeof line-at," %s",n);}
+    note("%s",line);
+}
+void describe_types(){
+    describe_property(class_panel,"Panel","BackgroundColor");
+    describe_property(class_label,"Label","TextColor");
+    describe_property(class_label,"Label","Font");
+    describe_property(class_widget,"Widget","Opacity");
+    describe_properties(class_widget,"Widget");
+    describe_properties(class_panel,"Panel");
+    describe_properties(class_label,"Label");
+}
 void* engine_add_panel(void*,const oui::Rect* r,const oui::Color* c){
     void* root=scene_root_handle?fn<void*(*)(std::uint32_t)>(GcTarget)(scene_root_handle):nullptr;
     if(!root||!r)return nullptr;
@@ -486,6 +523,7 @@ bool resolve_update_methods(){
         method_find=fn<Method*(*)(void*,const char*,int)>(MethodFromName)(class_widget,"FindWidgetByName",1);
         Method* font_ctor=fn<Method*(*)(void*,const char*,int)>(MethodFromName)(class_font,".ctor",3);
         method_font_ctor=font_ctor;
+        describe_types();
         Method* remove_scene=fn<Method*(*)(void*,const char*,int)>(MethodFromName)(class_scene,"RemoveFromSuperScene",0);
         if(!method_append||!font_ctor||!remove_scene||
            !signature(method_append,true,1,kind_void)||!signature(font_ctor,true,3,kind_void)||

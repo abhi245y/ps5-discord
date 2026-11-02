@@ -146,7 +146,9 @@ static void* thread_main(void*){return reinterpret_cast<void*>(std::intptr_t(run
 int main(){
     if(mkdir(parent_dir,0700)&&errno!=EEXIST)return 1;
     char p[256];path(p,sizeof p,parent_dir,"parent.lock");int lock=open(p,O_CREAT|O_RDWR,0600);
+#if OVERLAY_MODE!=4 // restart works with a service running: its worker dies with ShellUI, its loader then stops
     if(lock<0||flock(lock,LOCK_EX|LOCK_NB))return 1;
+#endif
     path(p,sizeof p,parent_dir,"loader.log");logfile=std::fopen(p,"a");
     char usb[96];std::snprintf(usb,sizeof usb,"/mnt/usb0/discord-overlay-%s.log",mode_names[OVERLAY_MODE]);
     usblog=std::fopen(usb,"a");

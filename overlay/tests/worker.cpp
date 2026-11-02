@@ -163,6 +163,11 @@ static void* class_property(void*,const char* name){
 static void* property_getter(void* prop){auto it=prop_accessors.find(prop);return it==prop_accessors.end()?nullptr:it->second.first;}
 static void* property_setter(void* prop){auto it=prop_accessors.find(prop);return it==prop_accessors.end()?nullptr:it->second.second;}
 static void* unbox(void* obj){assert(obj);return obj;}
+// Reflection (describe_types): the fake has no types, so the log says "?".
+static void* iter_none(void*,void**){return nullptr;}
+static const char* name_none(void*){return nullptr;}
+static void* one_none(void*){return nullptr;}
+static unsigned offset_none(void*){return 0;}
 static int query_fake(void*,void**,void**,int*){return -1;}
 static int mprotect_fake(void*,std::size_t,int){return 0;}
 static void* mmap_fake(void*,std::size_t,int,int,int,long){return nullptr;}
@@ -190,7 +195,12 @@ static void bind(){
         reinterpret_cast<std::uintptr_t>(&property_getter),reinterpret_cast<std::uintptr_t>(&property_setter),
         reinterpret_cast<std::uintptr_t>(&unbox),reinterpret_cast<std::uintptr_t>(&mprotect_fake),reinterpret_cast<std::uintptr_t>(&mmap_fake),
         reinterpret_cast<std::uintptr_t>(&munmap_fake),reinterpret_cast<std::uintptr_t>(&object_class_fake),
-        reinterpret_cast<std::uintptr_t>(&class_name_fake),reinterpret_cast<std::uintptr_t>(&class_parent_fake)};
+        reinterpret_cast<std::uintptr_t>(&class_name_fake),reinterpret_cast<std::uintptr_t>(&class_parent_fake),
+        reinterpret_cast<std::uintptr_t>(&iter_none),reinterpret_cast<std::uintptr_t>(&name_none),
+        reinterpret_cast<std::uintptr_t>(&one_none),reinterpret_cast<std::uintptr_t>(&iter_none),
+        reinterpret_cast<std::uintptr_t>(&name_none),reinterpret_cast<std::uintptr_t>(&one_none),
+        reinterpret_cast<std::uintptr_t>(&offset_none),reinterpret_cast<std::uintptr_t>(&iter_none),
+        reinterpret_cast<std::uintptr_t>(&name_none)};
     static_assert(sizeof values==sizeof request.functions);std::memcpy(request.functions,values,sizeof values);
     request.mode=Mode::Resolve;request.deadline_ms=now_ms()+18000;
 }
