@@ -365,6 +365,8 @@ struct Prefs
     bool bt_handsfree = false; // the headset's hands-free link for calls, even on AirPods
     bool overlay = false;      // the in-game overlay (overlay/, in the system UI)
     int overlay_glance = 1;    // its talking card: 0 off, 1 while someone talks, 2 always
+    int overlay_pos = 0;       // where the card sits (screens/settings.cpp kPlaces)
+    int overlay_hold = 3;      // holding Options 0.3 s + this many tenths opens the panel
 
     void set(const std::string &key, int value) // a set_pref request, applied here
     {
@@ -392,6 +394,10 @@ struct Prefs
             overlay = value != 0;
         else if (key == "overlay_glance")
             overlay_glance = value;
+        else if (key == "overlay_pos")
+            overlay_pos = value;
+        else if (key == "overlay_hold")
+            overlay_hold = value;
     }
 };
 

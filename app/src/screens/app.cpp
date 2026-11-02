@@ -102,6 +102,8 @@ constexpr app::TourStep kTour[] = {
     {0.6f, 0, Direction::none, "settings-overlay"},
     {0.4f, 0, Direction::down},
     {0.4f, 0, Direction::down},
+    {0.4f, 0, Direction::down},
+    {0.4f, 0, Direction::down},
     {0.4f, action_bit(Action::confirm)},
     {0.6f, 0, Direction::none, "settings-overlay-reload"},
     {0.4f, action_bit(Action::back)},

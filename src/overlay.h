@@ -23,6 +23,13 @@ typedef struct {
 // The line (overlay/src/app/discord_app.inc reads it), at most 2047 bytes; talking people
 // first. live: the Go Live time ("" when off); quality: Go Live's ("720p · 30 fps").
 // Exposed for the selftest.
+// The paired headsets (up to four) and the connected one's address ("" when none).
+typedef struct {
+    int on, count;
+    char connected[18];
+    char addr[4][18], name[4][40];
+} overlay_headset;
+// settings: the mini settings' values, dot-separated, in discord_app.inc's order.
 int overlay_line(char *out, int cap, char state, char me, int glance, const char *live, int viewers,
-                 const char *call, const char *timer, const char *quality, const overlay_person *people,
-                 int count);
+                 const char *call, const char *timer, const char *quality, const char *settings,
+                 const overlay_headset *bt, const overlay_person *people, int count);

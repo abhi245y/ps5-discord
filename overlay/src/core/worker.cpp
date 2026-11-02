@@ -21,7 +21,7 @@ constexpr std::uint32_t bit_l3=0x4000,bit_r3=0x8000;
 // Hold Options: the game takes the press first (most open their pause menu), then the
 // panel opens over it: the pause for games that do not pause for the system menu.
 constexpr std::uint32_t bit_options=0x100;
-constexpr std::uint64_t options_hold_ms=600;
+std::atomic<std::uint64_t> options_hold_ms{600}; // the app's setting (Builder::set_hold)
 constexpr unsigned create_attempt_limit=3,create_delay_ticks=30,text_period_ticks=12;
 Request request;
 Hook update_hook_store,pad_hook_store,share_hook_store;
@@ -449,10 +449,12 @@ bool engine_set_rect(void*,void* widget,const oui::Rect* r){
     // The object's own class: Label overrides Y (its baseline), as Kabuki notes.
     return type&&r&&prop_set_float(type,object,"X",r->x)&&prop_set_float(type,object,"Y",r->y)&&
         prop_set_float(type,object,"Width",r->w)&&prop_set_float(type,object,"Height",r->h);}
+bool engine_set_hold(void*,int ms){
+    options_hold_ms.store(std::uint64_t(ms<300?300:ms>1500?1500:ms),std::memory_order_relaxed);return true;}
 constexpr oui::Builder::Vt engine_vt{
     engine_add_panel,engine_add_label,engine_set_text,engine_set_visible,engine_set_color,
     engine_screen_w,engine_screen_h,engine_set_capture,engine_send,
-    engine_add_image,engine_set_image,engine_set_tint,engine_set_text_style,engine_set_rect};
+    engine_add_image,engine_set_image,engine_set_tint,engine_set_text_style,engine_set_rect,engine_set_hold};
 oui::Builder ui_builder(){return oui::Builder{&engine_vt,nullptr};}
 void refresh_text(){
     char text[text_limit];
@@ -616,7 +618,7 @@ PadData pad_hook(int device){
     if(buttons&bit_options){
         const std::uint64_t now=now_ms(),since=options_since.load(std::memory_order_relaxed);
         if(!since)options_since.store(now,std::memory_order_relaxed);
-        else if(now-since>=options_hold_ms&&!options_fired.exchange(true,std::memory_order_relaxed)){
+        else if(now-since>=options_hold_ms.load(std::memory_order_relaxed)&&!options_fired.exchange(true,std::memory_order_relaxed)){
             chords.fetch_add(1,std::memory_order_relaxed);
             gesture_requested.store(true,std::memory_order_release);}}
     else{options_since.store(0,std::memory_order_relaxed);options_fired.store(false,std::memory_order_relaxed);}

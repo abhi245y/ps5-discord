@@ -26,6 +26,8 @@ static pref prefs[] = {
     {"bt_handsfree", 0, 1, 0, 0},   // Bluetooth headset: hands-free for calls even on AirPods (src/bt)
     {"overlay_glance", 0, 2, 1, 1}, // in-game overlay's glance card: 0 off, 1 while someone talks, 2 always
     {"overlay", 0, 1, 0, 0},        // in-game overlay (overlay/, loaded into the system UI): off until tested
+    {"overlay_pos", 0, 5, 0, 0},    // its talking card: top right, top left, bottom right, bottom left, middle right, middle left
+    {"overlay_hold", 0, 12, 3, 3},  // holding Options 0.3 s + this many tenths opens the panel
 };
 #define COUNT ((int)(sizeof prefs / sizeof *prefs))
 

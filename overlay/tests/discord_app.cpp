@@ -33,6 +33,8 @@ bool set_image(void*,void* w,const char* p){std::snprintf(static_cast<Widget*>(w
 bool set_tint(void*,void*,const oui::Color*){return true;}
 bool set_style(void*,void*,float,int,const oui::Color*,int){return true;}
 bool set_rect(void*,void* w,const oui::Rect* r){static_cast<Widget*>(w)->r=*r;return true;}
+int hold_ms=600;
+bool set_hold(void*,int ms){hold_ms=ms;return true;}
 bool capturing=false;
 char sent[64]="";
 bool set_capture(void*,bool on){capturing=on;return true;}
@@ -40,7 +42,7 @@ bool send(void*,const char* t){std::snprintf(sent,sizeof sent,"%s",t);return tru
 float sw(void*){return 1920;}
 float sh(void*){return 1080;}
 const oui::Builder::Vt vt{add_panel,add_label,set_text,set_visible,set_color,sw,sh,set_capture,send,
-                          add_image,set_image,set_tint,set_style,set_rect};
+                          add_image,set_image,set_tint,set_style,set_rect,set_hold};
 
 Widget* w(void* p){return static_cast<Widget*>(p);}
 bool shows(const char* text){
@@ -55,11 +57,11 @@ int main(){
     oui::Builder b{&vt,nullptr};
     reset();
     assert(build(b));
-    assert(used==66);
+    assert(used==91);
     for(int i=0;i<used;i++)assert(!widgets[i].visible); // nothing before the core says anything
 
     // In a call, two talking, the card on: their avatars and names, "You" under them.
-    on_text("2|c|o|1||0|Raid Night|42:10|720p \xc2\xb7 30 fps|11~11_ab~Mira~t,12~~Kenji~t,13~13_cd~Ana~m,14~14_ef~Theo~-",b);
+    on_text("3|c|o|1||0|Raid Night|42:10|720p \xc2\xb7 30 fps|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~t,12~~Kenji~t,13~13_cd~Ana~m,14~14_ef~Theo~-",b);
     assert(w(card)->visible&&!w(pill)->visible&&shows("Raid Night"));
     assert(shows("Mira")&&shows("Kenji")&&shows("You \xc2\xb7 mic on"));
     assert(ends(w(talk_avatar[0])->path,"/av/11_ab.png")&&w(talk_avatar[1])->path[0]==0); // not fetched yet
@@ -67,12 +69,12 @@ int main(){
     assert(!w(talk_avatar[2])->visible&&!w(dock)->visible);
 
     // Live and muted: the LIVE pill and "time | viewers"; the card shrinks to one talker.
-    on_text("2|c|m|1|18:42|3|Raid Night|1:02:03|720p|11~11_ab~Mira~t",b);
+    on_text("3|c|m|1|18:42|3|Raid Night|1:02:03|720p|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~t",b);
     assert(w(pill)->visible&&shows("18:42  |  3 watching")&&!shows("Raid Night")&&shows("You \xc2\xb7 muted"));
     assert(w(card)->r.h==265&&ends(w(you_mic)->path,"mic_off.png"));
 
     // The panel: four rows (talking ring on Mira), the tiles, focus on Mute, capture on.
-    on_text("2|c|o|1||0|Raid Night|42:10|720p \xc2\xb7 30 fps|11~11_ab~Mira~t,13~13_cd~Ana~m,14~14_ef~Theo~d,15~~Sam~-,16~~Nova~-",b);
+    on_text("3|c|o|1||0|Raid Night|42:10|720p \xc2\xb7 30 fps|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~t,13~13_cd~Ana~m,14~14_ef~Theo~d,15~~Sam~-,16~~Nova~-",b);
     on_gesture(oui::Gesture::Chord,b);
     assert(capturing&&w(dock)->visible&&!w(card)->visible);
     assert(shows("Raid Night")&&shows("42:10")&&shows("Mira")&&shows("Ana")&&shows("Theo")&&shows("Sam")&&!shows("Nova"));
@@ -88,31 +90,62 @@ int main(){
     on_pad(0x40,0,0,b); // Circle closes
     assert(!capturing&&!w(dock)->visible&&!w(tile[0])->visible&&w(card)->visible);
     // One person: the panel ends under them.
-    on_text("2|c|o|1||0|Raid Night|1:00|720p|11~11_ab~Mira~-",b);
+    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~-",b);
     on_gesture(oui::Gesture::Chord,b);
     assert(w(tile[0])->r.y==184+143+10&&w(dock)->r.h==573&&ends(w(dock)->path,"dock_1.png")&&w(rule)->r.y==184+143+10+172);
     on_gesture(oui::Gesture::Chord,b);
 
     // Muted and live: the tiles say so.
-    on_text("2|c|m|1|0:12|1|Raid Night||720p|",b);
+    on_text("3|c|m|1|0:12|1|Raid Night||720p|0.5.5.1.0.3.1.1.1.0.0|1~~|",b);
     on_gesture(oui::Gesture::Chord,b);
     assert(shows("Unmute")&&shows("Stop")&&shows("0:12")&&ends(w(tile_icon[0])->path,"mic_off.png"));
     on_gesture(oui::Gesture::Chord,b);
 
     // The card off (Settings, or nobody talking), and out of the call.
-    on_text("2|c|o|0||0|Raid Night||720p|14~~Kenji~-",b);
+    on_text("3|c|o|0||0|Raid Night||720p|0.5.5.1.0.3.1.1.1.0.0|1~~|14~~Kenji~-",b);
     assert(!w(card)->visible);
-    on_text("2|-|o|1||0||||",b);
+    on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0|1~~|",b);
     on_gesture(oui::Gesture::Chord,b);
     assert(shows("Not in a call")&&!w(row_bg[0])->visible&&!w(tile[0])->visible&&!w(timer)->visible);
     sent[0]=0;on_pad(0x80,0,0,b);assert(!sent[0]); // nothing to act on
     on_gesture(oui::Gesture::Chord,b);
 
+    // The mini settings: Options opens them, up/down moves, left/right changes and tells the
+    // core, the headset row connects; Circle goes back to the call page.
+    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0|1~68:A5~68:A5^AirPods;00:1B^Buds|11~11_ab~Mira~-",b);
+    on_gesture(oui::Gesture::Chord,b);
+    on_pad(0x100,0,0,b);
+    assert(shows("Settings")&&shows("Go Live quality")&&w(item_focus)->visible&&!w(tile[0])->visible);
+    assert(shows("\xe2\x80\xb9  720p \xc2\xb7 30 fps  \xe2\x80\xba")&&shows("100%")&&shows("Top right")&&shows("0.6 s"));
+    on_pad(0x4,0,0,b);assert(!std::strcmp(sent,"set golive_quality 1"));
+    on_pad(0x8,0,0,b);on_pad(0x4,0,0,b);assert(!std::strcmp(sent,"set mic_gain 6")&&shows("\xe2\x80\xb9  120%  \xe2\x80\xba"));
+    for(int i=0;i<3;i++)on_pad(0x8,0,0,b);
+    on_pad(0x4,0,0,b);assert(!std::strcmp(sent,"set overlay_pos 1"));
+    on_pad(0x8,0,0,b);on_pad(0x1,0,0,b);assert(!std::strcmp(sent,"set overlay_hold 2")&&hold_ms==500); // 0.5 s
+    for(int i=0;i<6;i++)on_pad(0x2,0,0,b); // up past the top: wraps to the headset row
+    assert(shows("\xe2\x80\xb9  AirPods \xc2\xb7 on  \xe2\x80\xba")&&shows("Disconnect"));
+    on_pad(0x80,0,0,b);assert(!std::strcmp(sent,"bt disconnect"));
+    on_pad(0x4,0,0,b);on_pad(0x80,0,0,b);assert(!std::strcmp(sent,"bt connect 00:1B"));
+    on_pad(0x40,0,0,b); // Circle: back to the call page
+    assert(!w(item_focus)->visible&&w(tile[0])->visible&&!std::strcmp(w(title)->text,"Raid Night"));
+    on_gesture(oui::Gesture::Chord,b);
+    // The card where Settings put it: top left after "set overlay_pos 1".
+    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.1.3.1.1.1.0.0|1~~|11~11_ab~Mira~t",b);
+    assert(w(card)->visible&&w(card)->r.x==31&&w(card)->r.y==34);
+    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.2.3.1.1.1.0.0|1~~|11~11_ab~Mira~t",b);
+    assert(w(card)->r.x==1574&&w(card)->r.y==1080-34-265);
+    // Live: the quality row is fixed.
+    on_text("3|c|o|1|0:05|2|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0|1~~|",b);
+    on_gesture(oui::Gesture::Chord,b);on_pad(0x100,0,0,b);
+    sent[0]=0;on_pad(0x4,0,0,b);assert(!sent[0]&&shows("Live now"));
+    on_pad(0x40,0,0,b);on_gesture(oui::Gesture::Chord,b);
+
+    on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0|1~~|",b);
     // Not ours: ignored.
     on_text("1|c|o|1||Raid Night|",b);on_text("",b);on_text(nullptr,b);
     assert(!w(card)->visible&&!w(dock)->visible);
     State s;
-    assert(parse("2|c|o|1||0|Big|||a~~A~t,b~~B~t,c~~C~-,d~~D~-,e~~E~-,f~~F~-,g~~G~-,h~~H~-,i~~I~-",s)&&s.count==8);
+    assert(parse("3|c|o|1||0|Big|||||a~~A~t,b~~B~t,c~~C~-,d~~D~-,e~~E~-,f~~F~-,g~~G~-,h~~H~-,i~~I~-",s)&&s.count==8);
     std::puts("discord app: ok");
     return 0;
 }

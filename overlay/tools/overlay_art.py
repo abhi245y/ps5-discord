@@ -147,6 +147,8 @@ def main():
     rounded("tile_leave", 122, 140, 16, LEAVE)
     rounded("tile_focus", 134, 152, 21, None, WHITE, 3)
     rounded("line", 519, 2, 0, LINE)
+    # The mini settings: the focused row.
+    rounded("setting_focus", 519, 56, 14, TILE, CORAL, 2)
     ring("ring", 106, 4, CORAL)
     glyph("glyph_cross", 37, (122, 160, 255, 255), "cross")
     glyph("glyph_circle", 37, (255, 92, 110, 255), "circle")

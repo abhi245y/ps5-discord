@@ -18,6 +18,7 @@
 
 #include "broadcast.h"
 #include "chat.h"
+#include "headset.h"
 #include "prefs.h"
 #include "stream.h"
 #include "http.h"
@@ -28,7 +29,7 @@
 // The overlay engine's data folder (overlay/src/core/protocol.hpp parent_dir).
 #define OVERLAY_DIR "/data/discord-overlay-poc"
 #define APP_ASSETS "/data/homebrew/PPSA99072/assets" // the app's /app0/assets
-#define IDLE_LINE "2|-|o|0||0||||"
+#define IDLE_LINE "3|-|o|0||0||||||"
 // overlay/src/core/protocol.hpp Command, written by the overlay (Builder::send).
 typedef struct {
     uint64_t signature, seq;
@@ -38,8 +39,8 @@ typedef struct {
 #define MAX_PEOPLE 8
 #define AVATAR_PX 128 // round PNGs in OVERLAY_DIR/av, scaled down by the overlay
 
-// Copies at most n bytes of src, whole UTF-8 characters only; '|', ',' and '~' (the line's
-// separators) and control characters become spaces.
+// Copies at most n bytes of src, whole UTF-8 characters only; the line's separators (| , ~ ^ ;)
+// and control characters become spaces.
 static int put(char *out, int cap, int at, const char *src, int n)
 {
     int len = (int)strlen(src);
@@ -53,7 +54,7 @@ static int put(char *out, int cap, int at, const char *src, int n)
         len--; // do not cut a character
     for (int i = 0; i < len; i++) {
         const char c = src[i];
-        out[at++] = c == '|' || c == ',' || c == '~' || ((unsigned char)c < 0x20) ? ' ' : c;
+        out[at++] = c == '|' || c == ',' || c == '~' || c == '^' || c == ';' || ((unsigned char)c < 0x20) ? ' ' : c;
     }
     out[at] = 0;
     return at;
@@ -69,11 +70,12 @@ static int sep(char *out, int cap, int at, char c)
 }
 
 int overlay_line(char *out, int cap, char state, char me, int glance, const char *live, int viewers,
-                 const char *call, const char *timer, const char *quality, const overlay_person *people, int count)
+                 const char *call, const char *timer, const char *quality, const char *settings,
+                 const overlay_headset *bt, const overlay_person *people, int count)
 {
     if (cap > 2048)
         cap = 2048; // the engine reads 2047 bytes at most
-    int at = snprintf(out, (size_t)cap, "2|%c|%c|%d|", state, me, glance ? 1 : 0);
+    int at = snprintf(out, (size_t)cap, "3|%c|%c|%d|", state, me, glance ? 1 : 0);
     at = put(out, cap, at, live, 16);
     at += snprintf(out + at, (size_t)(cap - at), "|%d|", viewers);
     at = put(out, cap, at, call, 40);
@@ -81,6 +83,20 @@ int overlay_line(char *out, int cap, char state, char me, int glance, const char
     at = put(out, cap, at, timer, 12);
     at = sep(out, cap, at, '|');
     at = put(out, cap, at, quality, 24);
+    at = sep(out, cap, at, '|');
+    at = put(out, cap, at, settings, 80);
+    at = sep(out, cap, at, '|');
+    // The headset: on~connected address~address^name;... (paired ones, up to four)
+    at += snprintf(out + at, (size_t)(cap - at), "%d~", bt->on);
+    at = put(out, cap, at, bt->connected, 17);
+    at = sep(out, cap, at, '~');
+    for (int i = 0; i < bt->count; i++) {
+        if (i)
+            at = sep(out, cap, at, ';');
+        at = put(out, cap, at, bt->addr[i], 17);
+        at = sep(out, cap, at, '^');
+        at = put(out, cap, at, bt->name[i], 32);
+    }
     at = sep(out, cap, at, '|');
     int first = 1;
     for (int pass = 0; pass < 2; pass++) // talking first
@@ -252,8 +268,31 @@ static void compose(char *line, int cap, time_t *live_since)
     bc_profile(&w, &h, &fps);
     char quality[24];
     snprintf(quality, sizeof quality, "%dp \xc2\xb7 %d fps", h, fps);
-    overlay_line(line, cap, state, me, glance, live, live[0] ? stream_viewers() : 0, call, timer, quality, shown,
-                 count);
+    // The mini settings' values, in the order discord_app.inc reads them.
+    static const char *const keys[] = {"golive_quality", "mic_gain",     "call_volume",   "overlay_glance",
+                                       "overlay_pos",    "overlay_hold", "notify_dm",     "notify_server",
+                                       "notify_system",  "quiet_hours",  "bt_handsfree"};
+    char settings[96];
+    int n = 0;
+    for (size_t i = 0; i < sizeof keys / sizeof *keys; i++)
+        n += snprintf(settings + n, sizeof settings - (size_t)n, "%s%d", i ? "." : "", prefs_get(keys[i]));
+    overlay_headset bt = {0};
+    cJSON *hs = hs_state_json();
+    bt.on = cJSON_IsTrue(cJSON_GetObjectItem(hs, "on"));
+    const char *addr = cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetObjectItem(hs, "headset"), "addr"));
+    snprintf(bt.connected, sizeof bt.connected, "%s", addr ? addr : "");
+    cJSON *d;
+    cJSON_ArrayForEach(d, cJSON_GetObjectItem(hs, "devices"))
+        if (bt.count < 4 && cJSON_IsTrue(cJSON_GetObjectItem(d, "paired"))) {
+            const char *a = cJSON_GetStringValue(cJSON_GetObjectItem(d, "addr")),
+                       *nm = cJSON_GetStringValue(cJSON_GetObjectItem(d, "name"));
+            snprintf(bt.addr[bt.count], sizeof bt.addr[0], "%s", a ? a : "");
+            snprintf(bt.name[bt.count], sizeof bt.name[0], "%s", nm && nm[0] ? nm : "Headset");
+            bt.count++;
+        }
+    cJSON_Delete(hs);
+    overlay_line(line, cap, state, me, glance, live, live[0] ? stream_viewers() : 0, call, timer, quality, settings,
+                 &bt, shown, count);
 }
 
 static int write_line(const char *line)
@@ -297,6 +336,23 @@ static void run_command(const char *what)
         r = stream_golive(strcmp(stream_state(), "off") == 0 || strcmp(stream_state(), "error") == 0, &why);
     else if (strcmp(what, "leave") == 0)
         voice_leave();
+    else if (strncmp(what, "set ", 4) == 0) {
+        // The mini settings: only these keys (cmd.bin is written by the overlay).
+        static const char *const allowed[] = {"golive_quality", "mic_gain",     "call_volume",   "overlay_glance",
+                                              "overlay_pos",    "overlay_hold", "notify_dm",     "notify_server",
+                                              "notify_system",  "quiet_hours",  "bt_handsfree"};
+        char key[32];
+        int value = 0, known = 0;
+        if (sscanf(what + 4, "%31s %d", key, &value) == 2)
+            for (size_t i = 0; i < sizeof allowed / sizeof *allowed; i++)
+                known |= strcmp(key, allowed[i]) == 0;
+        r = known ? prefs_set(key, value) : -1;
+        if (known && r == 0 && strcmp(key, "golive_quality") == 0)
+            why = "from the next Go Live";
+    } else if (strncmp(what, "bt connect ", 11) == 0)
+        r = hs_connect(what + 11);
+    else if (strcmp(what, "bt disconnect") == 0)
+        r = hs_disconnect();
     else
         why = "unknown";
     LOG("overlay: %s -> %d %s", what, r, why);

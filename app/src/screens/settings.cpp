@@ -79,6 +79,9 @@ constexpr const char *kQualities[] = {"720p · 30 fps", "720p · 60 fps", "1080p
 constexpr const char *kServerMessages[] = {"Off", "As in Discord", "Every message"};
 // Prefs::overlay_glance.
 constexpr const char *kGlance[] = {"Off", "While someone talks", "Always"};
+constexpr const char *kPlaces[] = {"Top right", "Top left", "Bottom right", "Bottom left", "Middle right", "Middle left"};
+constexpr const char *kHold[] = {"0.3 s", "0.4 s", "0.5 s", "0.6 s", "0.7 s", "0.8 s", "0.9 s",
+                                 "1.0 s", "1.1 s", "1.2 s", "1.3 s", "1.4 s", "1.5 s"};
 constexpr const char *kQuiet[] = {"Off", "22:00 – 07:00", "23:00 – 08:00", "00:00 – 08:00", "21:00 – 06:00"};
 
 template <int N>
@@ -222,9 +225,11 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
                    "Reload", 0, false, false, Act::overlay_reload}; // the core refuses one while reloading
         return {
             on,
-            choice_row("Talking card", "The small card at the top right while the panel is closed.", "overlay_glance",
-                       kGlance, s.prefs.overlay_glance),
-            {Kind::value, "Open the panel", "Holding Options pauses most games first.", "Hold Options or L3+R3"},
+            choice_row("Talking card", "Who is talking, while the panel is closed.", "overlay_glance", kGlance,
+                       s.prefs.overlay_glance),
+            choice_row("Card position", "Where the talking card sits.", "overlay_pos", kPlaces, s.prefs.overlay_pos),
+            choice_row("Hold Options", "Opens the panel; most games pause first. L3+R3 works too.", "overlay_hold",
+                       kHold, s.prefs.overlay_hold),
             reload,
         };
     }

@@ -719,11 +719,14 @@ static void test_overlay_line(void)
 {
     char line[4096];
     overlay_person p[3] = {{"1", "1_ab", "Ana", 'm'}, {"2", "", "Ki|m,o~", '-'}, {"3", "3_cd", "Mira", 't'}};
-    overlay_line(line, sizeof line, 'c', 'o', 1, "", 0, "Raid Night", "42:10", "720p", p, 3);
+    overlay_headset bt = {1, 2, "68:A5:93:5E:57:B2", {"68:A5:93:5E:57:B2", "00:1B:66:00:00:02"}, {"Air;Pods^", "Buds"}};
+    overlay_line(line, sizeof line, 'c', 'o', 1, "", 0, "Raid Night", "42:10", "720p", "0.5.5", &bt, p, 3);
     // Talking first; the line's separators in a name become spaces.
-    assert(strcmp(line, "2|c|o|1||0|Raid Night|42:10|720p|3~3_cd~Mira~t,1~1_ab~Ana~m,2~~Ki m o ~-") == 0);
-    overlay_line(line, sizeof line, 'c', 'm', 0, "18:42", 3, "R", "", "", p, 0);
-    assert(strcmp(line, "2|c|m|0|18:42|3|R|||") == 0);
+    assert(strcmp(line, "3|c|o|1||0|Raid Night|42:10|720p|0.5.5|1~68:A5:93:5E:57:B2~68:A5:93:5E:57:B2^Air Pods ;"
+                        "00:1B:66:00:00:02^Buds|3~3_cd~Mira~t,1~1_ab~Ana~m,2~~Ki m o ~-") == 0);
+    overlay_headset none = {0};
+    overlay_line(line, sizeof line, 'c', 'm', 0, "18:42", 3, "R", "", "", "", &none, p, 0);
+    assert(strcmp(line, "3|c|m|0|18:42|3|R||||0~~|") == 0);
     // More than fits: whole people only.
     overlay_person many[40];
     for (int i = 0; i < 40; i++) {
@@ -732,7 +735,7 @@ static void test_overlay_line(void)
         snprintf(many[i].name, sizeof many[i].name, "Ünïcödé %02d", i);
         many[i].flag = '-';
     }
-    const int n = overlay_line(line, sizeof line, 'c', 'o', 1, "", 0, "A room", "1:00:00", "1080p", many, 40);
+    const int n = overlay_line(line, sizeof line, 'c', 'o', 1, "", 0, "A room", "1:00:00", "1080p", "", &none, many, 40);
     assert(n <= 2047 && (int)strlen(line) == n && line[n - 2] == '~' && line[n - 1] == '-');
 }
 

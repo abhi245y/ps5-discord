@@ -1456,6 +1456,8 @@ void Client::poll_voice()
             prefs.bt_handsfree = num(p, "bt_handsfree", 0.0) != 0.0;
             prefs.overlay = num(p, "overlay", 0.0) != 0.0;
             prefs.overlay_glance = std::clamp(static_cast<int>(num(p, "overlay_glance", 1.0)), 0, 2);
+            prefs.overlay_pos = std::clamp(static_cast<int>(num(p, "overlay_pos", 0.0)), 0, 5);
+            prefs.overlay_hold = std::clamp(static_cast<int>(num(p, "overlay_hold", 3.0)), 0, 12);
         }
         snapshot_.overlay_state =
             v.contains("overlay") && v["overlay"].is_object() ? text(v["overlay"], "state") : std::string();
