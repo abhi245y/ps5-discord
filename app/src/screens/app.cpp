@@ -275,6 +275,24 @@ class DiscordApp final : public app::Concept
             cued_ring_.clear();
         }
         const bool reconnecting = context_.snapshot.connection == discord::Connection::reconnecting;
+        // Asked after a call started with the overlay not loaded (the call connects anyway).
+        if (overlay_prompt_)
+        {
+            if (input.is_pressed(Action::confirm))
+            {
+                discord::Request r;
+                r.kind = discord::Request::Kind::overlay_reload;
+                context_.submit(r);
+                feedback.play(hui::audio::Cue::select);
+                overlay_prompt_ = false;
+            }
+            else if (input.is_pressed(Action::back))
+            {
+                feedback.play(hui::audio::Cue::modal_close);
+                overlay_prompt_ = false;
+            }
+            return;
+        }
         // The update card takes the input over any screen (not over a ring or the sign-in).
         if (update_.update(context_.snapshot, input, feedback, requests,
                            context_.snapshot.connection == discord::Connection::ready && !ring))
@@ -526,6 +544,18 @@ class DiscordApp final : public app::Concept
         update_banners(dt, feedback);
         fade_.target = 1.0f;
         fade_.update(dt, 16.0f);
+        // A call starting with the overlay on in Settings but not loaded: offer to load it,
+        // once per app run. The call connects meanwhile.
+        const auto &snap = context_.snapshot;
+        if (!overlay_asked_ && snap.prefs.overlay && snap.overlay_state == "stopped" &&
+            std::any_of(requests.begin(), requests.end(), [](const discord::Request &r) {
+                return r.kind == discord::Request::Kind::voice_join || r.kind == discord::Request::Kind::voice_call ||
+                       r.kind == discord::Request::Kind::voice_answer;
+            }))
+        {
+            overlay_prompt_ = overlay_asked_ = true;
+            feedback.play(hui::audio::Cue::modal_open);
+        }
         for (const discord::Request &request : requests)
             context_.submit(request);
     }
@@ -571,6 +601,11 @@ class DiscordApp final : public app::Concept
         }
         for (int i = static_cast<int>(banners_.size()) - 1; i >= 0; --i)
             draw_banner(frame.scene, banners_[i]);
+        if (overlay_prompt_)
+            confirm_card(frame.scene, ink_, "Load the in-game overlay?",
+                         "The PS5 home screen restarts to load it. Your call stays connected and open games keep "
+                         "running; reopen this app from the home screen.",
+                         "Load", "Not now");
         update_.draw(context_.snapshot, frame.scene);
     }
 
@@ -603,6 +638,8 @@ class DiscordApp final : public app::Concept
     std::string cued_ring_;          // the ring whose chime has played
     bool from_server_ = false; // the open chat came from a server's page
     bool quitting_ = false;    // the Quit question is up (Circle on Home)
+    bool overlay_prompt_ = false; // "Load the in-game overlay?" is up
+    bool overlay_asked_ = false;  // asked once per app run
     float browser_cooldown_ = 0.0f;
     std::string waiting_dm_; // a friend whose new DM is being made, opened when it lands
     // A call being joined or left: a spinner until the core says it is done, so the voice room

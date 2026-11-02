@@ -154,8 +154,9 @@ void place(Builder& b,int n){
     b.set_rect(tile_focus,{kRowX+kTileStep*focus-6,ty-6,134,152});
     const float ry=rule_y(n),hy=ry+28;
     b.set_rect(rule,{kRowX,ry,kRowW,2});
+    // A label's text sits high in its box: 5 px lower lines it up with the 37 px glyphs.
     const Rect glyph_at[3]={{1361,hy+1,37,37},{1510,hy+1,37,37},{1650,hy+5,78,28}};
-    const Rect word_at[3]={{1406,hy,96,40},{1555,hy,90,40},{1736,hy,132,40}};
+    const Rect word_at[3]={{1406,hy+5,96,40},{1555,hy+5,90,40},{1736,hy+5,132,40}};
     for(int i=0;i<3;i++){b.set_rect(hint_icon[i],glyph_at[i]);b.set_rect(hint_text[i],word_at[i]);}
 }
 
@@ -227,7 +228,8 @@ void render(Builder& b){
     show(b,tile_sub,open&&in_call);show(b,tile_focus,open&&in_call);
     show(b,dock,open);show(b,title,open);show(b,clock,open&&in_call&&st.timer[0]);show(b,timer,open&&in_call);
     show(b,rule,open);
-    for(int i=0;i<3;i++){show(b,hint_icon[i],open);show(b,hint_text[i],open);}
+    for(int i=0;i<2;i++){show(b,hint_icon[i],open);show(b,hint_text[i],open);}
+    show(b,hint_icon[2],false);show(b,hint_text[2],false); // Options: the mini settings, next
 }
 
 }  // namespace
@@ -270,10 +272,10 @@ bool build(Builder& b){
     tile_focus=image(b,at,"tile_focus");
     rule=image(b,at,"line");
     const char* glyphs[3]={"glyph_cross","glyph_circle","chip_options"};
-    const char* words[3]={"Select","Close","Hold to close"};
+    const char* words[3]={"Select","Close","Settings"};
     for(int i=0;i<3;i++){
         hint_icon[i]=image(b,at,glyphs[i]);
-        hint_text[i]=label(b,at,i==2?19:21,3,kText,0,words[i]);
+        hint_text[i]=label(b,at,21,3,kText,0,words[i]);
     }
 
     // C: the talking card.

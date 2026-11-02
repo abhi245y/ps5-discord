@@ -351,6 +351,23 @@ void headphones(DrawList &list, float cx, float cy, Color c)
     list.rounded_rect({cx + 9.0f, cy, 10.0f, 17.0f}, 4.0f, c);
 }
 
+float overlay_pill(DrawList &list, const Ink &ink, const discord::Snapshot &s, float right, float y, float h)
+{
+    if (!s.prefs.overlay || s.overlay_state != "stopped")
+        return 0.0f;
+    const char *text = "Overlay not loaded";
+    const float w = ink.fonts.regular.measure(text, 22.0f) + 64.0f;
+    const Rect pill{right - w, y, w, h};
+    list.rounded_rect(pill, h * 0.5f, kRaised);
+    // Two layers, as Settings' Overlay icon, dim: off.
+    const float cx = pill.x + 32.0f, cy = pill.cy();
+    list.rounded_rect({cx - 11.0f, cy - 3.0f, 18.0f, 14.0f}, 4.0f, kDim);
+    list.rounded_rect({cx - 5.0f, cy - 11.0f, 18.0f, 14.0f}, 4.0f, kRaised);
+    list.rounded_rect({cx - 3.0f, cy - 9.0f, 14.0f, 10.0f}, 3.0f, kDim);
+    hui::ui::text(list, ink.fonts.regular, text, pill.x + 52.0f, cy + 8.0f, 22.0f, kDim);
+    return w;
+}
+
 void headset_badge(DrawList &list, const Ink &ink, const discord::Bluetooth &bt, float right, float y, float h,
                    float open, float t)
 {
@@ -584,7 +601,7 @@ void sticker_picture(DrawList &list, const Ink &ink, const discord::Sticker &sti
 }
 
 void confirm_card(DrawList &list, const Ink &ink, const std::string &title, const std::string &text,
-                  const char *yes)
+                  const char *yes, const char *no)
 {
     namespace ui = hui::ui;
     list.rounded_rect({0, 0, 1920, 1080}, 0.0f, Color::rgb(0x0d0e12, 0.78f));
@@ -594,7 +611,7 @@ void confirm_card(DrawList &list, const Ink &ink, const std::string &title, cons
     ui::text(list, ink.fonts.display, title, card.x + 56.0f, card.y + 92.0f, 50.0f, style::kText);
     ui::paragraph(list, ink.fonts.regular, text, card.x + 58.0f, card.y + 150.0f, 26.0f, card.w - 116.0f, 36.0f,
                   style::kDim, 4, hui::gfx::Align::left);
-    const ui::Hint hints[] = {{ui::Button::cross, yes}, {ui::Button::circle, "Cancel"}};
+    const ui::Hint hints[] = {{ui::Button::cross, yes}, {ui::Button::circle, no}};
     ui::HintLayout layout;
     layout.size = 34.0f;
     layout.text_size = 23.0f;

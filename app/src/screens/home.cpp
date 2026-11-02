@@ -333,8 +333,10 @@ void Home::draw_header(const discord::Snapshot &s, DrawList &list) const
     }
 
     const float voice_w = voice_pill(list, ink_, s.voice, kHeaderY, kHeaderH);
-    headset_badge(list, ink_, s.bt, 1920.0f - kMargin - voice_w - (voice_w > 0.0f ? 16.0f : 0.0f), kHeaderY, kHeaderH,
-                  badge_open_, time_);
+    float right = 1920.0f - kMargin - voice_w - (voice_w > 0.0f ? 16.0f : 0.0f);
+    const float overlay_w = overlay_pill(list, ink_, s, right, kHeaderY, kHeaderH);
+    right -= overlay_w + (overlay_w > 0.0f ? 16.0f : 0.0f);
+    headset_badge(list, ink_, s.bt, right, kHeaderY, kHeaderH, badge_open_, time_);
 }
 
 void Home::draw_friends(const discord::Snapshot &s, DrawList &list) const

@@ -118,7 +118,10 @@ void sticker_picture(DrawList &list, const Ink &ink, const discord::Sticker &sti
 
 // A yes-or-no question over a dimmed screen: Cross does it (yes is its label), Circle cancels.
 void confirm_card(DrawList &list, const Ink &ink, const std::string &title, const std::string &text,
-                  const char *yes);
+                  const char *yes, const char *no = "Cancel");
+// Home's top right, left of the headset badge: the in-game overlay is on in Settings but
+// not loaded (it loads once per home screen start). Returns its width, 0 when not shown.
+float overlay_pill(DrawList &list, const Ink &ink, const discord::Snapshot &s, float right, float y, float h);
 
 // A coral arc going round a quiet ring: something is under way (t: seconds, for the turn).
 void spinner(DrawList &list, float cx, float cy, float r, float t);
