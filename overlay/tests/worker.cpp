@@ -168,6 +168,11 @@ static void* iter_none(void*,void**){return nullptr;}
 static const char* name_none(void*){return nullptr;}
 static void* one_none(void*){return nullptr;}
 static unsigned offset_none(void*){return 0;}
+// The system menu's hold (hold_game/release_game): who has focus, and the impose flag.
+static int focus_now=0x60000001,impose_now=0;
+static int big_app_fake(){return 0x60000001;}
+static int impose_fake(int on){impose_now=on;return 0;}
+static int focus_fake(int app){focus_now=app;return 0;}
 static int query_fake(void*,void**,void**,int*){return -1;}
 static int mprotect_fake(void*,std::size_t,int){return 0;}
 static void* mmap_fake(void*,std::size_t,int,int,int,long){return nullptr;}
@@ -200,7 +205,9 @@ static void bind(){
         reinterpret_cast<std::uintptr_t>(&one_none),reinterpret_cast<std::uintptr_t>(&iter_none),
         reinterpret_cast<std::uintptr_t>(&name_none),reinterpret_cast<std::uintptr_t>(&one_none),
         reinterpret_cast<std::uintptr_t>(&offset_none),reinterpret_cast<std::uintptr_t>(&iter_none),
-        reinterpret_cast<std::uintptr_t>(&name_none)};
+        reinterpret_cast<std::uintptr_t>(&name_none),
+        reinterpret_cast<std::uintptr_t>(&big_app_fake),reinterpret_cast<std::uintptr_t>(&impose_fake),
+        reinterpret_cast<std::uintptr_t>(&focus_fake)};
     static_assert(sizeof values==sizeof request.functions);std::memcpy(request.functions,values,sizeof values);
     request.mode=Mode::Resolve;request.deadline_ms=now_ms()+18000;
 }
@@ -217,7 +224,7 @@ static void reset_runtime(){
     share_events.store(0);chords.store(0);double_presses.store(0);last_buttons.store(0);last_share_at.store(0);
     game_found.store(0);root_found.store(0);widgets_created.store(0);widget_removed.store(0);chord_held.store(false);
     gesture_requested.store(false);oui::app::reset();last_text[0]=0;
-    capture.store(false);pending_down.store(0);pad_logged.store(0);
+    capture.store(false);pending_down.store(0);pad_logged.store(0);holding.store(false);
     for(auto&slot:widget_slots)slot=WidgetSlot{};
     app_handle=0;root_scene_handle=0;scene_handle=0;
     scene_root_handle=0;removal_requested=false;cleanup_retry_used=false;
@@ -314,6 +321,13 @@ int main(){
         pad_hook(0);assert(pending_down.load()==0x22&&pad_logged.load()==1);
         float y=0;std::uint32_t by=stick_y.load();std::memcpy(&y,&by,4);assert(y==0.75f);
         b.set_capture(false);pending_down.store(0);pad_hook(0);assert(pending_down.load()==0);
+        // Capture holds the game like the system menu: impose on, focus to the system (-1);
+        // closing gives both back.
+        assert(focus_now==0x60000001&&impose_now==0);
+        b.set_capture(true);assert(holding.load()&&focus_now==-1&&impose_now==1);
+        b.set_capture(false);assert(!holding.load()&&focus_now==0x60000001&&impose_now==0);
+        // Teardown never leaves it held.
+        b.set_capture(true);release_game("test");assert(focus_now==0x60000001&&impose_now==0);
         input_enabled.store(false);std::uint64_t before=pad_polls.load();pad_hook(0);assert(pad_polls==before);}
     // Input mode run(): hooks cannot prepare against the fake query, refusal stays clean.
     {scenario=0;reset_runtime();bind();request.mode=Mode::Input;

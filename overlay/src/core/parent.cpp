@@ -74,11 +74,18 @@ static int run(){
     if(kernel_dynlib_handle(r.pid,"libmonosgen-2.0.sprx",&mono)||!mono){
         if(kernel_dynlib_handle(r.pid,"libmonosgen-2.0.0.sprx",&mono)||!mono){note("REFUSED Mono module missing");return 1;}}
     if(kernel_dynlib_handle(r.pid,"libkernel_sys.sprx",&kernel)||!kernel){note("REFUSED kernel module missing");return 1;}
-    std::uint32_t web=0,libc=0;
+    std::uint32_t web=0,libc=0,system=0;
     (void)kernel_dynlib_handle(r.pid,"libkernel_web.sprx",&web);
+    (void)kernel_dynlib_handle(r.pid,"libSceSystemService.sprx",&system);
     (void)kernel_dynlib_handle(r.pid,"libSceLibcInternal.sprx",&libc);
     for(unsigned i=0;i<FunctionCount;i++){
         std::uint64_t address_value=0;
+        if(optional(i)){
+            if(system){address_value=kernel_dynlib_dlsym(r.pid,system,symbols[i]);
+                if(!address_value){char nid[12]{};if(nid_encode(symbols[i],nid))address_value=kernel_dynlib_resolve(r.pid,system,nid);}}
+            if(!address(address_value)){note("optional %s missing: the overlay cannot hold the game",symbols[i]);address_value=0;}
+            r.functions[i]=address_value;continue;
+        }
         if(i==TargetMmap||i==TargetMunmap){
             // Plain mmap/munmap live in whichever BSD-ish module ShellUI loaded.
             const std::uint32_t candidates[3]={web,libc,kernel};

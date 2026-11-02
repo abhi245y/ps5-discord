@@ -8,7 +8,7 @@
 #include <unistd.h>
 namespace overlay {
 constexpr std::uint64_t magic=0x31434f504c564f44ULL;
-constexpr unsigned version=8;
+constexpr unsigned version=9;
 constexpr const char* parent_dir="/data/discord-overlay-poc";
 constexpr const char* worker_dir="/user/data/discord-overlay-poc";
 enum Function:unsigned {RootDomain,ThreadAttach,ThreadDetach,AssemblyOpen,AssemblyImage,ClassFromName,
@@ -18,7 +18,12 @@ enum Function:unsigned {RootDomain,ThreadAttach,ThreadDetach,AssemblyOpen,Assemb
     ObjectClass,ClassNameGet,ClassParent,
     // Reflection, log-only (worker describe_types): what a property's value type is on this firmware.
     SignatureParams,TypeName,ClassFromType,ClassFields,FieldName,FieldType,FieldOffset,ClassProperties,PropertyName,
+    // Optional (0 when ShellUI lacks them; libSceSystemService): the system menu's own way of
+    // holding a game while it is over it: the game's app id, the "system UI is over you"
+    // status (games that can pause, pause), and controller focus (-1: the system's).
+    RunningBigApp,SetImposeStatus,SetControllerFocus,
     FunctionCount};
+constexpr bool optional(unsigned i){return i>=RunningBigApp;}
 inline constexpr const char* symbols[FunctionCount]={"mono_get_root_domain","mono_thread_attach","mono_thread_detach",
     "mono_domain_assembly_open","mono_assembly_get_image","mono_class_from_name","mono_class_get_method_from_name",
     "mono_method_signature","mono_signature_is_instance","mono_signature_get_param_count","mono_signature_get_return_type",
@@ -27,7 +32,8 @@ inline constexpr const char* symbols[FunctionCount]={"mono_get_root_domain","mon
     "mono_object_new","mono_runtime_object_init","mono_class_get_property_from_name",
     "mono_property_get_get_method","mono_property_get_set_method","mono_object_unbox","sceKernelMprotect","mmap","munmap","mono_object_get_class","mono_class_get_name","mono_class_get_parent",
     "mono_signature_get_params","mono_type_get_name","mono_class_from_mono_type","mono_class_get_fields",
-    "mono_field_get_name","mono_field_get_type","mono_field_get_offset","mono_class_get_properties","mono_property_get_name"};
+    "mono_field_get_name","mono_field_get_type","mono_field_get_offset","mono_class_get_properties","mono_property_get_name",
+    "sceSystemServiceGetAppIdOfRunningBigApp","sceShellCoreUtilSetImposeStatusFlag","sceLncUtilSetControllerFocus"};
 // Service is Widget without the 60 s window: it runs while the loader keeps
 // keepalive.bin fresh (Keepalive), and tears down within seconds when it stops.
 enum class Mode:std::uint32_t {Resolve=0,Observe=1,Widget=2,Input=3,Service=5};
@@ -68,7 +74,7 @@ inline bool address(std::uint64_t p){return p>=0x10000&&p<0x800000000000ULL;}
 inline bool valid(const Request& r,int pid,std::uint64_t build,std::uint64_t epoch,std::uint64_t now){
     if(r.signature!=magic||r.protocol!=version||r.size!=sizeof r||r.pid!=pid||r.build!=build||r.epoch!=epoch||!r.epoch||!r.token||
        !known(r.mode)||r.deadline_ms<=now||r.deadline_ms-now>120000)return false;
-    for(auto p:r.functions)if(!address(p))return false;
+    for(unsigned i=0;i<FunctionCount;i++)if(!address(r.functions[i])&&!(optional(i)&&!r.functions[i]))return false;
     return true;
 }
 inline bool path(char* out,std::size_t n,const char* dir,const char* file){int rc=std::snprintf(out,n,"%s/%s",dir,file);return rc>=0&&std::size_t(rc)<n;}

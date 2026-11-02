@@ -40,6 +40,8 @@ int main(){
     bad=r;bad.deadline_ms=130001;assert(!valid(bad,123,789,456,10000));
     bad=r;bad.functions[0]=1;assert(!valid(bad,123,789,456,10000));
     bad=r;bad.functions[0]=0x800000000000ULL;assert(!valid(bad,123,789,456,10000));
+    bad=r;bad.functions[RunningBigApp]=0;bad.functions[SetControllerFocus]=0;assert(valid(bad,123,789,456,10000)); // optional: may be missing
+    bad=r;bad.functions[0]=0;assert(!valid(bad,123,789,456,10000));
     char directory[]="/tmp/overlay-poc-test-XXXXXX";assert(mkdtemp(directory));
     assert(write_file(directory,"request.bin",r));Request copy;assert(read_file(directory,"request.bin",copy));assert(copy.token==r.token);
     char file[256];path(file,sizeof file,directory,"request.bin");FILE* extra=std::fopen(file,"ab");assert(extra);std::fputc(1,extra);std::fclose(extra);

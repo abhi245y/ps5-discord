@@ -44,6 +44,12 @@ std::atomic<bool> capture{false};
 std::atomic<std::uint32_t> pending_down{0},stick_x{0},stick_y{0};
 std::atomic<unsigned> pad_logged{0};
 std::uint64_t command_seq=0;                 // UI thread only
+// Holding the game while the panel is open (the system menu's way): the impose status set
+// and controller focus with the system. game_app is whose focus to give back.
+std::atomic<bool> holding{false};
+std::atomic<int> game_app{-1};
+std::atomic<std::uint64_t> last_input_ms{0};
+constexpr std::uint64_t hold_idle_ms=30000;  // no button reaches us this long: give it back
 // UI thread only. Pinned (1) handles like the reference: scene graph objects
 // and the captured Application instance survive GC moves.
 std::uint32_t app_handle=0,root_scene_handle=0,scene_handle=0,scene_root_handle=0;
@@ -331,9 +337,26 @@ bool engine_set_color(void*,void* panel,const oui::Color* c){
     return prop_set(class_panel,object,"BackgroundColor",&back);}
 float engine_screen_w(void*){return ui_screen_w;}
 float engine_screen_h(void*){return ui_screen_h;}
+void hold_game(){
+    if(holding.load()||!request.functions[SetControllerFocus])return;
+    int app=request.functions[RunningBigApp]?fn<int(*)()>(RunningBigApp)():-1;
+    int impose=request.functions[SetImposeStatus]?fn<int(*)(int)>(SetImposeStatus)(1):-1;
+    int focus=fn<int(*)(int)>(SetControllerFocus)(-1);
+    note("HOLD game=%x impose=%x focus=%x",app,impose,focus);
+    game_app.store(app);last_input_ms.store(now_ms());holding.store(true);
+}
+void release_game(const char* why){
+    if(!holding.exchange(false))return;
+    int app=game_app.load();
+    int focus=app>0?fn<int(*)(int)>(SetControllerFocus)(app):-1;
+    int impose=request.functions[SetImposeStatus]?fn<int(*)(int)>(SetImposeStatus)(0):-1;
+    note("RELEASE (%s) game=%x focus=%x impose=%x",why,app,focus,impose);
+}
 bool engine_set_capture(void*,bool on){
     if(on&&!capture.load(std::memory_order_relaxed))pending_down.store(0,std::memory_order_relaxed);
-    capture.store(on,std::memory_order_release);return true;}
+    capture.store(on,std::memory_order_release);
+    if(on)hold_game();else release_game("closed");
+    return true;}
 bool engine_send(void*,const char* text){
     if(!text)return false;
     Command c;c.seq=now_ms()*64+(++command_seq%64); // grows across runs too
@@ -474,6 +497,9 @@ void update_hook(Object* instance){
     if(gesture_requested.exchange(false,std::memory_order_acq_rel)){
         oui::app::on_gesture(oui::Gesture::Chord,builder);
         note("GESTURE chords=%u",chords.load());}
+    if(holding.load()&&now_ms()-last_input_ms.load()>hold_idle_ms){
+        // Nothing reached us for a while: maybe ShellUI sees no pad without focus. Close.
+        release_game("idle");capture.store(false);oui::app::on_gesture(oui::Gesture::Chord,builder);}
     if(capture.load(std::memory_order_acquire)){
         float x=0,y=0;std::uint32_t bx=stick_x.load(std::memory_order_relaxed),by=stick_y.load(std::memory_order_relaxed);
         std::memcpy(&x,&bx,4);std::memcpy(&y,&by,4);
@@ -503,6 +529,7 @@ PadData pad_hook(int device){
     if(capture.load(std::memory_order_acquire)){
         std::uint32_t down=data.down&~(bit_l3|bit_r3);
         if(down){
+            last_input_ms.store(now_ms(),std::memory_order_relaxed);
             pending_down.fetch_or(down,std::memory_order_acq_rel);
             // Calibration evidence: which bit each button is (only Cross, L3, R3 are known).
             if(pad_logged.fetch_add(1,std::memory_order_relaxed)<200)note("PAD down=%x",down);}
@@ -689,6 +716,7 @@ State run(){
     }while(false);
     enabled.store(false,std::memory_order_release);
     input_enabled.store(false,std::memory_order_release);
+    capture.store(false);release_game("teardown"); // never leave the game without its controller
     auto query=fn<ProtectionQuery>(QueryProtection);
     // Every installed hook gets its removal attempted; a failed one must not
     // short-circuit the rest.
