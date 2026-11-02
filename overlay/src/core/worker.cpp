@@ -4,6 +4,7 @@
 #include "../app/overlay_ui.hpp"
 #include "../app/overlay_app.cpp"
 #include <atomic>
+#include <cmath>
 #include <cstdarg>
 #include <fcntl.h>
 #include <sys/file.h>
@@ -153,7 +154,10 @@ bool prop_get_float(void* klass,void* obj,const char* name,float& out){
 // stack, and a set flag turned every colour white.
 struct UiColor {float r,g,b,a;bool hdr;char pad[3];};
 static_assert(sizeof(UiColor)==20);
-UiColor ui_color(const oui::Color& c){return UiColor{c.r,c.g,c.b,c.a,false,{}};}
+// The app's colours are sRGB (as on any screen); PUI blends in linear light, so dark ones
+// came out light (#22252c showed as a pale grey-blue on 13.00). Alpha stays as it is.
+float linear(float v){return v<=0.04045f?v/12.92f:std::pow((v+0.055f)/1.055f,2.4f);}
+UiColor ui_color(const oui::Color& c){return UiColor{linear(c.r),linear(c.g),linear(c.b),c.a,false,{}};}
 // Our colours, not the system skin's (Widget.FollowSkin*).
 void no_skin(void* klass,void* widget){
     int no=0;
@@ -283,6 +287,8 @@ void style_label(void* label,float height){
     (void)prop_set(class_label,label,"TextColor",&white);
     int no=0,one=1;
     (void)prop_set_int(class_label,label,"EnableThemedColor",no);
+    // On, Text is read as a localisation id: our words drew nothing (Kabuki turns it off).
+    (void)prop_set_int(class_label,label,"EnableStringifiedJsonWithId",no);
     (void)prop_set_int(class_label,label,"MaxLineCount",one);
 }
 void* engine_add_label(void*,void* parent,const oui::Rect* r,const char* text){
@@ -293,6 +299,7 @@ void* engine_add_label(void*,void* parent,const oui::Rect* r,const char* text){
     if(!label)return nullptr;
     fn<void(*)(void*)>(ObjectInit)(label);
     int passive=0,shown=1;
+    style_label(label,r->h);
     if(!prop_set_int(class_label,label,"Focusable",passive)||
        !prop_set_float(class_label,label,"X",r->x)||
        !prop_set_float(class_label,label,"Y",r->y)||
@@ -301,7 +308,6 @@ void* engine_add_label(void*,void* parent,const oui::Rect* r,const char* text){
        !prop_set_int(class_label,label,"Visible",shown)||
        !prop_set(class_label,label,"Text",fn<void*(*)(void*,const char*)>(StringNew)(domain,text))){
         note("UI label props failed");return nullptr;}
-    style_label(label,r->h);
     if(!append_child(owner,label)){note("UI label attach failed");return nullptr;}
     std::uint32_t id=slot_store(label,true);
     return id?reinterpret_cast<void*>(std::uintptr_t(id)):nullptr;}
