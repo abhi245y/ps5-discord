@@ -37,6 +37,12 @@ std::atomic<std::uint32_t> last_buttons{0};
 std::atomic<std::uint64_t> last_share_at{0};
 std::atomic<int> game_found{0},root_found{0},widgets_created{0},widget_removed{0};
 std::atomic<bool> chord_held{false},gesture_requested{false};
+// Capture (the app's panel is open): pad_hook ORs newly pressed buttons in and keeps the
+// left stick; the UI thread hands them to app::on_pad.
+std::atomic<bool> capture{false};
+std::atomic<std::uint32_t> pending_down{0},stick_x{0},stick_y{0};
+std::atomic<unsigned> pad_logged{0};
+std::uint64_t command_seq=0;                 // UI thread only
 // UI thread only. Pinned (1) handles like the reference: scene graph objects
 // and the captured Application instance survive GC moves.
 std::uint32_t app_handle=0,root_scene_handle=0,scene_handle=0,scene_root_handle=0;
@@ -44,7 +50,8 @@ bool removal_requested=false,cleanup_retry_used=false;
 char last_text[128]{};                       // UI thread only
 float ui_screen_w=1920,ui_screen_h=1080;     // UI thread only
 struct WidgetSlot{std::uint32_t handle=0;bool label=false;};
-WidgetSlot widget_slots[16];                 // UI thread only, app-facing ids
+constexpr std::uint32_t widget_limit=32;
+WidgetSlot widget_slots[widget_limit];       // UI thread only, app-facing ids
 static_assert(std::atomic<Update>::is_always_lock_free&&std::atomic<PadCall>::is_always_lock_free&&
     std::atomic<ShareCall>::is_always_lock_free&&std::atomic<std::uint64_t>::is_always_lock_free);
 static_assert(sizeof(PadData)==36&&offsetof(PadData,buttons)==4&&offsetof(PadData,down)==12&&
@@ -174,7 +181,7 @@ bool load_text(char* out,std::size_t n){
 }
 // ---- oui::Builder engine implementation (all UI-thread) --------------------
 void* slot_object(std::uint32_t index){
-    return index&&index<=16&&widget_slots[index-1].handle?
+    return index&&index<=widget_limit&&widget_slots[index-1].handle?
         fn<void*(*)(std::uint32_t)>(GcTarget)(widget_slots[index-1].handle):nullptr;}
 std::uint32_t slot_store(void* object,bool label){
     for(auto& slot:widget_slots){
@@ -245,9 +252,18 @@ bool engine_set_color(void*,void* panel,const oui::Color* c){
     return prop_set(class_panel,object,"BackgroundColor",back);}
 float engine_screen_w(void*){return ui_screen_w;}
 float engine_screen_h(void*){return ui_screen_h;}
+bool engine_set_capture(void*,bool on){
+    if(on&&!capture.load(std::memory_order_relaxed))pending_down.store(0,std::memory_order_relaxed);
+    capture.store(on,std::memory_order_release);return true;}
+bool engine_send(void*,const char* text){
+    if(!text)return false;
+    Command c;c.seq=now_ms()*64+(++command_seq%64); // grows across runs too
+    std::snprintf(c.text,sizeof c.text,"%s",text);
+    note("COMMAND %s",c.text);
+    return write_file(worker_dir,"cmd.bin",c);}
 constexpr oui::Builder::Vt engine_vt{
     engine_add_panel,engine_add_label,engine_set_text,engine_set_visible,engine_set_color,
-    engine_screen_w,engine_screen_h};
+    engine_screen_w,engine_screen_h,engine_set_capture,engine_send};
 oui::Builder ui_builder(){return oui::Builder{&engine_vt,nullptr};}
 void refresh_text(){
     char text[128];
@@ -350,7 +366,7 @@ void update_hook(Object* instance){
     if(!enabled.load(std::memory_order_acquire))return;
     auto tick=updates.fetch_add(1,std::memory_order_relaxed)+1;
     if(!root_found.load(std::memory_order_acquire)&&scene_attempts.load()<3&&(tick==1||tick==61||tick==121))observe_scene();
-    if(request.mode!=Mode::Widget)return;
+    if(!draws(request.mode))return;
     // The Update callback's instance IS the Application; pin it once so scene
     // creation can ask it for RootScene (captured before the stop check only
     // while we may still build).
@@ -379,6 +395,10 @@ void update_hook(Object* instance){
     if(gesture_requested.exchange(false,std::memory_order_acq_rel)){
         oui::app::on_gesture(oui::Gesture::Chord,builder);
         note("GESTURE chords=%u",chords.load());}
+    if(capture.load(std::memory_order_acquire)){
+        float x=0,y=0;std::uint32_t bx=stick_x.load(std::memory_order_relaxed),by=stick_y.load(std::memory_order_relaxed);
+        std::memcpy(&x,&bx,4);std::memcpy(&y,&by,4);
+        oui::app::on_pad(pending_down.exchange(0,std::memory_order_acq_rel),x,y,builder);}
 }
 void note_share(std::uint64_t at){
     std::uint64_t prior=last_share_at.load(std::memory_order_relaxed);
@@ -401,6 +421,14 @@ PadData pad_hook(int device){
             chords.fetch_add(1,std::memory_order_relaxed);
             gesture_requested.store(true,std::memory_order_release);}}
     else chord_held.store(false,std::memory_order_relaxed);
+    if(capture.load(std::memory_order_acquire)){
+        std::uint32_t down=data.down&~(bit_l3|bit_r3);
+        if(down){
+            pending_down.fetch_or(down,std::memory_order_acq_rel);
+            // Calibration evidence: which bit each button is (only Cross, L3, R3 are known).
+            if(pad_logged.fetch_add(1,std::memory_order_relaxed)<200)note("PAD down=%x",down);}
+        std::uint32_t x,y;std::memcpy(&x,&data.lx,4);std::memcpy(&y,&data.ly,4);
+        stick_x.store(x,std::memory_order_relaxed);stick_y.store(y,std::memory_order_relaxed);}
     return data;
 }
 void share_hook(void* event){
@@ -417,7 +445,7 @@ bool resolve_update_methods(){
     if(!update||!find_scene||!root_getter||!signature(update,true,0,kind_void)||
        !signature(find_scene,false,1,kind_class)||!signature(root_getter,true,0,kind_class)){
         note("REFUSED required methods/signature missing update=%p find=%p root=%p",update,find_scene,root_getter);return false;}
-    if(request.mode==Mode::Widget){
+    if(draws(request.mode)){
         class_application=fn<void*(*)(void*,const char*,const char*)>(ClassFromName)(pui,"Sce.PlayStation.PUI","Application");
         class_scene=fn<void*(*)(void*,const char*,const char*)>(ClassFromName)(pui,"Sce.PlayStation.PUI.UI2","Scene");
         Method* root_scene_getter=class_application?fn<Method*(*)(void*,const char*,int)>(MethodFromName)(class_application,"get_RootScene",0):nullptr;
@@ -537,20 +565,30 @@ State run(){
             if(request.mode==Mode::Resolve){result=State::Resolved;break;}
             if(!prepare_update_hook(entry))break;
             enabled.store(true,std::memory_order_release);
-            if(request.mode==Mode::Widget&&install_pad_hook())
+            if(draws(request.mode)&&install_pad_hook())
                 input_enabled.store(true,std::memory_order_release);
-            note("OBSERVING Update%s for at most%useconds; %s",
-                request.mode==Mode::Widget?" plus one panel/label pair":"",
-                request.mode==Mode::Widget?60u:8u,
-                request.mode==Mode::Widget?"widget removed on stop or deadline":"no widgets, pad hooks or focus calls");
+            note("OBSERVING Update%s for %s; %s",
+                draws(request.mode)?" plus the app's widgets":"",
+                request.mode==Mode::Service?"as long as the loader's keepalive is fresh":
+                request.mode==Mode::Widget?"at most 60 seconds":"at most 8 seconds",
+                draws(request.mode)?"widgets removed on stop or deadline":"no widgets, pad hooks or focus calls");
         }
         auto deadline=now_ms()+(request.mode==Mode::Widget||request.mode==Mode::Input?60000:8000);
         if(deadline>request.deadline_ms)deadline=request.deadline_ms;
-        while(now_ms()<deadline){
+        const std::uint64_t began=now_ms();
+        for(;;){
             std::uint64_t stop=0;if(read_file(worker_dir,"stop.bin",stop)&&stop==request.token)break;
+            if(request.mode==Mode::Service){
+                // No fixed end: the loader's heartbeat keeps it. A stale or foreign one
+                // (the loader is gone) ends it, after a grace for the first beat.
+                Keepalive k;const std::uint64_t now=now_ms();
+                const bool fresh=read_file(worker_dir,"keepalive.bin",k)&&k.signature==magic&&
+                    k.token==request.token&&k.at_ms<=now+1000&&(k.at_ms>now||now-k.at_ms<keepalive_stale_ms);
+                if(!fresh&&now-began>2*keepalive_stale_ms){note("SERVICE keepalive stale; tearing down");break;}
+            } else if(now_ms()>=deadline)break;
             publish(State::Observing);usleep(200000);
         }
-        if(request.mode==Mode::Widget){
+        if(draws(request.mode)){
             teardown.store(true,std::memory_order_release);
             for(unsigned wait=0;wait<100&&widget_removed.load(std::memory_order_acquire)==0;wait++){
                 publish(State::Observing);usleep(20000);}

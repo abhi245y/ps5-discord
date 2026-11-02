@@ -281,6 +281,8 @@ done
 [[ ! -d $root/assets ]] || cp -a "$root/assets" "$app/assets"
 # spot5: the mDNS helper payload the app hands to elfldr while pairing.
 [[ ! -f $build/mdns-helper.elf ]] || cp "$build/mdns-helper.elf" "$app/assets/"
+# The in-game overlay service (overlay/: make all there); the core starts it when Settings say so.
+[[ ! -f $root/../overlay/build/overlay-service.elf ]] || cp "$root/../overlay/build/overlay-service.elf" "$app/assets/overlay.elf"
 # The core payload, which the app starts when it is not running (build it first: make at the repo root).
 if [[ -f $root/../build/ps5-discord.elf ]]; then
     cp "$root/../build/ps5-discord.elf" "$app/assets/"

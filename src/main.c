@@ -148,6 +148,7 @@ void core_quit(int forget_token)
 {
     core_end_calls();
     hs_shutdown();
+    overlay_shutdown();
     if (forget_token) {
         char path[64];
         token_path(path, sizeof path);

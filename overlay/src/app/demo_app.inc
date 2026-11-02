@@ -40,4 +40,6 @@ void on_text(const char* line,Builder& b){
 
 void on_tick(std::uint64_t){}
 
+void on_pad(std::uint32_t,float,float,Builder&){}
+
 }}  // namespace oui::app

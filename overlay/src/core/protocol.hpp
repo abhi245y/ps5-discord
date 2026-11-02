@@ -8,7 +8,7 @@
 #include <unistd.h>
 namespace overlay {
 constexpr std::uint64_t magic=0x31434f504c564f44ULL;
-constexpr unsigned version=6;
+constexpr unsigned version=7;
 constexpr const char* parent_dir="/data/discord-overlay-poc";
 constexpr const char* worker_dir="/user/data/discord-overlay-poc";
 enum Function:unsigned {RootDomain,ThreadAttach,ThreadDetach,AssemblyOpen,AssemblyImage,ClassFromName,
@@ -23,8 +23,11 @@ inline constexpr const char* symbols[FunctionCount]={"mono_get_root_domain","mon
     "mono_gchandle_get_target","mono_gchandle_free","sceKernelQueryMemoryProtection",
     "mono_object_new","mono_runtime_object_init","mono_class_get_property_from_name",
     "mono_property_get_get_method","mono_property_get_set_method","mono_object_unbox","sceKernelMprotect","mmap","munmap","mono_object_get_class","mono_class_get_name","mono_class_get_parent"};
-enum class Mode:std::uint32_t {Resolve=0,Observe=1,Widget=2,Input=3};
-inline bool known(Mode m){return m==Mode::Resolve||m==Mode::Observe||m==Mode::Widget||m==Mode::Input;}
+// Service is Widget without the 60 s window: it runs while the loader keeps
+// keepalive.bin fresh (Keepalive), and tears down within seconds when it stops.
+enum class Mode:std::uint32_t {Resolve=0,Observe=1,Widget=2,Input=3,Service=5};
+inline bool known(Mode m){return m==Mode::Resolve||m==Mode::Observe||m==Mode::Widget||m==Mode::Input||m==Mode::Service;}
+inline bool draws(Mode m){return m==Mode::Widget||m==Mode::Service;}
 // Managed Sce.PlayStation.Core.Input.GamePadData layout (value type, 36 bytes).
 struct PadData {
     bool skip=false;
@@ -48,6 +51,11 @@ struct Status {
     std::uint64_t pad_polls=0;
     std::uint32_t share_events=0,chords=0,double_presses=0,last_buttons=0;
 };
+// Service: the loader's heartbeat (parent_dir/keepalive.bin, once a second).
+struct Keepalive {std::uint64_t signature=magic,token=0,at_ms=0;};
+constexpr std::uint64_t keepalive_stale_ms=5000;
+// An app action for the core (worker_dir/cmd.bin): a short word, a fresh seq each time.
+struct Command {std::uint64_t signature=magic,seq=0;char text[48]{};};
 struct Attempt {std::uint64_t signature=magic,epoch=0,token=0;std::int32_t pid=0;std::uint32_t reserved=0;};
 inline std::uint64_t now_ms(){timespec t{};if(clock_gettime(CLOCK_MONOTONIC,&t))return 0;
     return std::uint64_t(t.tv_sec)*1000+std::uint64_t(t.tv_nsec)/1000000;}

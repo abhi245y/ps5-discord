@@ -8,6 +8,9 @@
 void stream_init(void);       // gives the broadcast (broadcast.h) its frame sink
 int stream_start(void);       // in a connected call; 0 when asked, -1 with stream_error()
 void stream_stop(void);
+// Go Live on or off: the picture (broadcast.h) and Discord's side together. 0, or -1 with
+// *why set (bc_error() or stream_error()).
+int stream_golive(int on, const char **why);
 // Gateway thread: the next op (18 create, 22 paused, 19 delete) to send, or NULL. Caller frees.
 cJSON *stream_take_gateway(void);
 int stream_gateway_pending(void); // ops queued for the gateway thread

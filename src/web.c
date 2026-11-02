@@ -522,18 +522,12 @@ static void api_voice_broadcast(int c, const char *body)
     cJSON *on = cJSON_GetObjectItem(in, "on");
     int ok = cJSON_IsBool(on), start = cJSON_IsTrue(on);
     cJSON_Delete(in);
+    const char *why = "";
     if (!ok)
         refuse(c, "400 Bad Request", "on must be true or false.");
-    else if (!start) {
-        stream_stop();
-        bc_stop();
-        reply_ok(c);
-    } else if (bc_start() != 0)
-        refuse(c, "409 Conflict", bc_error());
-    else if (stream_start() != 0) {
-        bc_stop();
-        refuse(c, "409 Conflict", stream_error());
-    } else
+    else if (stream_golive(start, &why) != 0)
+        refuse(c, "409 Conflict", why);
+    else
         reply_ok(c);
 }
 

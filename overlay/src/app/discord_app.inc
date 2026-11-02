@@ -4,8 +4,9 @@
 //    LIVE and time, who is talking, your mic. The core decides when it shows (Settings:
 //    always, while someone talks, off).
 //  - the call panel (A): L3+R3 opens it on the right edge: the call, everyone in it with
-//    talking and muted marks, your mic and Go Live. Read-only for now: the engine passes
-//    the app no buttons besides the chord yet.
+//    talking and muted marks, your mic and Go Live, and four actions (Mute, Deafen, Go
+//    Live, Leave). The left stick moves between them, Cross does one, L3+R3 closes. The
+//    game still gets those presses (no controller focus yet).
 //
 // The core writes one line to the text channel (src/overlay.c in the core), at most 127
 // bytes, fields split by '|':
@@ -29,12 +30,21 @@ namespace {
 const Color kGlance{0.086f,0.094f,0.114f,0.6f};
 const Color kPanel{0.133f,0.145f,0.173f,0.94f};
 const Color kCoral{1.0f,0.478f,0.349f,1.0f};
+const Color kButton{0.165f,0.18f,0.212f,1.0f};
+
+// GamePadButtons bits: only Cross is known on 13.00 (the engine logs every bit it sees,
+// "PAD down=" in worker.log, for the rest). ponytail: D-pad/Circle once calibrated.
+constexpr std::uint32_t kCross=0x80;
+constexpr float kStickMove=0.6f,kStickRest=0.3f;
 
 // 1920x1080 logical; the TV safe area is 48 px at the sides, 27 px top and bottom.
 constexpr float kSafeX=48,kSafeY=27;
 constexpr float kGlanceW=440,kGlanceH=156;
 constexpr float kPanelW=560;
 constexpr int kRows=6;
+constexpr int kActions=4;
+// What each action sends to the core (src/overlay.c).
+const char* const kCommands[kActions]={"mute","deafen","golive","leave"};
 
 struct Person { char name[40]; char flag; };
 struct State {
@@ -47,10 +57,13 @@ struct State {
 
 State st;
 bool open=false;
+int focus=0;      // the focused action
+int stick=0;      // the stick's last direction: -1 up, 1 down, 0 at rest
 void* glance=nullptr; void* glance_live=nullptr;
 void* glance_line[3]={};
 void* panel=nullptr; void* title=nullptr; void* status=nullptr; void* hint=nullptr;
 void* row[kRows]={};
+void* action[kActions]={}; void* action_label[kActions]={};
 
 // Copies the next '|' field of *p into out and moves *p past it.
 void field(const char** p,char* out,std::size_t cap){
@@ -136,13 +149,22 @@ void render(Builder& b){
             b.set_text(row[i],text);}
         show(b,row[i],open&&used);
     }
+    const char* names[kActions]={st.me=='m'||st.me=='d'?"Unmute":"Mute",st.me=='d'?"Undeafen":"Deafen",
+                                 st.live[0]?"Stop Go Live":"Go Live","Leave call"};
+    for(int i=0;i<kActions;i++){
+        b.set_text(action_label[i],names[i]);
+        b.set_color(action[i],i==focus?kCoral:kButton);
+        show(b,action[i],open&&in_call);show(b,action_label[i],open&&in_call);
+    }
     show(b,panel,open);show(b,title,open);show(b,status,open);show(b,hint,open);
 }
 
 }  // namespace
 
 void reset(){
-    st=State{};open=false;
+    st=State{};open=false;focus=0;stick=0;
+    for(void*& w:action)w=nullptr;
+    for(void*& w:action_label)w=nullptr;
     glance=glance_live=panel=title=status=hint=nullptr;
     for(void*& w:glance_line)w=nullptr;
     for(void*& w:row)w=nullptr;
@@ -162,8 +184,13 @@ bool build(Builder& b){
     title=b.add_label(panel,{px+32,py+28,kPanelW-64,52},"");
     status=b.add_label(panel,{px+32,py+90,kPanelW-64,40},"");
     for(int i=0;i<kRows;i++)
-        row[i]=b.add_label(panel,{px+32,py+170+i*72.0f,kPanelW-64,48},"");
-    hint=b.add_label(panel,{px+32,py+ph-70,kPanelW-64,40},"L3+R3 close - mute and Go Live in the app");
+        row[i]=b.add_label(panel,{px+32,py+160+i*64.0f,kPanelW-64,48},"");
+    for(int i=0;i<kActions;i++){
+        const float y=py+580+i*84.0f;
+        action[i]=b.add_panel({px+24,y,kPanelW-48,72},kButton);
+        action_label[i]=b.add_label(action[i],{px+48,y+16,kPanelW-96,40},"");
+        if(!action[i]||!action_label[i])return false;}
+    hint=b.add_label(panel,{px+32,py+ph-56,kPanelW-64,40},"Stick: move   Cross: select   L3+R3: close");
     if(!glance||!glance_live||!panel||!title||!status||!hint)return false;
     for(void* x:glance_line)if(!x)return false;
     for(void* x:row)if(!x)return false;
@@ -173,7 +200,19 @@ bool build(Builder& b){
 
 void on_gesture(Gesture,Builder& b){
     open=!open;
+    focus=0;stick=0;
+    b.set_capture(open);
     render(b);
+}
+
+void on_pad(std::uint32_t down,float,float ly,Builder& b){
+    if(!open)return;
+    const int dir=ly<-kStickMove?-1:ly>kStickMove?1:0;
+    bool moved=false;
+    if(dir&&dir!=stick){focus=(focus+dir+kActions)%kActions;moved=true;}
+    if(dir||(ly>-kStickRest&&ly<kStickRest))stick=dir;
+    if((down&kCross)&&(st.state=='c'||st.state=='j'))b.send(kCommands[focus]);
+    if(moved)render(b);
 }
 
 void on_text(const char* line,Builder& b){

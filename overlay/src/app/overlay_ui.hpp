@@ -33,6 +33,11 @@ public:
     // Refills a panel's background colour.
     bool set_color(void* panel,const Color& c){
         return vt&&vt->set_color_fn&&vt->set_color_fn(ctx,panel,&c);}
+    // While on, the engine passes the pad to app::on_pad every frame (the panel is
+    // open). The game still gets the presses too.
+    bool set_capture(bool on){return vt&&vt->set_capture_fn&&vt->set_capture_fn(ctx,on);}
+    // Hands a short action word to the console side (cmd.bin; the newest one wins).
+    bool send(const char* command){return vt&&vt->send_fn&&vt->send_fn(ctx,command);}
     float screen_width() const{return vt&&vt->screen_w_fn?vt->screen_w_fn(ctx):1920.f;}
     float screen_height() const{return vt&&vt->screen_h_fn?vt->screen_h_fn(ctx):1080.f;}
 
@@ -45,6 +50,8 @@ public:
         bool(*set_color_fn)(void*,void*,const Color*);
         float(*screen_w_fn)(void*);
         float(*screen_h_fn)(void*);
+        bool(*set_capture_fn)(void*,bool);
+        bool(*send_fn)(void*,const char*);
     };
     const Vt* vt=nullptr;
     void* ctx=nullptr;
@@ -59,6 +66,9 @@ bool build(Builder& b);
 void on_gesture(Gesture g,Builder& b);
 // A new content line arrived (text.bin today; the core API later).
 void on_text(const char* line,Builder& b);
+// While capture is on: the buttons newly pressed since the last call (GamePadButtons
+// bits, L3/R3 excluded: they are the chord) and the left stick (-1..1), every frame.
+void on_pad(std::uint32_t down,float lx,float ly,Builder& b);
 // Every rendered frame after build (UI thread). Keep it cheap.
 void on_tick(std::uint64_t frame);
 // Reset internal state; used by the host test harness.

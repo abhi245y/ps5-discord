@@ -3,20 +3,35 @@
 
 #include <cJSON.h>
 #include <pthread.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef __PROSPERO__
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#endif
 
 #include "chat.h"
 #include "prefs.h"
 #include "stream.h"
+#include "log.h"
 #include "voice.h"
 
 // The overlay engine's data folder (overlay/src/core/protocol.hpp parent_dir).
 #define OVERLAY_DIR "/data/discord-overlay-poc"
+#define APP_ASSETS "/data/homebrew/PPSA99072/assets" // the app's /app0/assets
+#define IDLE_LINE "1|-|o|0|||"
+// overlay/src/core/protocol.hpp Command, written by the overlay (Builder::send).
+typedef struct {
+    uint64_t signature, seq;
+    char text[48];
+} overlay_command;
+#define OVERLAY_MAGIC 0x31434f504c564f44ULL
 #define MAX_PEOPLE 8
 
 // Copies at most n bytes of src, whole UTF-8 characters only; '|', ',' and '~' (the line's
@@ -123,25 +138,106 @@ static void compose(char *line, int cap, time_t *live_since)
     overlay_line(line, cap, state, me, glance, live, call, (const char(*)[64])names, flags, count);
 }
 
+static int write_line(const char *line)
+{
+    FILE *f = fopen(OVERLAY_DIR "/text.tmp", "wb");
+    if (!f)
+        return -1;
+    const int ok = fputs(line, f) >= 0;
+    return fclose(f) == 0 && ok && rename(OVERLAY_DIR "/text.tmp", OVERLAY_DIR "/text.bin") == 0 ? 0 : -1;
+}
+
+// The newest command from the overlay; 0 when there is none.
+static uint64_t read_command(overlay_command *c)
+{
+    FILE *f = fopen(OVERLAY_DIR "/cmd.bin", "rb");
+    if (!f)
+        return 0;
+    const int ok = fread(c, 1, sizeof *c, f) == sizeof *c;
+    fclose(f);
+    if (!ok || c->signature != OVERLAY_MAGIC)
+        return 0;
+    c->text[sizeof c->text - 1] = 0;
+    return c->seq;
+}
+
+// A press in the overlay's call panel.
+static void run_command(const char *what)
+{
+    char *text = voice_state_json();
+    cJSON *v = text ? cJSON_Parse(text) : NULL;
+    free(text);
+    const int mute = cJSON_IsTrue(cJSON_GetObjectItem(v, "mute")), deaf = cJSON_IsTrue(cJSON_GetObjectItem(v, "deaf"));
+    cJSON_Delete(v);
+    const char *why = "";
+    int r = 0;
+    if (strcmp(what, "mute") == 0)
+        r = deaf ? voice_set_flags(0, 0) : voice_set_flags(!mute, -1); // unmuting also undeafens
+    else if (strcmp(what, "deafen") == 0)
+        r = voice_set_flags(-1, !deaf);
+    else if (strcmp(what, "golive") == 0)
+        r = stream_golive(strcmp(stream_state(), "off") == 0 || strcmp(stream_state(), "error") == 0, &why);
+    else if (strcmp(what, "leave") == 0)
+        voice_leave();
+    else
+        why = "unknown";
+    LOG("overlay: %s -> %d %s", what, r, why);
+}
+
+// The overlay service (overlay/, built into the app) to elfldr, once per core run. A second
+// launch exits by itself (its lock), and one per system UI instance is all the engine
+// allows: after a Quit it stays loaded and shows nothing until the core is back.
+static void launch(void)
+{
+    FILE *f = fopen(APP_ASSETS "/overlay.elf", "rb");
+    if (!f)
+        return;
+    static char elf[1 << 20];
+    const size_t n = fread(elf, 1, sizeof elf, f);
+    fclose(f);
+    const int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0)
+        return;
+    struct sockaddr_in to = {.sin_len = sizeof to, .sin_family = AF_INET, .sin_port = htons(9021)}; // elfldr
+    to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    size_t sent = 0;
+    if (n > 0 && n < sizeof elf && connect(fd, (struct sockaddr *)&to, sizeof to) == 0)
+        for (ssize_t w; sent < n && (w = send(fd, elf + sent, n - sent, 0)) > 0;)
+            sent += (size_t)w;
+    close(fd);
+    LOG("overlay: sent the overlay to elfldr (%zu of %zu bytes)", sent, n);
+}
+
 static void *feed(void *arg)
 {
     (void)arg;
     char last[128] = "", line[128];
     time_t live_since = 0;
+    int launched = 0;
+    overlay_command c;
+    uint64_t seen = read_command(&c); // one left from before this core ran is not new
     mkdir(OVERLAY_DIR, 0755);
     for (;;) {
+        if (!launched && prefs_get("overlay") == 1) {
+            launch();
+            launched = 1;
+        }
         compose(line, sizeof line, &live_since);
-        if (strcmp(line, last) != 0) {
-            FILE *f = fopen(OVERLAY_DIR "/text.tmp", "wb");
-            if (f) {
-                const int ok = fputs(line, f) >= 0;
-                if (fclose(f) == 0 && ok && rename(OVERLAY_DIR "/text.tmp", OVERLAY_DIR "/text.bin") == 0)
-                    snprintf(last, sizeof last, "%s", line);
-            }
+        if (strcmp(line, last) != 0 && write_line(line) == 0)
+            snprintf(last, sizeof last, "%s", line);
+        const uint64_t seq = read_command(&c);
+        if (seq > seen) {
+            seen = seq;
+            run_command(c.text);
         }
         usleep(200000); // the overlay reads every 12 frames (200 ms)
     }
     return NULL;
+}
+
+void overlay_shutdown(void)
+{
+    write_line(IDLE_LINE); // the overlay stays loaded; it hides until the core is back
 }
 
 void overlay_init(void)
@@ -156,6 +252,10 @@ void overlay_init(void)
 }
 #else
 void overlay_init(void)
+{
+}
+
+void overlay_shutdown(void)
 {
 }
 #endif

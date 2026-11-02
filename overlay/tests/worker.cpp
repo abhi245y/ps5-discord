@@ -207,6 +207,7 @@ static void reset_runtime(){
     share_events.store(0);chords.store(0);double_presses.store(0);last_buttons.store(0);last_share_at.store(0);
     game_found.store(0);root_found.store(0);widgets_created.store(0);widget_removed.store(0);chord_held.store(false);
     gesture_requested.store(false);oui::app::reset();last_text[0]=0;
+    capture.store(false);pending_down.store(0);pad_logged.store(0);
     for(auto&slot:widget_slots)slot=WidgetSlot{};
     app_handle=0;root_scene_handle=0;scene_handle=0;
     scene_root_handle=0;removal_requested=false;cleanup_retry_used=false;
@@ -296,6 +297,13 @@ int main(){
         note_share(3000);assert(double_presses==1);note_share(3100);assert(double_presses==2);
         assert(share_events==4);
         share_hook(ptr(77));assert(share_orig_calls==1&&share_events==5);
+        // Capture: newly pressed buttons (down) collect for the app, the stick is kept;
+        // nothing collects while the app's panel is closed.
+        pad_buttons_next=0;pad_hook(0);assert(pending_down.load()==0);
+        oui::Builder b=ui_builder();b.set_capture(true);
+        pad_hook(0);assert(pending_down.load()==0x22&&pad_logged.load()==1);
+        float y=0;std::uint32_t by=stick_y.load();std::memcpy(&y,&by,4);assert(y==0.75f);
+        b.set_capture(false);pending_down.store(0);pad_hook(0);assert(pending_down.load()==0);
         input_enabled.store(false);std::uint64_t before=pad_polls.load();pad_hook(0);assert(pad_polls==before);}
     // Input mode run(): hooks cannot prepare against the fake query, refusal stays clean.
     {scenario=0;reset_runtime();bind();request.mode=Mode::Input;

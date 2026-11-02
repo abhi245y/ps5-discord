@@ -1016,3 +1016,22 @@ void stream_on_dispatch(const char *type, cJSON *d)
     }
     pthread_mutex_unlock(&lock);
 }
+
+int stream_golive(int on, const char **why)
+{
+    if (!on) {
+        stream_stop();
+        bc_stop();
+        return 0;
+    }
+    if (bc_start() != 0) {
+        *why = bc_error();
+        return -1;
+    }
+    if (stream_start() != 0) {
+        bc_stop();
+        *why = stream_error();
+        return -1;
+    }
+    return 0;
+}

@@ -12,7 +12,7 @@ Widget widgets[32];
 int used=0;
 
 void* add(bool label,const char* text){
-    assert(used<16); // the engine's limit
+    assert(used<32); // the engine's limit
     Widget& w=widgets[used++];
     w.label=label;
     std::snprintf(w.text,sizeof w.text,"%s",text?text:"");
@@ -24,9 +24,13 @@ bool set_text(void*,void* w,const char* t){
     std::snprintf(static_cast<Widget*>(w)->text,128,"%s",t);return true;}
 bool set_visible(void*,void* w,bool on){if(w)static_cast<Widget*>(w)->visible=on;return true;}
 bool set_color(void*,void*,const oui::Color*){return true;}
+bool capturing=false;
+char sent[64]="";
+bool set_capture(void*,bool on){capturing=on;return true;}
+bool send(void*,const char* t){std::snprintf(sent,sizeof sent,"%s",t);return true;}
 float sw(void*){return 1920;}
 float sh(void*){return 1080;}
-const oui::Builder::Vt vt{add_panel,add_label,set_text,set_visible,set_color,sw,sh};
+const oui::Builder::Vt vt{add_panel,add_label,set_text,set_visible,set_color,sw,sh,set_capture,send};
 
 Widget* w(void* p){return static_cast<Widget*>(p);}
 bool shows(const char* text){
@@ -39,7 +43,7 @@ int main(){
     oui::Builder b{&vt,nullptr};
     reset();
     assert(build(b));
-    assert(used==15);
+    assert(used==23);
     // Nothing shows before the core says anything.
     for(int i=0;i<used;i++)assert(!widgets[i].visible);
 
@@ -59,8 +63,23 @@ int main(){
     assert(w(panel)->visible&&!w(glance)->visible);
     assert(shows("Raid Night")&&shows("Mira - talking")&&shows("Kenji")&&shows("Ana - muted")&&shows("Theo - deafened"));
     assert(!w(row[4])->visible&&!w(row[5])->visible);
+    // The actions: capture is on, the stick moves focus once per push, Cross sends.
+    assert(capturing&&w(action[0])->visible&&shows("Mute")&&shows("Go Live")&&shows("Leave call"));
+    on_pad(0x80,0,0,b);
+    assert(std::strcmp(sent,"mute")==0);
+    on_pad(0,0,0.9f,b);on_pad(0,0,0.9f,b); // held: one step
+    on_pad(0x80,0,0.9f,b);
+    assert(std::strcmp(sent,"deafen")==0);
+    on_pad(0,0,0,b);on_pad(0,0,-0.9f,b);on_pad(0,0,0,b);on_pad(0,0,-0.9f,b); // up twice: wraps to Leave
+    on_pad(0x80,0,0,b);
+    assert(std::strcmp(sent,"leave")==0);
     on_gesture(oui::Gesture::Chord,b);
-    assert(!w(panel)->visible&&w(glance)->visible);
+    assert(!capturing&&!w(panel)->visible&&w(glance)->visible&&!w(action[0])->visible);
+    // Muted and live: the actions say so.
+    on_text("1|c|m|1|0:12 1|Raid Night|",b);
+    on_gesture(oui::Gesture::Chord,b);
+    assert(shows("Unmute")&&shows("Stop Go Live"));
+    on_gesture(oui::Gesture::Chord,b);
 
     // The core hides the glance (nobody talking, Settings: while someone talks).
     on_text("1|c|o|0||Raid Night|Kenji~-",b);
@@ -70,7 +89,8 @@ int main(){
     on_text("1|-|o|1|||",b);
     assert(!w(glance)->visible);
     on_gesture(oui::Gesture::Chord,b);
-    assert(shows("Not in a call")&&!w(row[0])->visible);
+    assert(shows("Not in a call")&&!w(row[0])->visible&&!w(action[0])->visible);
+    sent[0]=0;on_pad(0x80,0,0,b);assert(!sent[0]); // nothing to act on outside a call
     on_gesture(oui::Gesture::Chord,b);
 
     // Not ours, or empty: ignored.

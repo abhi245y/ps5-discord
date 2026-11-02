@@ -21,15 +21,15 @@
 #ifndef OVERLAY_MODE
 #define OVERLAY_MODE 0
 #endif
-#if OVERLAY_MODE<0||OVERLAY_MODE>4
-#error "OVERLAY_MODE must be 0 resolve, 1 observe, 2 widget, 3 input, 4 restart"
+#if OVERLAY_MODE<0||OVERLAY_MODE>5
+#error "OVERLAY_MODE must be 0 resolve, 1 observe, 2 widget, 3 input, 4 restart, 5 service"
 #endif
 extern "C" {extern const unsigned char overlay_worker_blob[];extern const unsigned int overlay_worker_blob_size;
 volatile sig_atomic_t overlay_abort_requested=0;}
 using namespace overlay;
 // elfldr deploys every payload as payload.elf, so each mode keeps its own USB
 // xlog to keep runs attributable (workspace payload discipline).
-static constexpr const char* mode_names[]{"resolve","observe","widget","input","restart"};
+static constexpr const char* mode_names[]{"resolve","observe","widget","input","restart","service"};
 static FILE* logfile=nullptr,*usblog=nullptr;
 static void note(const char* fmt,...){
     char line[512];va_list ap;va_start(ap,fmt);std::vsnprintf(line,sizeof line,fmt,ap);va_end(ap);
@@ -105,6 +105,28 @@ static int run(){
         result.first_unresolved?result.first_unresolved:"");
     if(!result.elf_loaded||!result.pthread_create_ok||!result.detached||!result.auth_restored||result.imports_unresolved)return 1;
     int previous=999;
+#if OVERLAY_MODE==5
+    // Service: no fixed end. A heartbeat every second keeps the worker; on SIGTERM (or a
+    // worker that stops reporting) we stop beating, ask it to stop and wait for teardown.
+    std::uint64_t last_status=now_ms(),stop_at=0;
+    for(;;){
+        const std::uint64_t now=now_ms();
+        if(!stop_at&&!overlay_abort_requested){Keepalive k;k.token=r.token;k.at_ms=now;(void)write_file(parent_dir,"keepalive.bin",k);}
+        Status s;
+        if(read_file(parent_dir,"status.bin",s)&&s.signature==magic&&s.token==r.token&&s.at_ms<=now+1000&&now<=s.at_ms+2000){
+            last_status=now;
+            if(int(s.state)!=previous){note("STATE=%d updates=%llu widgets=%d/%d text=%u pad=%llu chords=%u hooks=%d/%d",
+                int(s.state),(unsigned long long)s.updates,s.widgets_created,s.widget_removed,s.text_updates,
+                (unsigned long long)s.pad_polls,s.chords,s.hook_removed,s.hook_installed);previous=int(s.state);}
+            if(s.state==State::Passed&&s.hook_installed&&s.hook_removed==s.hook_installed)return 0;
+            if(int(s.state)<0)return 1;}
+        if(!stop_at&&(overlay_abort_requested||now-last_status>15000)){
+            note(overlay_abort_requested?"SERVICE stop requested":"SERVICE worker stopped reporting");
+            (void)write_file(parent_dir,"stop.bin",r.token);stop_at=now;}
+        if(stop_at&&now-stop_at>10000){note("SERVICE teardown not confirmed; inspect worker.log");return 1;}
+        usleep(250000);
+    }
+#endif
     while(now_ms()<r.deadline_ms&&!overlay_abort_requested){
         Status s;if(read_file(parent_dir,"status.bin",s)&&s.signature==magic&&s.token==r.token&&s.at_ms<=now_ms()+1000&&now_ms()<=s.at_ms+2000){
             if(int(s.state)!=previous){note("STATE=%d updates=%llu game=%d root=%d widgets=%d/%d text=%u pad=%llu share=%u chords=%u doubles=%u hooks=%d/%d",
@@ -135,6 +157,11 @@ int main(){
         pthread_attr_destroy(&attr);if(rc)_exit(1);void* result=nullptr;if(pthread_join(worker,&result))_exit(1);_exit(int(reinterpret_cast<std::intptr_t>(result)));}
     int status=0;bool signaled=false;
     for(;;){auto rc=waitpid(child,&status,WNOHANG);if(rc==child)break;if(rc<0&&errno!=EINTR)return 1;
+#if OVERLAY_MODE==5
+        // Service lives on: the watchdog only counts while the worker is not reporting.
+        {Status s;if(read_file(parent_dir,"status.bin",s)&&s.signature==magic&&s.state==State::Observing&&
+             s.at_ms<=now_ms()+1000&&now_ms()<=s.at_ms+2000&&!overlay_abort_requested)began=now_ms();}
+#endif
         auto elapsed=now_ms()-began;if(!signaled&&(overlay_abort_requested||elapsed>=80000)){kill(child,SIGTERM);signaled=true;}
         if(elapsed>=90000){note("WATCHDOG: killing only owned loader worker; inspect ShellUI state before any retry");kill(child,SIGKILL);while(waitpid(child,&status,0)<0&&errno==EINTR){}break;}usleep(50000);}
     note("worker status=0x%x",status);close(lock);if(logfile)std::fclose(logfile);if(usblog)std::fclose(usblog);

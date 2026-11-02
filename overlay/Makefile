@@ -10,7 +10,7 @@ FLAGS := -O2 -g -march=znver2 -fPIC -std=c++20 -fno-exceptions -fno-rtti -fno-th
 VENDOR := vendor/shellui-loader
 OBJECTS := build/pt.o build/loader.o build/injector.o build/remote-call.o build/blob.o
 .PHONY: all test inspect clean
-all: build/overlay-resolve.elf build/overlay-observe.elf build/overlay-widget.elf build/overlay-input.elf build/overlay-restart.elf inspect
+all: build/overlay-resolve.elf build/overlay-observe.elf build/overlay-widget.elf build/overlay-input.elf build/overlay-restart.elf build/overlay-service.elf inspect
 build/overlay-worker.elf: src/core/worker.cpp src/core/protocol.hpp src/core/hook.hpp src/app/overlay_ui.hpp src/app/overlay_app.cpp src/app/discord_app.inc $(VENDOR)/prologue.hpp
 	@mkdir -p build
 	$(CXX_PS5) $(FLAGS) -nostdlib++ -shared -Wl,-e,elf_main -Wl,-Bsymbolic -Wl,--hash-style=sysv src/core/worker.cpp -lkernel_sys -lSceLibcInternal -o $@
@@ -54,6 +54,11 @@ build/parent-restart.o: src/core/parent.cpp src/core/protocol.hpp $(HASH_SOURCES
 	@mkdir -p build
 	$(CXX_PS5) $(FLAGS) -DOVERLAY_MODE=4 -c $< -o $@
 build/overlay-restart.elf: build/parent-restart.o $(OBJECTS)
+	$(CXX_PS5) $(FLAGS) $^ -o $@
+build/parent-service.o: src/core/parent.cpp src/core/protocol.hpp $(HASH_SOURCES) Makefile
+	@mkdir -p build
+	$(CXX_PS5) $(FLAGS) -DOVERLAY_MODE=5 -c $< -o $@
+build/overlay-service.elf: build/parent-service.o $(OBJECTS)
 	$(CXX_PS5) $(FLAGS) $^ -o $@
 inspect: build/overlay-worker.elf
 	python3 tools/check_elf.py $<
