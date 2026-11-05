@@ -58,6 +58,7 @@ std::uint64_t command_seq=0;                 // UI thread only
 // and controller focus with the system. game_app is whose focus to give back.
 std::atomic<bool> holding{false};
 std::atomic<bool> editing{false}; // the keyboard is open: ShellUI gets the real pad, the app none
+std::atomic<unsigned> edit_pad_logged{0};
 std::atomic<int> game_app{-1};
 std::atomic<std::uint64_t> last_input_ms{0};
 constexpr std::uint64_t hold_idle_ms=30000;  // no button reaches us this long: give it back
@@ -541,6 +542,10 @@ bool engine_begin_edit(void*,void* widget,int user){
     int shown=1;(void)prop_set_int(class_field,field,"Visible",shown);
     (void)prop_set(class_field,field,"Text",fn<void*(*)(void*,const char*)>(StringNew)(domain,""));
     if(user>0)(void)prop_set_int(class_field,field,"UserId",user);
+    // Core.Ime enums (bytes): the Dialog keyboard takes the pad itself; Inline (the default
+    // here) waits for focus to move down into it, which our scene never does (probe 2).
+    std::int32_t dialog=2,send=1;(void)prop_set(class_field,field,"ImeWindowType",&dialog);
+    (void)prop_set(class_field,field,"ImeEnterLabel",&send);
     log_focus("before",field);
     scene_focusable(true,field);edit_begun_at=now_ms();
     const bool now=try_edit(field,"first");
@@ -729,6 +734,7 @@ PadData pad_hook(int device){
     last_buttons.store(buttons,std::memory_order_relaxed);
     if(editing.load(std::memory_order_acquire)){ // the system keyboard is open: it reads the pad
         last_input_ms.store(now_ms(),std::memory_order_relaxed);
+        if(data.down&&edit_pad_logged.fetch_add(1,std::memory_order_relaxed)<20)note("EDIT PAD down=%x",data.down);
         return data;}
     if((buttons&(bit_l3|bit_r3))==(bit_l3|bit_r3)){
         if(!chord_held.exchange(true,std::memory_order_relaxed)){
