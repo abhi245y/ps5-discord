@@ -545,11 +545,11 @@ bool engine_begin_edit(void*,void* widget,int user){
     int shown=1;(void)prop_set_int(class_field,field,"Visible",shown);
     (void)prop_set(class_field,field,"Text",fn<void*(*)(void*,const char*)>(StringNew)(domain,""));
     if(user>0)(void)prop_set_int(class_field,field,"UserId",user);
-    // Core.Ime enums (bytes): the Dialog keyboard takes the pad itself; Inline (the default
-    // here) waits for focus to move down into it, which our scene never does (probe 2).
-    std::int32_t dialog=2,send=1;(void)prop_set(class_field,field,"ImeWindowType",&dialog);
-    (void)prop_set(class_field,field,"ImeEnterLabel",&send);
+    // Core.Ime enums (bytes). The default (inline) keyboard shows (probe 2); Dialog (2) never
+    // appeared from our scene (probe 3). Send labels its enter key.
+    std::int32_t send=1;(void)prop_set(class_field,field,"ImeEnterLabel",&send);
     log_focus("before",field);
+    edit_pad_logged.store(0,std::memory_order_relaxed); // each try logs its own presses
     scene_focusable(true,field);edit_begun_at=now_ms();
     const bool now=try_edit(field,"first");
     edit_retry=now?0:2;
@@ -741,7 +741,7 @@ PadData pad_hook(int device){
     pad_polls.fetch_add(1,std::memory_order_relaxed);
     std::uint32_t buttons=data.buttons;
     last_buttons.store(buttons,std::memory_order_relaxed);
-    if(editing.load(std::memory_order_acquire)){ // the system keyboard is open: it reads the pad
+    if(editing.load(std::memory_order_acquire)){ // the system keyboard is open
         last_input_ms.store(now_ms(),std::memory_order_relaxed);
         if(data.down&&edit_pad_logged.fetch_add(1,std::memory_order_relaxed)<20)note("EDIT PAD down=%x",data.down);
         if(buttons&bit_options){
@@ -750,7 +750,9 @@ PadData pad_hook(int device){
             else if(now-since>=options_hold_ms.load(std::memory_order_relaxed)&&!options_fired.exchange(true,std::memory_order_relaxed))
                 edit_cancel.store(true,std::memory_order_release);}
         else{options_since.store(0,std::memory_order_relaxed);options_fired.store(false,std::memory_order_relaxed);}
-        return data;}
+        // Probe 4: the keyboard reads the pad itself (the right stick moved it in probe 2);
+        // ShellUI's PUI gets a quiet pad, or its D-pad/Cross handling takes the field's focus.
+        PadData quiet{};quiet.skip=data.skip;return quiet;}
     if((buttons&(bit_l3|bit_r3))==(bit_l3|bit_r3)){
         if(!chord_held.exchange(true,std::memory_order_relaxed)){
             chords.fetch_add(1,std::memory_order_relaxed);
