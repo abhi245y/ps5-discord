@@ -154,7 +154,9 @@ static int run(){
     (void)write_file(parent_dir,"stop.bin",r.token);note("deadline/stop; worker has independent deadline; inspect worker.log");return 1;
 }
 static void stop(int){overlay_abort_requested=1;}
+#if OVERLAY_MODE!=5 // the service runs its loader in its own process (main)
 static void* thread_main(void*){return reinterpret_cast<void*>(std::intptr_t(run()));}
+#endif
 extern "C" int sceKernelSetProcessName(const char* name);
 int main(){
     // Payload managers list elfldr's processes as payload.elf: say whose this one is.
