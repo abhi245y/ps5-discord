@@ -61,7 +61,7 @@ int main(){
     oui::Builder b{&vt,nullptr};
     reset();
     assert(build(b));
-    assert(used==119);
+    assert(used==118);
     for(int i=0;i<used;i++)assert(!widgets[i].visible); // nothing before the core says anything
 
     // In a call, two talking, the card on: their avatars and names, "You" under them.
@@ -214,7 +214,7 @@ int main(){
     edit_state=1;std::snprintf(edit_text,sizeof edit_text,"om");on_tick(10,b);assert(!sent[0]);
     std::snprintf(edit_text,sizeof edit_text,"omw");edit_state=0;on_tick(11,b);
     assert(!std::strcmp(sent,"typed omw")&&!w(edit_field)->visible);
-    sent[0]=0;on_pad(0x20,0,0,b);edit_state=0;for(int i=0;i<125;i++)on_tick(12+i,b); // never opened: given up
+    sent[0]=0;on_pad(0x20,0,0,b);edit_state=0;for(int i=0;i<605;i++)on_tick(12+i,b); // never opened: given up
     assert(!sent[0]&&!w(edit_field)->visible);
     on_gesture(oui::Gesture::Chord,b);assert(!capturing);
     on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0|1~~|",b);

@@ -35,7 +35,7 @@ Method* method_append=nullptr,*method_find=nullptr,*method_font_ctor=nullptr;
 // Pictures (optional: without them the overlay has panels and text only).
 void* class_image=nullptr,*class_asset=nullptr;Method* method_asset_ctor=nullptr;
 // The system keyboard: a PUI TextField (UI2) whose BeginEdit opens the OSK. Optional.
-void* class_field=nullptr;Method* method_begin_edit=nullptr,*method_is_editing=nullptr,*method_set_focus=nullptr;
+void* class_field=nullptr;Method* method_begin_edit=nullptr,*method_is_editing=nullptr,*method_set_focus=nullptr,*method_release_focus=nullptr;
 std::atomic<Update> original{nullptr};
 std::atomic<PadCall> pad_original{nullptr};
 std::atomic<ShareCall> share_original{nullptr};
@@ -462,7 +462,7 @@ void utf8_of(void* str,char* out,int cap){
     if(str&&cap>0){
         const std::int32_t n=*reinterpret_cast<const std::int32_t*>(static_cast<const char*>(str)+16);
         const std::uint16_t* c=reinterpret_cast<const std::uint16_t*>(static_cast<const char*>(str)+20);
-        for(std::int32_t i=0;i<n&&n<100000;i++){
+        for(std::int32_t i=0;i<n&&n<=4096;i++){ // a wrong layout guess reads 8 KB at most
             std::uint32_t u=c[i];
             if(u>=0xd800&&u<0xdc00&&i+1<n&&c[i+1]>=0xdc00&&c[i+1]<0xe000)u=0x10000+((u-0xd800)<<10)+(c[++i]-0xdc00);
             char b[4];int k=0;
@@ -501,9 +501,9 @@ bool engine_begin_edit(void*,void* widget,int user){
     int shown=1;(void)prop_set_int(class_field,field,"Visible",shown);
     (void)prop_set(class_field,field,"Text",fn<void*(*)(void*,const char*)>(StringNew)(domain,""));
     if(user>0)(void)prop_set_int(class_field,field,"UserId",user);
-    bool focus=false,begin=false;
-    if(method_set_focus)invoke(method_set_focus,field,nullptr,focus);
-    invoke(method_begin_edit,field,nullptr,begin);
+    bool focus=false,begin=false;void* exception=nullptr;
+    if(method_set_focus){invoke_ex(method_set_focus,field,nullptr,focus,&exception);describe_exception("SetFocus",exception);}
+    exception=nullptr;invoke_ex(method_begin_edit,field,nullptr,begin,&exception);describe_exception("BeginEdit",exception);
     const bool now=field_editing(field);
     editing.store(now,std::memory_order_release);
     note("EDIT begin user=%d focus=%d begin=%d editing=%d",user,focus,begin,now);
@@ -515,7 +515,11 @@ int engine_edit_poll(void*,void* widget,char* out,int cap){
     void* text=nullptr;
     if(!prop_get_object(class_field,field,"Text",&text))text=nullptr;
     utf8_of(text,out,cap);
-    if(editing.exchange(now,std::memory_order_acq_rel)!=now)note("EDIT %s chars=%d",now?"open":"closed",int(std::strlen(out)));
+    if(editing.exchange(now,std::memory_order_acq_rel)!=now){
+        note("EDIT %s chars=%d",now?"open":"closed",int(std::strlen(out)));
+        if(!now&&method_release_focus){ // or PUI focus stays on the hidden field (a dead D-pad at home)
+            bool ok=false;void* exception=nullptr;invoke_ex(method_release_focus,field,nullptr,ok,&exception);
+            describe_exception("ReleaseFocus",exception);note("EDIT focus released=%d",ok);}}
     return now?1:0;}
 constexpr oui::Builder::Vt engine_vt{
     engine_add_panel,engine_add_label,engine_set_text,engine_set_visible,engine_set_color,
@@ -747,7 +751,8 @@ bool resolve_update_methods(){
         if(class_field){
             method_begin_edit=fn<Method*(*)(void*,const char*,int)>(MethodFromName)(class_field,"BeginEdit",0);
             method_is_editing=fn<Method*(*)(void*,const char*,int)>(MethodFromName)(class_field,"IsEditing",0);
-            method_set_focus=method_inherited(class_field,"SetFocus",0);}
+            method_set_focus=method_inherited(class_field,"SetFocus",0);
+            method_release_focus=method_inherited(class_field,"ReleaseFocus",0);}
         note("KEYBOARD field=%p begin=%p editing=%p focus=%p",class_field,method_begin_edit,method_is_editing,method_set_focus);
         describe_types();
         note("PICTURES image=%p asset=%p ctor=%p",class_image,class_asset,method_asset_ctor);

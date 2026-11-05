@@ -131,7 +131,8 @@ char seen[2048]=""; // the last line without its beat
 // The keyboard probe (Chat comes next): Triangle on the call page opens the system keyboard.
 void* edit_field=nullptr;
 int typing=0;              // frames since begin_edit while it runs, 0 when not typing
-bool typing_seen=false;    // the keyboard reported open at least once // the frame of the core's last line: it changes every second (the beat)
+bool typing_seen=false;    // the keyboard reported open at least once
+bool edit_tried=false;     // add_field ran (once: nullptr means this ShellUI has no keyboard for us) // the frame of the core's last line: it changes every second (the beat)
 constexpr std::uint64_t kStaleFrames=60*10; // 10 s without one: the core crashed or was killed
 constexpr std::uint64_t kPendingFrames=90; // 1.5 s at 60 fps
 bool open=false;
@@ -495,7 +496,7 @@ void reset(){
     for(int i=0;i<kSettingRows;i++)set_bg[i]=set_name[i]=set_value[i]=set_chevron[i]=set_toggle[i]=nullptr;
     for(int i=0;i<2;i++)slider_track[i]=slider_fill[i]=slider_knob[i]=nullptr;
     for(int j=0;j<kOptions;j++)drop_word[j]=nullptr;
-    nitro_note[0]=nitro_note[1]=nullptr;armed=-1;edit_field=nullptr;typing=0;typing_seen=false;
+    nitro_note[0]=nitro_note[1]=nullptr;armed=-1;edit_field=nullptr;typing=0;typing_seen=false;edit_tried=false;
     dock=dock_mid=dock_end=title=clock=timer=tile_sub=tile_focus=rule=nullptr;
     card=pill=card_head=card_call=you_ring=you_mic=you_text=card_rule=card_hint=nullptr;
     for(int i=0;i<kRows;i++)row_bg[i]=row_avatar[i]=row_ring[i]=row_name[i]=row_icon[i]=nullptr;
@@ -559,7 +560,6 @@ bool build(Builder& b){
     set_focus=image(b,at,"setting_focus");
     drop_bg=image(b,at,"dropdown_3");drop_on=image(b,at,"option_on");drop_check=image(b,at,"check");
     for(int j=0;j<kOptions;j++)drop_word[j]=label(b,at,21,3,kWhite);
-    edit_field=b.add_field({kDockX+37,kDockY+880,kDockW-74,56},"Message"); // optional: no keyboard, no field
     nitro_note[0]=label(b,at,19,3,kText,0,"Needs Nitro or a boosted server");
     nitro_note[1]=label(b,at,19,0,kDim);
     for(void* w:set_name)if(!w)return false;
@@ -667,7 +667,10 @@ void on_pad(std::uint32_t down,float lx,float,Builder& b){
     if(dir||(lx>-kStickRest&&lx<kStickRest))stick=dir;
     if(step){focus=((focus+step)%kTiles+kTiles)%kTiles;render(b);}
     if((down&kCross)&&(st.state=='c'||st.state=='j'))b.send(kCommands[focus]);
-    if((down&kTriangle)&&edit_field&&!typing&&b.begin_edit(edit_field,st.user)){typing=1;typing_seen=false;}
+    if((down&kTriangle)&&!typing){
+        // Made on the first press, not at load: a fault in it costs one home screen restart.
+        if(!edit_field&&!edit_tried){edit_tried=true;edit_field=b.add_field({kDockX+37,kDockY+880,kDockW-74,56},"Message");}
+        if(edit_field&&b.begin_edit(edit_field,st.user)){typing=1;typing_seen=false;}}
 }
 
 // The core is gone (state x): close an open panel so the game gets its pad back.
@@ -706,7 +709,7 @@ void on_tick(std::uint64_t frame,Builder& b){
         char text[256];
         const int r=b.edit_poll(edit_field,text,sizeof text);
         typing_seen|=r==1;
-        if(r<0||(r==0&&(typing_seen||++typing>120))){
+        if(r<0||(r==0&&(typing_seen||++typing>600))){ // a first keyboard can take seconds
             typing=0;
             b.set_visible(edit_field,false);
             if(r==0&&typing_seen&&text[0]){char command[48];std::snprintf(command,sizeof command,"typed %s",text);b.send(command);}}
