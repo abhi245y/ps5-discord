@@ -5,6 +5,10 @@
 
 void chat_set_token(const char *token);
 void chat_token(char *out, size_t cap); // a copy: "" once the session is reset
+// The JSON body of a new message in channel_id (content, nonce, tts false, flags 0, mobile_network_type;
+// nonce, sticker and reply_to optional, NULL to leave out). Caller frees. Shared by the web API and the overlay.
+char *chat_message_json(const char *channel_id, const char *content, const char *nonce, const char *sticker,
+                        const char *reply_to);
 void chat_reset(void);        // the account is gone (another console user's is next)
 
 // Every gateway dispatch: READY builds the account, the rest keep it current

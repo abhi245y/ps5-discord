@@ -5,6 +5,8 @@
 // (cmd.bin). With Settings' overlay on, the core starts the overlay service through elfldr.
 // Console only; the host build writes nothing.
 #pragma once
+#include <stddef.h>
+#include <stdint.h>
 
 void overlay_init(void);     // starts the feed thread; once, at startup
 void overlay_shutdown(void); // the core is quitting: the overlay hides (it stays loaded)
@@ -34,3 +36,8 @@ typedef struct {
 int overlay_line(char *out, int cap, char state, char me, int glance, const char *live, int viewers,
                  const char *call, const char *timer, const char *quality, const char *settings,
                  const overlay_headset *bt, const overlay_person *people, int count);
+
+// send.bin (overlay/src/core/protocol.hpp Outbox, up to 8192 bytes of text): the seq and the
+// NUL-terminated text, 0 when the file is missing or not valid. cap must be at least 8193.
+// Exposed for the selftest.
+uint64_t overlay_read_outbox(const char *path, char *text, size_t cap);

@@ -13,6 +13,10 @@
 //    Headset (L1/R1); up/down picks a row; Cross flips a toggle or opens a row's choices
 //    inline (up/down, Cross picks, Circle closes); left/right moves a slider or the hold
 //    time. Changes go to the core as set / bt commands.
+//  - the keyboard (our own, over the panel's left): Triangle on the call page opens it for the
+//    call's text chat. D-pad or stick moves, Cross types, Square erases, Triangle is a space,
+//    L1/R1 move the caret, L2 is Shift (twice: caps lock), R2 sends (send.bin, the core posts
+//    it), Circle closes it and keeps the draft. Three pages (lower/upper, symbols).
 // Art: app/assets/overlay (overlay/tools/overlay_art.py, sizes shared with this file).
 // Avatars: round PNGs the core keeps in the overlay's av/ folder.
 //
@@ -21,7 +25,7 @@
 //   state  c in a call, j joining, - none, x the core quit (nothing opens)
 //   me     o mic on, m muted, d deafened
 //   glance 1 show the talking card               live  Go Live's time, "" when off
-//   settings  the kSettings values, dot-separated     headsets  on~connected addr~addr^name;...
+//   settings  the kSettings values, dot-separated (anything after them is ignored)     headsets  on~connected addr~addr^name;...
 //   people id~avatar~name~flag,...  (talking first; flag t talking, m muted, d deafened, -)
 // The worker is built without the C++ library: plain buffers only.
 
@@ -43,7 +47,8 @@ const Color kLeaveInk{1.0f,0.42f,0.37f,1};
 
 // GamePadButtons bits, read on 13.00 (worker.log "PAD down=", 2026-11-02/03).
 constexpr std::uint32_t kLeft=0x1,kUp=0x2,kRight=0x4,kDown=0x8,kCircle=0x40,kCross=0x80,kOptionsButton=0x100,
-                        kL1=0x400,kR1=0x800,kTriangle=0x20;
+                        kL1=0x400,kR1=0x800,kTriangle=0x20,kSquare=0x10,
+                        kL2=0x1000,kR2=0x2000; // L2/R2 inferred from the pattern, not seen yet
 constexpr float kStickMove=0.6f,kStickRest=0.3f;
 
 // A: the panel.
@@ -111,7 +116,6 @@ struct State {
     char live[16]="", call[64]="", timer[16]="", quality[32]="";
     int viewers=0;
     int set[kSettingCount]={0,5,5,1,0,3,1,1,1,0,0};
-    int user=0; // the console user on screen (after the settings): the system keyboard is theirs
     bool bt_on=false,airpods=false; // airpods: Call mode applies (others are hands-free in calls)
     char connected[18]="";
     char dev_addr[4][18]={}, dev_name[4][40]={};
@@ -126,13 +130,8 @@ State st;
 struct Pending { int value=0; std::uint64_t until=0; };
 Pending pending[kSettingCount+1]; // the last: Bluetooth on/off
 std::uint64_t frame_now=0;
-std::uint64_t alive_at=0;
-char seen[2048]=""; // the last line without its beat
-// The keyboard probe (Chat comes next): Triangle on the call page opens the system keyboard.
-void* edit_field=nullptr;
-int typing=0;              // frames since begin_edit while it runs, 0 when not typing
-bool typing_seen=false;    // the keyboard reported open at least once
-bool edit_tried=false;     // add_field ran (once: nullptr means this ShellUI has no keyboard for us) // the frame of the core's last line: it changes every second (the beat)
+std::uint64_t alive_at=0; char seen[2048]=""; // the last line without its beat
+// the frame of the core's last line: it changes every second (the beat)
 constexpr std::uint64_t kStaleFrames=60*10; // 10 s without one: the core crashed or was killed
 constexpr std::uint64_t kPendingFrames=90; // 1.5 s at 60 fps
 bool open=false;
@@ -149,7 +148,7 @@ void* row_bg[kRows]={}; void* row_avatar[kRows]={}; void* row_ring[kRows]={}; vo
 void* row_icon[kRows]={};
 void* tile[kTiles]={}; void* tile_icon[kTiles]={}; void* tile_label[kTiles]={}; void* tile_sub=nullptr;
 void* tile_focus=nullptr; void* rule=nullptr;
-void* hint_icon[3]={}; void* hint_text[3]={};
+void* hint_icon[4]={}; void* hint_text[4]={};
 // The talking card.
 void* card=nullptr; void* pill=nullptr; void* card_head=nullptr; void* card_call=nullptr;
 void* talk_avatar[kTalkRows]={}; void* talk_ring[kTalkRows]={}; void* talk_name[kTalkRows]={};
@@ -214,7 +213,6 @@ bool parse(const char* line,State& s){
     char values[128];field(&p,values,sizeof values);
     const char* v=values;
     for(int i=0;i<kSettingCount&&*v;i++){char one[8];field(&v,one,sizeof one,'.');std::sscanf(one,"%d",&s.set[i]);}
-    if(*v){char one[16];field(&v,one,sizeof one,'.');std::sscanf(one,"%d",&s.user);}
     char bt[400];field(&p,bt,sizeof bt);
     const char* q=bt;
     field(&q,f,sizeof f,'~');s.bt_on=f[0]=='1'||f[0]=='2';s.airpods=f[0]=='2';
@@ -255,9 +253,9 @@ void place(Builder& b,float tiles_top,float content_end){
         b.set_rect(tile_focus,{kRowX+kTileStep*focus-6,tiles_top-6,134,152});}
     b.set_rect(rule,{kRowX,ry,kRowW,2});
     // A label's text sits high in its box: 5 px lower lines it up with the 37 px glyphs.
-    const Rect glyph_at[3]={{1361,hy+1,37,37},{1510,hy+1,37,37},{1650,hy+5,78,28}};
-    const Rect word_at[3]={{1406,hy+5,96,40},{1555,hy+5,90,40},{1736,hy+5,132,40}};
-    for(int i=0;i<3;i++){b.set_rect(hint_icon[i],glyph_at[i]);b.set_rect(hint_text[i],word_at[i]);}
+    const Rect glyph_at[4]={{1347,hy+1,37,37},{1472,hy+1,37,37},{1696,hy+5,78,28},{1587,hy+1,37,37}};
+    const Rect word_at[4]={{1392,hy+5,76,40},{1517,hy+5,66,40},{1782,hy+5,86,40},{1632,hy+5,60,40}};
+    for(int i=0;i<4;i++){b.set_rect(hint_icon[i],glyph_at[i]);b.set_rect(hint_text[i],word_at[i]);}
 }
 
 void set_avatar(Builder& b,void* w,const Person& who){
@@ -393,6 +391,101 @@ void render_settings(Builder& b){
     show(b,nitro_note[0],note);show(b,nitro_note[1],note);
 }
 
+// The keyboard. Geometry and tables go with overlay/tools/overlay_art.py (KB_*, LOWER, SYMBOLS).
+constexpr float kKbX=60,kKbY=630,kKbW=1232,kKbH=394,kKbPad=26,kKbCol=108,kKbRow=70,kKbKey=62;
+constexpr float kKbFieldY=546,kKbFieldH=72;
+constexpr int kKbCols=11,kKbMax=2000; // characters: Discord's limit
+enum class Fn{shift,page,space,back,left,right,send};
+struct FuncKey { float x,w; Fn fn; };
+constexpr FuncKey kFuncs[]={{0,1.5f,Fn::shift},{1.5f,1.5f,Fn::page},{3,3,Fn::space},{6,1.5f,Fn::back},
+                            {7.5f,1,Fn::left},{8.5f,1,Fn::right},{9.5f,1.5f,Fn::send}};
+constexpr int kFuncCount=int(sizeof kFuncs/sizeof *kFuncs);
+constexpr const char* kLower[4]={"1234567890@","qwertyuiop#","asdfghjkl'/","zxcvbnm,.?!"};
+constexpr const char* kSymbols[3][kKbCols]={
+    {"!","\"","#","$","%","&","'","(",")","*","+"},
+    {"-","/",":",";","<","=",">","[","]","\\","^"},
+    {"_","`","{","|","}","~",",",".","?","\xe2\x82\xac","\xc2\xa3"}};
+void* kb_field=nullptr; void* kb_input=nullptr; void* kb_pages=nullptr; void* kb_hl=nullptr;
+bool kb=false;
+char kb_text[kKbMax*4+1]="";
+int kb_len=0,kb_chars=0,kb_caret=0; // bytes, characters, the caret's byte offset
+int kb_shift=0;  // 0 off, 1 the next letter, 2 caps lock
+int kb_page=0;   // 0 letters, 1 symbols
+int kb_row=1,kb_col=0; // the highlighted key (row 4: an index into kFuncs)
+float kb_x=0.5f; // the column it was last moved to along a row: up and down keep it
+int kb_sx=0,kb_sy=0; // the stick's last direction
+
+int key_count(int row){return row<4?kKbCols:kFuncCount;}
+float key_left(int row,int i){return row<4?float(i):kFuncs[i].x;}
+float key_width(int row,int i){return row<4?1.0f:kFuncs[i].w;}
+float key_center(int row,int i){return key_left(row,i)+key_width(row,i)/2;}
+// The key of a row nearest (by its middle) to x.
+int key_near(int row,float x){
+    int best=0;float gap=1e9f;
+    for(int i=0;i<key_count(row);i++){
+        const float d=key_center(row,i)>x?key_center(row,i)-x:x-key_center(row,i);
+        if(d<gap-0.001f){gap=d;best=i;}}
+    return best;
+}
+// What a character key types now (UTF-8, row 0 to 3).
+const char* key_text(int row,int col,char* one){
+    if(kb_page&&row>0)return kSymbols[row-1][col];
+    one[0]=kLower[row][col];one[1]=0;
+    if(kb_shift&&one[0]>='a'&&one[0]<='z')one[0]=char(one[0]-32);
+    return one;
+}
+
+// The text as the field shows it: the part around the caret (an estimate of the text's width
+// stands in for measuring; PUI cuts what is too long at its end, which would hide the caret).
+float char_em(unsigned cp){
+    if(cp>=0x2e80)return 1.0f;
+    if(cp>=0x80)return 0.7f;
+    if(cp=='m'||cp=='w'||cp=='M'||cp=='W'||cp=='@')return 0.95f;
+    if(std::strchr("iljtf'.,:;!|I()[] `",int(cp)))return 0.34f;
+    return cp>='A'&&cp<='Z'?0.72f:0.62f;
+}
+unsigned cp_at(const char* s,int at,int* len){
+    const unsigned char c=static_cast<unsigned char>(s[at]);
+    int n=c<0x80?1:c<0xe0?2:c<0xf0?3:4;
+    unsigned cp=n==1?c:n==2?c&0x1f:n==3?c&0x0f:c&0x07;
+    for(int i=1;i<n;i++){if((static_cast<unsigned char>(s[at+i])&0xc0)!=0x80){n=i;break;}cp=cp<<6|(static_cast<unsigned char>(s[at+i])&0x3f);}
+    *len=n;return cp;
+}
+int cp_before(const char* s,int at){int p=at-1;while(p>0&&(static_cast<unsigned char>(s[p])&0xc0)==0x80)p--;return p;}
+void field_text(char* out,std::size_t cap){
+    constexpr float kSize=30,kBudget=1020; // px of text the box holds (less the caret and the ellipses)
+    float used=0;
+    int a=kb_caret,z=kb_caret;
+    auto right=[&](float room){ // grows the window rightwards by room px
+        while(z<kb_len){int n;const float w=char_em(cp_at(kb_text,z,&n))*kSize;if(used+w>room)break;used+=w;z+=n;}};
+    right(kBudget*0.25f);
+    while(a>0){const int p=cp_before(kb_text,a);int n;const float w=char_em(cp_at(kb_text,p,&n))*kSize;
+        if(used+w>kBudget)break;used+=w;a=p;}
+    right(kBudget);
+    int at=0;
+    auto put=[&](const char* s,int n){if(at+n<int(cap)){std::memcpy(out+at,s,std::size_t(n));at+=n;}};
+    if(a>0)put("\xe2\x80\xa6",3);
+    put(kb_text+a,kb_caret-a);put("|",1);put(kb_text+kb_caret,z-kb_caret);
+    if(z<kb_len)put("\xe2\x80\xa6",3);
+    out[at]=0;
+}
+
+void render_kb(Builder& b){
+    const bool on=kb&&open;
+    show(b,kb_field,on);show(b,kb_input,on);show(b,kb_pages,on);show(b,kb_hl,on);
+    if(!on)return;
+    static char text[kKbMax*4+16]; // off the stack
+    if(kb_len){field_text(text,sizeof text);b.set_text_style(kb_input,30,3,kWhite,0);}
+    else{
+        if(st.call[0])std::snprintf(text,sizeof text,"Message #%s",st.call);else std::snprintf(text,sizeof text,"Message");
+        b.set_text_style(kb_input,30,3,kDim,0);}
+    b.set_text(kb_input,text);
+    art(b,kb_pages,kb_page?"kb_symbols":kb_shift==2?"kb_caps":kb_shift?"kb_upper":"kb_lower");
+    const float w=key_width(kb_row,kb_col);
+    art(b,kb_hl,w>2?"kb_hl_3":w>1?"kb_hl_15":"kb_hl_1");
+    b.set_rect(kb_hl,{kKbX+kKbPad+kKbCol*key_left(kb_row,kb_col),kKbY+kKbPad+kKbRow*kb_row,kKbCol*w-8,kKbKey});
+}
+
 void render(Builder& b){
     const bool in_call=st.state=='c'||st.state=='j';
     char text[128];
@@ -483,7 +576,11 @@ void render(Builder& b){
     b.set_text(hint_text[0],"Select");
     b.set_text(hint_text[1],settings&&!expanded?"Back":"Close");
     b.set_text(hint_text[2],"Settings");
-    for(int i=0;i<3;i++){show(b,hint_icon[i],open&&(i<2||!settings));show(b,hint_text[i],open&&(i<2||!settings));}
+    b.set_text(hint_text[3],"Chat");
+    for(int i=0;i<4;i++){
+        const bool on=open&&(i<2||(!settings&&(i==2||in_call)));
+        show(b,hint_icon[i],on);show(b,hint_text[i],on);}
+    render_kb(b);
 }
 
 }  // namespace
@@ -496,12 +593,14 @@ void reset(){
     for(int i=0;i<kSettingRows;i++)set_bg[i]=set_name[i]=set_value[i]=set_chevron[i]=set_toggle[i]=nullptr;
     for(int i=0;i<2;i++)slider_track[i]=slider_fill[i]=slider_knob[i]=nullptr;
     for(int j=0;j<kOptions;j++)drop_word[j]=nullptr;
-    nitro_note[0]=nitro_note[1]=nullptr;armed=-1;edit_field=nullptr;typing=0;typing_seen=false;edit_tried=false;
+    nitro_note[0]=nitro_note[1]=nullptr;armed=-1;
+    kb=false;kb_text[0]=0;kb_len=kb_chars=kb_caret=0;kb_shift=kb_page=0;kb_row=1;kb_col=0;kb_x=0.5f;kb_sx=kb_sy=0;
+    kb_field=kb_input=kb_pages=kb_hl=nullptr;
     dock=dock_mid=dock_end=title=clock=timer=tile_sub=tile_focus=rule=nullptr;
     card=pill=card_head=card_call=you_ring=you_mic=you_text=card_rule=card_hint=nullptr;
     for(int i=0;i<kRows;i++)row_bg[i]=row_avatar[i]=row_ring[i]=row_name[i]=row_icon[i]=nullptr;
     for(int i=0;i<kTiles;i++)tile[i]=tile_icon[i]=tile_label[i]=nullptr;
-    for(int i=0;i<3;i++)hint_icon[i]=hint_text[i]=nullptr;
+    for(int i=0;i<4;i++)hint_icon[i]=hint_text[i]=nullptr;
     for(int i=0;i<kTalkRows;i++)talk_avatar[i]=talk_ring[i]=talk_name[i]=talk_bars[i]=nullptr;
 }
 
@@ -534,9 +633,9 @@ bool build(Builder& b){
     tile_sub=label(b,at,14,0,kWhite,1);
     tile_focus=image(b,at,"tile_focus");
     rule=image(b,at,"line");
-    const char* glyphs[3]={"glyph_cross","glyph_circle","chip_options"};
-    const char* words[3]={"Select","Close","Settings"};
-    for(int i=0;i<3;i++){
+    const char* glyphs[4]={"glyph_cross","glyph_circle","chip_options","glyph_triangle"};
+    const char* words[4]={"Select","Close","Settings","Chat"};
+    for(int i=0;i<4;i++){
         hint_icon[i]=image(b,at,glyphs[i]);
         hint_text[i]=label(b,at,21,3,kText,0,words[i]);
     }
@@ -584,11 +683,18 @@ bool build(Builder& b){
     card_rule=image(b,{kCardX+20,kCardY+267,275,2},"glance_line");
     card_hint=label(b,{kCardX+20,kCardY+279,275,32},17,0,kDim,0,"Hold Options for controls");
 
+    // The keyboard, on top of everything (placed in render_kb).
+    kb_field=image(b,{kKbX,kKbFieldY,kKbW,kKbFieldH},"kb_field");
+    kb_input=label(b,{kKbX+28,kKbFieldY+14,kKbW-56,46},30,3,kWhite);
+    kb_pages=image(b,{kKbX,kKbY,kKbW,kKbH},"kb_lower");
+    kb_hl=image(b,at,"kb_hl_1");
+
     // Text is the overlay's job; pictures may be missing on a firmware without ImageBox.
     if(!title||!timer||!tile_sub||!card_head||!card_call||!you_text||!card_hint)return false;
     for(void* w:row_name)if(!w)return false;
     for(void* w:tile_label)if(!w)return false;
     for(void* w:talk_name)if(!w)return false;
+    if(!kb_input)return false;
     render(b);
     return true;
 }
@@ -603,6 +709,70 @@ void apply(int s,int v,Builder& b){
     char command[48];std::snprintf(command,sizeof command,"set %s %d",set.key,v);
     b.send(command);
     if(s==5)b.set_hold((v+3)*100);
+}
+
+// Typing. ponytail: no caret blink, no key repeat.
+void kb_type(const char* s){
+    const int n=int(std::strlen(s));
+    if(kb_chars>=kKbMax||kb_len+n>int(sizeof kb_text)-1)return;
+    std::memmove(kb_text+kb_caret+n,kb_text+kb_caret,std::size_t(kb_len-kb_caret+1));
+    std::memcpy(kb_text+kb_caret,s,std::size_t(n));
+    kb_len+=n;kb_caret+=n;kb_chars++;
+    if(kb_shift==1&&n==1&&s[0]>='A'&&s[0]<='Z')kb_shift=0; // one-shot: used by a letter
+}
+void kb_erase(){
+    if(!kb_caret)return;
+    const int p=cp_before(kb_text,kb_caret);
+    std::memmove(kb_text+p,kb_text+kb_caret,std::size_t(kb_len-kb_caret+1));
+    kb_len-=kb_caret-p;kb_caret=p;kb_chars--;
+}
+void kb_move_caret(int dir){
+    if(dir<0&&kb_caret)kb_caret=cp_before(kb_text,kb_caret);
+    else if(dir>0&&kb_caret<kb_len){int n;cp_at(kb_text,kb_caret,&n);kb_caret+=n;}
+}
+void kb_shift_key(){if(!kb_page)kb_shift=kb_shift==0?1:kb_shift==1?2:0;} // twice in a row: caps lock
+
+void kb_send(Builder& b){
+    if(!kb_len)return;
+    b.send_text(kb_text);
+    kb_text[0]=0;kb_len=kb_chars=kb_caret=0;kb_shift=0;kb_page=0;
+    kb=false;
+}
+
+void kb_press(Builder& b){
+    if(kb_row<4){char one[2];kb_type(key_text(kb_row,kb_col,one));return;}
+    switch(kFuncs[kb_col].fn){
+    case Fn::shift:kb_shift_key();break;
+    case Fn::page:kb_page^=1;break;
+    case Fn::space:kb_type(" ");break;
+    case Fn::back:kb_erase();break;
+    case Fn::left:kb_move_caret(-1);break;
+    case Fn::right:kb_move_caret(1);break;
+    case Fn::send:kb_send(b);break;}
+}
+
+// The keyboard's buttons (the panel stays captured; Options taps do nothing here).
+void kb_pad(std::uint32_t down,float lx,float ly,Builder& b){
+    if(down&kCircle){kb=false;render(b);return;}
+    const int sx=lx<-kStickMove?-1:lx>kStickMove?1:0,sy=ly<-kStickMove?-1:ly>kStickMove?1:0; // up is negative
+    int dx=((down&kRight)?1:0)-((down&kLeft)?1:0),dy=((down&kDown)?1:0)-((down&kUp)?1:0);
+    if(sx&&sx!=kb_sx)dx+=sx;
+    if(sy&&sy!=kb_sy)dy+=sy;
+    if(sx||(lx>-kStickRest&&lx<kStickRest))kb_sx=sx;
+    if(sy||(ly>-kStickRest&&ly<kStickRest))kb_sy=sy;
+    dx=dx<0?-1:dx>0?1:0;dy=dy<0?-1:dy>0?1:0;
+    if(!down&&!dx&&!dy)return;
+    if(dx){const int n=key_count(kb_row);kb_col=((kb_col+dx)%n+n)%n;kb_x=key_center(kb_row,kb_col);}
+    if(dy){const int r=kb_row+dy;if(r>=0&&r<5){kb_row=r;kb_col=key_near(r,kb_x);}}
+    if(down&kSquare)kb_erase();
+    if(down&kTriangle)kb_type(" ");
+    if(down&kL1)kb_move_caret(-1);
+    if(down&kR1)kb_move_caret(1);
+    if(down&kL2)kb_shift_key();
+    if(down&kCross)kb_press(b);
+    if(down&kR2)kb_send(b);
+    if(!kb){render(b);return;} // sent
+    render_kb(b);
 }
 
 // The mini settings' buttons. ponytail: the D-pad only; the stick moves the call page's tiles.
@@ -652,13 +822,14 @@ void settings_pad(std::uint32_t down,Builder& b){
 void on_gesture(Gesture,Builder& b){
     if(!open&&st.state=='x')return; // the core is gone: nothing to show or do
     open=!open;
-    focus=0;stick=0;settings=false;expanded=false;
+    focus=0;stick=0;settings=false;expanded=false;kb=false; // the draft stays
     b.set_capture(open);
     render(b);
 }
 
-void on_pad(std::uint32_t down,float lx,float,Builder& b){
+void on_pad(std::uint32_t down,float lx,float ly,Builder& b){
     if(!open)return;
+    if(kb){kb_pad(down,lx,ly,b);return;}
     if(down&kOptionsButton){settings=!settings;tab=row=0;expanded=false;render(b);return;}
     if(settings){settings_pad(down,b);return;}
     if(down&kCircle){on_gesture(Gesture::Chord,b);return;}
@@ -667,16 +838,13 @@ void on_pad(std::uint32_t down,float lx,float,Builder& b){
     if(dir||(lx>-kStickRest&&lx<kStickRest))stick=dir;
     if(step){focus=((focus+step)%kTiles+kTiles)%kTiles;render(b);}
     if((down&kCross)&&(st.state=='c'||st.state=='j'))b.send(kCommands[focus]);
-    if((down&kTriangle)&&!typing){
-        // Made on the first press, not at load: a fault in it costs one home screen restart.
-        if(!edit_field&&!edit_tried){edit_tried=true;edit_field=b.add_field({kDockX+37,kDockY+880,kDockW-74,56},"Message");}
-        if(edit_field&&b.begin_edit(edit_field,st.user)){typing=1;typing_seen=false;}}
+    if((down&kTriangle)&&(st.state=='c'||st.state=='j')){kb=true;kb_x=key_center(kb_row,kb_col);render(b);}
 }
 
 // The core is gone (state x): close an open panel so the game gets its pad back.
 void go_inert(Builder& b){
     if(!open)return;
-    open=settings=expanded=false;
+    open=settings=expanded=kb=false;
     b.set_capture(false);
 }
 
@@ -700,20 +868,12 @@ void on_text(const char* line,Builder& b){
     if(row>=rows_in(kTabs[tab])){row=rows_in(kTabs[tab])-1;expanded=false;} // AirPods left: Call mode went
     if(st.set[5]!=hold)b.set_hold((st.set[5]+3)*100);
     if(st.state=='x')go_inert(b);
+    if(st.state!='c'&&st.state!='j')kb=false; // the draft stays
     render(b);
 }
 
 void on_tick(std::uint64_t frame,Builder& b){
     frame_now=frame;
-    if(typing){ // the keyboard: done once it closed (or never opened within 2 s)
-        char text[256];
-        const int r=b.edit_poll(edit_field,text,sizeof text);
-        typing_seen|=r==1;
-        if(r<0||(r==0&&(typing_seen||++typing>600))){ // a first keyboard can take seconds
-            typing=0;
-            b.set_visible(edit_field,false);
-            if(r==0&&typing_seen&&text[0]){char command[48];std::snprintf(command,sizeof command,"typed %s",text);b.send(command);}}
-        else if(r==1)typing=1;}
     if(st.state!='x'&&frame_now-alive_at>kStaleFrames){ // no beat: as if the core quit
         st.state='x';
         go_inert(b);

@@ -20,7 +20,6 @@
 #include "chat.h"
 #include "headset.h"
 #include "prefs.h"
-#include "rp_pair.h"
 #include "stream.h"
 #include "http.h"
 #include "log.h"
@@ -38,6 +37,13 @@ typedef struct {
     char text[48];
 } overlay_command;
 #define OVERLAY_MAGIC 0x31434f504c564f44ULL
+#define OVERLAY_TEXT_MAX 8192
+// protocol.hpp Outbox (send.bin), written by the overlay (Builder::send_text).
+typedef struct {
+    uint64_t signature, seq;
+    uint32_t len, reserved;
+    char text[OVERLAY_TEXT_MAX];
+} overlay_outbox;
 #define MAX_PEOPLE 8
 #define AVATAR_PX 128 // round PNGs in OVERLAY_DIR/av, scaled down by the overlay
 
@@ -123,6 +129,23 @@ int overlay_line(char *out, int cap, char state, char me, int glance, const char
             first = 0;
         }
     return at;
+}
+
+// The typed message in the outbox file: its seq (0 when there is none, or it is not valid) and
+// the text, NUL-terminated, into text (cap at least OVERLAY_TEXT_MAX + 1).
+uint64_t overlay_read_outbox(const char *path, char *text, size_t cap)
+{
+    static overlay_outbox box; // the feed and tests only; 8 KB stays off the small thread stacks
+    FILE *f = fopen(path, "rb");
+    if (!f)
+        return 0;
+    const int ok = fread(&box, 1, sizeof box, f) == sizeof box && fgetc(f) == EOF;
+    fclose(f);
+    if (!ok || box.signature != OVERLAY_MAGIC || box.len == 0 || box.len > sizeof box.text || cap <= box.len)
+        return 0;
+    memcpy(text, box.text, box.len);
+    text[box.len] = 0;
+    return box.seq;
 }
 
 #ifdef __PROSPERO__
@@ -304,8 +327,6 @@ static void compose(char *line, int cap, time_t *live_since)
     int n = 0;
     for (size_t i = 0; i < sizeof keys / sizeof *keys; i++)
         n += snprintf(settings + n, sizeof settings - (size_t)n, "%s%d", i ? "." : "", prefs_get(keys[i]));
-    // Then the console user on screen: the overlay's system keyboard opens for them.
-    snprintf(settings + n, sizeof settings - (size_t)n, ".%d", (int)rp_foreground());
     overlay_headset bt = {0};
     cJSON *hs = hs_state_json();
     bt.on = cJSON_IsTrue(cJSON_GetObjectItem(hs, "on"));
@@ -394,8 +415,6 @@ static void run_command(const char *what)
         r = hs_disconnect();
     else if (strcmp(what, "bt on") == 0 || strcmp(what, "bt off") == 0)
         r = hs_power(what[4] == 'n'); // Settings' switch, kept for the next start too
-    else if (strncmp(what, "typed ", 6) == 0)
-        LOG("overlay: keyboard probe typed \"%s\"", what + 6); // ponytail: the probe; Chat sends it
     else
         why = "unknown";
     LOG("overlay: %s -> %d %s", what, r, why);
@@ -430,6 +449,58 @@ static int running(void)
     }
     last_ok = 0;
     return 0;
+}
+
+// A typed message, posted from its own thread: the feed writes the overlay's beat every second
+// and a slow request must not stall it.
+typedef struct {
+    char channel[32];
+    char text[];
+} outgoing;
+
+static void *post_thread(void *arg)
+{
+    outgoing *m = arg;
+    char token[256], path[64];
+    chat_token(token, sizeof token);
+    char *json = chat_message_json(m->channel, m->text, NULL, NULL, NULL);
+    snprintf(path, sizeof path, "/channels/%s/messages", m->channel);
+    http_response r = http_request("POST", path, json, token);
+    LOG("overlay: message of %zu bytes to %s -> %d", strlen(m->text), m->channel, r.status);
+    free(r.body);
+    free(json);
+    free(m);
+    return NULL;
+}
+
+// The overlay's keyboard sent text: to the call's own text chat; dropped outside a call.
+static void send_text(const char *text)
+{
+    char *state = voice_state_json();
+    cJSON *v = state ? cJSON_Parse(state) : NULL;
+    free(state);
+    const char *st = cJSON_GetStringValue(cJSON_GetObjectItem(v, "state"));
+    const char *channel = cJSON_GetStringValue(cJSON_GetObjectItem(v, "channel"));
+    outgoing *m = NULL;
+    if (!st || !strcmp(st, "idle") || !strcmp(st, "error") || !channel || !channel[0] || strlen(channel) >= sizeof m->channel)
+        LOG("overlay: message dropped, not in a call");
+    else if ((m = malloc(sizeof *m + strlen(text) + 1))) {
+        snprintf(m->channel, sizeof m->channel, "%s", channel);
+        strcpy(m->text, text);
+    }
+    cJSON_Delete(v);
+    if (!m)
+        return;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 256 * 1024);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    pthread_t t;
+    if (pthread_create(&t, &attr, post_thread, m) != 0) {
+        LOG("overlay: message not sent, no thread");
+        free(m);
+    }
+    pthread_attr_destroy(&attr);
 }
 
 static uint64_t launched_at;
@@ -556,6 +627,8 @@ static void *feed(void *arg)
     int launched = 0;
     overlay_command c;
     uint64_t seen = read_command(&c); // one left from before this core ran is not new
+    static char typed[OVERLAY_TEXT_MAX + 1];
+    uint64_t seen_typed = overlay_read_outbox(OVERLAY_DIR "/send.bin", typed, sizeof typed);
     int auto_reloaded = 0;
     // Nothing is decided on the defaults: overlay reads 0 until the user's settings load, and a
     // running overlay (from the core before) was stopped as if switched off (2026-11-05).
@@ -607,6 +680,11 @@ static void *feed(void *arg)
         if (seq && seq != seen) {
             seen = seq;
             run_command(c.text);
+        }
+        const uint64_t typed_seq = overlay_read_outbox(OVERLAY_DIR "/send.bin", typed, sizeof typed);
+        if (typed_seq && typed_seq != seen_typed) {
+            seen_typed = typed_seq;
+            send_text(typed);
         }
         usleep(200000); // the overlay reads every 12 frames (200 ms)
     }

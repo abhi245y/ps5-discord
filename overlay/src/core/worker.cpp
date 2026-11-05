@@ -34,9 +34,6 @@ void* class_application=nullptr,*class_scene=nullptr;
 Method* method_append=nullptr,*method_find=nullptr,*method_font_ctor=nullptr;
 // Pictures (optional: without them the overlay has panels and text only).
 void* class_image=nullptr,*class_asset=nullptr;Method* method_asset_ctor=nullptr;
-// The system keyboard: a PUI TextField (UI2) whose BeginEdit opens the OSK. Optional.
-void* class_field=nullptr;Method* method_begin_edit=nullptr,*method_is_editing=nullptr,*method_set_focus=nullptr,*method_release_focus=nullptr;
-Method* method_begin_edit_device=nullptr; // BeginEdit(DeviceType): 1 is Dualshock4 (PUI's DeviceType)
 std::atomic<Update> original{nullptr};
 std::atomic<PadCall> pad_original{nullptr};
 std::atomic<ShareCall> share_original{nullptr};
@@ -57,10 +54,6 @@ std::uint64_t command_seq=0;                 // UI thread only
 // Holding the game while the panel is open (the system menu's way): the impose status set
 // and controller focus with the system. game_app is whose focus to give back.
 std::atomic<bool> holding{false};
-std::atomic<bool> editing{false}; // the keyboard is open: ShellUI gets the real pad, the app none
-std::atomic<unsigned> edit_pad_logged{0};
-std::atomic<bool> edit_cancel{false}; // Options held while typing: end the keyboard (the way out of one that ignores keys)
-Method* method_end_edit=nullptr;
 std::atomic<int> game_app{-1};
 std::atomic<std::uint64_t> last_input_ms{0};
 constexpr std::uint64_t hold_idle_ms=30000;  // no button reaches us this long: give it back
@@ -394,6 +387,14 @@ bool engine_send(void*,const char* text){
     std::snprintf(c.text,sizeof c.text,"%s",text);
     note("COMMAND %s",c.text);
     return write_file(worker_dir,"cmd.bin",c);}
+bool engine_send_text(void*,const char* text){
+    static Outbox box; // UI thread only; 8 KB stays off the stack
+    const std::size_t n=text?std::strlen(text):0;
+    if(!n||n>=sizeof box.text)return false;
+    box.seq=now_ms()*64+(++command_seq%64);box.len=std::uint32_t(n);
+    std::memset(box.text,0,sizeof box.text);std::memcpy(box.text,text,n);
+    note("SEND %u bytes",box.len);
+    return write_file(worker_dir,"send.bin",box);}
 // Kabuki's picture recipe: an ImageBox whose Image is an ImageAsset made from "file://path".
 WidgetSlot* slot_of(void* widget){
     auto index=static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(widget));
@@ -460,134 +461,10 @@ bool engine_set_rect(void*,void* widget,const oui::Rect* r){
         prop_set_float(type,object,"Width",r->w)&&prop_set_float(type,object,"Height",r->h);}
 bool engine_set_hold(void*,int ms){
     options_hold_ms.store(std::uint64_t(ms<300?300:ms>1500?1500:ms),std::memory_order_relaxed);return true;}
-// A managed string's text as UTF-8 (MonoString: 16-byte object header, int32 length, UTF-16).
-void utf8_of(void* str,char* out,int cap){
-    int at=0;
-    if(str&&cap>0){
-        const std::int32_t n=*reinterpret_cast<const std::int32_t*>(static_cast<const char*>(str)+16);
-        const std::uint16_t* c=reinterpret_cast<const std::uint16_t*>(static_cast<const char*>(str)+20);
-        for(std::int32_t i=0;i<n&&n<=4096;i++){ // a wrong layout guess reads 8 KB at most
-            std::uint32_t u=c[i];
-            if(u>=0xd800&&u<0xdc00&&i+1<n&&c[i+1]>=0xdc00&&c[i+1]<0xe000)u=0x10000+((u-0xd800)<<10)+(c[++i]-0xdc00);
-            char b[4];int k=0;
-            if(u<0x80)b[k++]=char(u);
-            else if(u<0x800){b[k++]=char(0xc0|u>>6);b[k++]=char(0x80|(u&63));}
-            else if(u<0x10000){b[k++]=char(0xe0|u>>12);b[k++]=char(0x80|((u>>6)&63));b[k++]=char(0x80|(u&63));}
-            else{b[k++]=char(0xf0|u>>18);b[k++]=char(0x80|((u>>12)&63));b[k++]=char(0x80|((u>>6)&63));b[k++]=char(0x80|(u&63));}
-            if(at+k>=cap)break;
-            std::memcpy(out+at,b,k);at+=k;}}
-    if(cap>0)out[at]=0;
-}
-bool field_editing(void* field){
-    bool ok=false;void* boxed=method_is_editing?invoke(method_is_editing,field,nullptr,ok):nullptr;
-    void* v=ok&&boxed?fn<void*(*)(void*)>(ObjectUnbox)(boxed):nullptr;
-    return v&&*static_cast<unsigned char*>(v);
-}
-void* engine_add_field(void*,const oui::Rect* r,const char* placeholder){
-    void* root=scene_root_handle?fn<void*(*)(std::uint32_t)>(GcTarget)(scene_root_handle):nullptr;
-    if(!root||!r||!class_field||!method_begin_edit||!method_is_editing)return nullptr;
-    void* field=fn<void*(*)(void*,void*)>(ObjectNew)(domain,class_field);
-    if(!field)return nullptr;
-    fn<void(*)(void*)>(ObjectInit)(field);
-    int focusable=1,hidden=0,max=200;
-    if(!prop_set_int(class_field,field,"Focusable",focusable)||
-       !prop_set_float(class_field,field,"X",r->x)||!prop_set_float(class_field,field,"Y",r->y)||
-       !prop_set_float(class_field,field,"Width",r->w)||!prop_set_float(class_field,field,"Height",r->h)||
-       !prop_set_int(class_field,field,"Visible",hidden)){note("UI field props failed");return nullptr;}
-    (void)prop_set_int(class_field,field,"MaxLength",max);
-    if(placeholder)(void)prop_set(class_field,field,"PlaceHolder",fn<void*(*)(void*,const char*)>(StringNew)(domain,placeholder));
-    if(!append_child(root,field)){note("UI field attach failed");return nullptr;}
-    std::uint32_t id=slot_store(field,false);
-    return id?reinterpret_cast<void*>(std::uintptr_t(id)):nullptr;}
-// Where PUI's focus is, for the keyboard probe: is it our scene / our field.
-void log_focus(const char* when,void* field){
-    void* app=app_handle?fn<void*(*)(std::uint32_t)>(GcTarget)(app_handle):nullptr;
-    void* scene=scene_handle?fn<void*(*)(std::uint32_t)>(GcTarget)(scene_handle):nullptr;
-    void* active=nullptr,*front=nullptr,*focused=nullptr;bool activated=false,has=false;
-    if(app){(void)prop_get_object(class_application,app,"FocusActiveScene",&active);
-        (void)prop_get_object(class_application,app,"FrontActiveScene",&front);
-        (void)prop_get_object(class_application,app,"FocusedWidget",&focused);}
-    bool locked=false;
-    if(scene){(void)prop_get_bool(class_scene,scene,"FocusActivated",&activated);(void)prop_get_bool(class_scene,scene,"InputLocked",&locked);}
-    (void)prop_get_bool(class_widget,field,"Focused",&has);
-    note("EDIT focus %s: active_is_ours=%d front_is_ours=%d focused_is_field=%d scene_activated=%d field_focused=%d input_locked=%d",
-        when,active&&active==scene,front&&front==scene,focused&&focused==field,activated,has,locked);
-}
-// Our scene is made with Focusable=0 (the home screen keeps its focus); a field in it can
-// only take focus, and the keyboard only open, while the scene is focusable.
-std::uint64_t edit_begun_at=0; // a begin_edit whose focus is not given back yet (UI thread)
-int edit_retry=0;               // polls until the one retry (PUI may update focusable scenes next frame)
-void scene_focusable(bool on,void* field){
-    void* scene=scene_handle?fn<void*(*)(std::uint32_t)>(GcTarget)(scene_handle):nullptr;
-    int v=on?1:0;
-    if(!scene)return;
-    (void)prop_set_int(class_scene,scene,"Focusable",v); // NodeFocusable: NotSupportedException on 13.00
-    (void)prop_set_int(class_scene,scene,"Frontable",v);
-    (void)prop_set(class_scene,scene,"DefaultFocusWidget",on?field:nullptr);
-}
-// SetFocus, BeginEdit(Dualshock4), then BeginEdit(): true once the keyboard is open. Probe 5:
-// BeginEdit() starts it for an unknown device, and its keys never took the pad (probes 2-4).
-bool try_edit(void* field,const char* when){
-    bool focus=false,begin=false;void* exception=nullptr;
-    if(method_set_focus){invoke_ex(method_set_focus,field,nullptr,focus,&exception);describe_exception("SetFocus",exception);}
-    bool now=false;
-    if(method_begin_edit_device){
-        int device=1;void* args[1]={&device};exception=nullptr;
-        invoke_ex(method_begin_edit_device,field,args,begin,&exception);describe_exception("BeginEdit(device)",exception);
-        now=field_editing(field);note("EDIT %s begin(device) ok=%d editing=%d",when,begin,now);}
-    if(!now){exception=nullptr;invoke_ex(method_begin_edit,field,nullptr,begin,&exception);describe_exception("BeginEdit",exception);
-        now=field_editing(field);}
-    note("EDIT %s focus=%d begin=%d editing=%d",when,focus,begin,now);
-    log_focus(when,field);
-    return now;
-}
-bool engine_begin_edit(void*,void* widget,int user){
-    void* field=slot_object(static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(widget)));
-    if(!field)return false;
-    int shown=1;(void)prop_set_int(class_field,field,"Visible",shown);
-    (void)prop_set(class_field,field,"Text",fn<void*(*)(void*,const char*)>(StringNew)(domain,""));
-    if(user>0)(void)prop_set_int(class_field,field,"UserId",user);
-    // Core.Ime enums (bytes). The default (inline) keyboard shows (probe 2); Dialog (2) never
-    // appeared from our scene (probe 3). Send labels its enter key.
-    std::int32_t send=1;(void)prop_set(class_field,field,"ImeEnterLabel",&send);
-    log_focus("before",field);
-    edit_pad_logged.store(0,std::memory_order_relaxed); // each try logs its own presses
-    scene_focusable(true,field);edit_begun_at=now_ms();
-    const bool now=try_edit(field,"first");
-    edit_retry=now?0:2;
-    editing.store(now,std::memory_order_release);
-    note("EDIT begin user=%d editing=%d",user,now);
-    return true;}
-int engine_edit_poll(void*,void* widget,char* out,int cap){
-    void* field=slot_object(static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(widget)));
-    if(!field)return -1;
-    bool now=field_editing(field);
-    if(!now&&edit_retry&&!--edit_retry)now=try_edit(field,"retry"); // once, two polls later
-    bool cancelled=false;
-    if(edit_cancel.exchange(false,std::memory_order_acq_rel)){
-        bool ok=false;void* exception=nullptr;
-        if(method_end_edit){invoke_ex(method_end_edit,field,nullptr,ok,&exception);describe_exception("EndEdit",exception);}
-        note("EDIT cancelled by Options ok=%d editing=%d",ok,field_editing(field));
-        now=false;cancelled=true;} // given up on either way: the overlay takes the pad back
-    void* text=nullptr;
-    if(!prop_get_object(class_field,field,"Text",&text))text=nullptr;
-    utf8_of(text,out,cap);
-    const bool was=editing.exchange(now,std::memory_order_acq_rel);
-    if(was!=now)note("EDIT %s chars=%d",now?"open":"closed",int(std::strlen(out)));
-    // Closed, or never opened within 8 s (the app stops asking at 10): the focus goes back, or
-    // the home screen's D-pad stays dead.
-    if(!now&&edit_begun_at&&(was||cancelled||now_ms()-edit_begun_at>8000)){
-        edit_begun_at=0;
-        if(method_release_focus){
-            bool ok=false;void* exception=nullptr;invoke_ex(method_release_focus,field,nullptr,ok,&exception);
-            describe_exception("ReleaseFocus",exception);note("EDIT focus released=%d",ok);}
-        scene_focusable(false,nullptr);}
-    return now?1:0;}
 constexpr oui::Builder::Vt engine_vt{
     engine_add_panel,engine_add_label,engine_set_text,engine_set_visible,engine_set_color,
     engine_screen_w,engine_screen_h,engine_set_capture,engine_send,
-    engine_add_image,engine_set_image,engine_set_tint,engine_set_text_style,engine_set_rect,engine_set_hold,
-    engine_add_field,engine_begin_edit,engine_edit_poll};
+    engine_add_image,engine_set_image,engine_set_tint,engine_set_text_style,engine_set_rect,engine_set_hold,engine_send_text};
 oui::Builder ui_builder(){return oui::Builder{&engine_vt,nullptr};}
 void refresh_text(){
     char text[text_limit];
@@ -719,10 +596,10 @@ void update_hook(Object* instance){
     if(gesture_requested.exchange(false,std::memory_order_acq_rel)){
         oui::app::on_gesture(oui::Gesture::Chord,builder);
         note("GESTURE chords=%u",chords.load());}
-    if(holding.load()&&!editing.load()&&now_ms()-last_input_ms.load()>hold_idle_ms){
+    if(holding.load()&&now_ms()-last_input_ms.load()>hold_idle_ms){
         // Nothing reached us for a while: maybe ShellUI sees no pad without focus. Close.
         release_game("idle");capture.store(false);oui::app::on_gesture(oui::Gesture::Chord,builder);}
-    if(capture.load(std::memory_order_acquire)&&!editing.load(std::memory_order_acquire)){
+    if(capture.load(std::memory_order_acquire)){
         float x=0,y=0;std::uint32_t bx=stick_x.load(std::memory_order_relaxed),by=stick_y.load(std::memory_order_relaxed);
         std::memcpy(&x,&bx,4);std::memcpy(&y,&by,4);
         oui::app::on_pad(pending_down.exchange(0,std::memory_order_acq_rel),x,y,builder);}
@@ -743,17 +620,6 @@ PadData pad_hook(int device){
     pad_polls.fetch_add(1,std::memory_order_relaxed);
     std::uint32_t buttons=data.buttons;
     last_buttons.store(buttons,std::memory_order_relaxed);
-    if(editing.load(std::memory_order_acquire)){ // the system keyboard is open
-        last_input_ms.store(now_ms(),std::memory_order_relaxed);
-        if(data.down&&edit_pad_logged.fetch_add(1,std::memory_order_relaxed)<20)note("EDIT PAD down=%x",data.down);
-        if(buttons&bit_options){
-            const std::uint64_t now=now_ms(),since=options_since.load(std::memory_order_relaxed);
-            if(!since)options_since.store(now,std::memory_order_relaxed);
-            else if(now-since>=options_hold_ms.load(std::memory_order_relaxed)&&!options_fired.exchange(true,std::memory_order_relaxed))
-                edit_cancel.store(true,std::memory_order_release);}
-        else{options_since.store(0,std::memory_order_relaxed);options_fired.store(false,std::memory_order_relaxed);}
-        // ShellUI gets the real pad, as for its own text fields (a quiet one changed nothing in probe 4).
-        return data;}
     if((buttons&(bit_l3|bit_r3))==(bit_l3|bit_r3)){
         if(!chord_held.exchange(true,std::memory_order_relaxed)){
             chords.fetch_add(1,std::memory_order_relaxed);
@@ -817,15 +683,6 @@ bool resolve_update_methods(){
         class_image=fn<void*(*)(void*,const char*,const char*)>(ClassFromName)(pui,"Sce.PlayStation.PUI.UI2","ImageBox");
         class_asset=fn<void*(*)(void*,const char*,const char*)>(ClassFromName)(pui,"Sce.PlayStation.PUI","ImageAsset");
         method_asset_ctor=class_asset?method_taking(class_asset,".ctor","System.String"):nullptr;
-        class_field=fn<void*(*)(void*,const char*,const char*)>(ClassFromName)(pui,"Sce.PlayStation.PUI.UI2","TextField");
-        if(class_field){
-            method_begin_edit=fn<Method*(*)(void*,const char*,int)>(MethodFromName)(class_field,"BeginEdit",0);
-            method_is_editing=fn<Method*(*)(void*,const char*,int)>(MethodFromName)(class_field,"IsEditing",0);
-            method_set_focus=method_inherited(class_field,"SetFocus",0);
-            method_release_focus=method_inherited(class_field,"ReleaseFocus",0);
-            method_begin_edit_device=fn<Method*(*)(void*,const char*,int)>(MethodFromName)(class_field,"BeginEdit",1);
-            method_end_edit=fn<Method*(*)(void*,const char*,int)>(MethodFromName)(class_field,"EndEdit",0);}
-        note("KEYBOARD field=%p begin=%p editing=%p focus=%p",class_field,method_begin_edit,method_is_editing,method_set_focus);
         describe_types();
         note("PICTURES image=%p asset=%p ctor=%p",class_image,class_asset,method_asset_ctor);
         Method* remove_scene=fn<Method*(*)(void*,const char*,int)>(MethodFromName)(class_scene,"RemoveFromSuperScene",0);

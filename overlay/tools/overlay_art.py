@@ -110,6 +110,9 @@ def glyph(name, size, colour, shape):
     if shape == "cross":
         d.line((21 * k, 21 * k, 43 * k, 43 * k), fill=colour, width=int(5 * k))
         d.line((43 * k, 21 * k, 21 * k, 43 * k), fill=colour, width=int(5 * k))
+    elif shape == "triangle":
+        d.polygon([(32 * k, 17 * k), (46 * k, 42 * k), (18 * k, 42 * k)], outline=colour, width=int(4 * k))
+        d.line([(32 * k, 17 * k), (46 * k, 42 * k), (18 * k, 42 * k), (32 * k, 17 * k)], fill=colour, width=int(5 * k), joint="curve")
     else:
         d.ellipse((19 * k, 19 * k, 45 * k, 45 * k), outline=colour, width=int(5 * k))
     save(img, name, size, size)
@@ -161,6 +164,99 @@ def text_pill(name, w, h, fill, text, size, outline=False, dot=False):
     save(img, name, w, h)
 
 
+# The on-screen keyboard (discord_app.inc kKb*): 11 columns of 108 px, rows of 70, caps 62 high.
+KB_W, KB_H, KB_PAD, KB_COL, KB_ROW, KB_KEY = 1232, 394, 26, 108, 70, 62
+KEY = (58, 61, 70, 255)
+FKEY = (72, 76, 87, 255)
+HINT = (178, 183, 194, 255)
+LOWER = ["1234567890@", "qwertyuiop#", "asdfghjkl'/", "zxcvbnm,.?!"]
+SYMBOLS = ["1234567890@", "!\"#$%&'()*+", "-/:;<=>[]\\^", "_`{|}~,.?\u20ac\u00a3"]
+# Function row: (first column, columns, kind)
+KB_FUNCS = [(0, 1.5, "shift"), (1.5, 1.5, "page"), (3, 3, "space"), (6, 1.5, "back"), (7.5, 1, "left"),
+            (8.5, 1, "right"), (9.5, 1.5, "send")]
+
+
+def keyboard(name, rows, shift, page):
+    """shift: 0 off, 1 one-shot, 2 caps lock. page: the page key's word."""
+    img, d = canvas(KB_W, KB_H)
+    d.rounded_rectangle((0, 0, KB_W * S - 1, KB_H * S - 1), 24 * S, fill=(28, 30, 35, 250))
+    big = ImageFont.truetype(FONT, 33 * S)
+    mid = ImageFont.truetype(FONT, 27 * S)
+    tiny = ImageFont.truetype(FONT, 14 * S)
+
+    def box(c0, cols, r):
+        x = KB_PAD + KB_COL * c0
+        return x, KB_PAD + KB_ROW * r, KB_COL * cols - 8, KB_KEY
+
+    def cap(b, fill):
+        x, y, w, h = b
+        d.rounded_rectangle((x * S, y * S, (x + w) * S - 1, (y + h) * S - 1), 13 * S, fill=fill)
+
+    for r, row in enumerate(rows):
+        for c, ch in enumerate(row):
+            b = box(c, 1, r)
+            cap(b, KEY)
+            if shift and r > 0 and ch.isalpha():
+                ch = ch.upper()
+            d.text(((b[0] + b[2] / 2) * S, (b[1] + b[3] / 2 + 1) * S), ch, font=big, fill=WHITE, anchor="mm")
+    for c0, cols, kind in KB_FUNCS:
+        b = box(c0, cols, 4)
+        x, y, w, h = b
+        cap(b, FKEY)
+        cx, cy = x + w / 2, y + h / 2 + 3
+        tag = {"shift": "L2", "left": "L1", "right": "R1", "send": "R2"}.get(kind)
+        if tag:
+            d.text(((x + w - 8) * S, (y + 6) * S), tag, font=tiny, fill=HINT, anchor="ra")
+        if kind in ("space", "back"):  # the button hints are the glyphs of the pad
+            g, k = (x + w - 22, y + 8), S
+            if kind == "space":
+                pts = [(g[0] + 7, g[1]), (g[0] + 14, g[1] + 12), (g[0], g[1] + 12), (g[0] + 7, g[1])]
+                d.line([(a * k, b_ * k) for a, b_ in pts], fill=(110, 210, 160, 255), width=2 * k, joint="curve")
+            else:
+                d.rectangle((g[0] * k, g[1] * k, (g[0] + 13) * k, (g[1] + 13) * k), outline=(235, 140, 205, 255), width=2 * k)
+        if kind == "shift":
+            col = CORAL if shift == 2 else WHITE
+            pts = [(cx, cy - 15), (cx + 15, cy + 1), (cx + 7, cy + 1), (cx + 7, cy + 14), (cx - 7, cy + 14),
+                   (cx - 7, cy + 1), (cx - 15, cy + 1)]
+            pts = [(a * S, b_ * S) for a, b_ in pts]
+            if shift:
+                d.polygon(pts, fill=col)
+            else:
+                d.line(pts + [pts[0]], fill=col, width=3 * S, joint="curve")
+            if shift == 2:
+                d.rounded_rectangle(((cx - 7) * S, (cy + 18) * S, (cx + 7) * S, (cy + 21) * S), 1 * S, fill=col)
+        elif kind == "page":
+            d.text((cx * S, (cy - 3) * S), page, font=mid, fill=WHITE, anchor="mm")
+        elif kind == "space":
+            d.line([((cx - 22) * S, (cy - 2) * S), ((cx - 22) * S, (cy + 8) * S), ((cx + 22) * S, (cy + 8) * S),
+                    ((cx + 22) * S, (cy - 2) * S)], fill=WHITE, width=4 * S, joint="curve")
+        elif kind == "back":
+            pts = [(cx - 20, cy), (cx - 8, cy - 12), (cx + 18, cy - 12), (cx + 18, cy + 12), (cx - 8, cy + 12)]
+            d.line([(a * S, b_ * S) for a, b_ in pts + [pts[0]]], fill=WHITE, width=3 * S, joint="curve")
+            d.line([((cx - 1) * S, (cy - 5) * S), ((cx + 11) * S, (cy + 5) * S)], fill=WHITE, width=3 * S)
+            d.line([((cx + 11) * S, (cy - 5) * S), ((cx - 1) * S, (cy + 5) * S)], fill=WHITE, width=3 * S)
+        elif kind in ("left", "right"):
+            s = 1 if kind == "right" else -1
+            d.polygon([((cx + s * 9) * S, cy * S), ((cx - s * 7) * S, (cy - 11) * S), ((cx - s * 7) * S, (cy + 11) * S)],
+                      fill=WHITE)
+        elif kind == "send":
+            d.text((cx * S, (cy - 3) * S), "Send", font=mid, fill=WHITE, anchor="mm")
+    save(img, name, KB_W, KB_H)
+
+
+def keyboard_art():
+    keyboard("kb_lower", LOWER, 0, "@#:")
+    keyboard("kb_upper", LOWER, 1, "@#:")
+    keyboard("kb_caps", LOWER, 2, "@#:")
+    keyboard("kb_symbols", SYMBOLS, 0, "ABC")
+    for name, cols in (("kb_hl_1", 1), ("kb_hl_15", 1.5), ("kb_hl_3", 3)):  # the highlighted key: coral, the label shows through
+        w = int(KB_COL * cols - 8)
+        img, d = canvas(w, KB_KEY)
+        d.rounded_rectangle((0, 0, w * S - 1, KB_KEY * S - 1), 13 * S, fill=(255, 122, 89, 125), outline=CORAL, width=4 * S)
+        save(img, name, w, KB_KEY)
+    rounded("kb_field", KB_W, 72, 18, (24, 26, 31, 250), (70, 74, 82, 255), 2)
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     # A: the call panel.
@@ -200,6 +296,8 @@ def main():
     ring("ring", 106, 4, CORAL)
     glyph("glyph_cross", 37, (122, 160, 255, 255), "cross")
     glyph("glyph_circle", 37, (255, 92, 110, 255), "circle")
+    glyph("glyph_triangle", 37, (110, 210, 160, 255), "triangle")
+    keyboard_art()
     text_pill("chip_options", 78, 28, None, "OPTIONS", 12, outline=True)
     # C: the glance card, one per number of talking rows (0-3).
     for n in range(4):

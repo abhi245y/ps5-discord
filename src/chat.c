@@ -1090,3 +1090,25 @@ char *chat_events_json(long since, int wait_ms)
     pthread_mutex_unlock(&lock);
     return out;
 }
+
+char *chat_message_json(const char *channel_id, const char *content, const char *nonce, const char *sticker,
+                        const char *reply_to)
+{
+    cJSON *out = cJSON_CreateObject();
+    cJSON_AddStringToObject(out, "mobile_network_type", "unknown");
+    cJSON_AddStringToObject(out, "content", content ? content : "");
+    if (nonce)
+        cJSON_AddStringToObject(out, "nonce", nonce);
+    cJSON_AddFalseToObject(out, "tts");
+    cJSON_AddNumberToObject(out, "flags", 0);
+    if (sticker)
+        cJSON_AddItemToArray(cJSON_AddArrayToObject(out, "sticker_ids"), cJSON_CreateString(sticker));
+    if (reply_to) {
+        cJSON *ref = cJSON_AddObjectToObject(out, "message_reference");
+        cJSON_AddStringToObject(ref, "channel_id", channel_id);
+        cJSON_AddStringToObject(ref, "message_id", reply_to);
+    }
+    char *json = cJSON_PrintUnformatted(out);
+    cJSON_Delete(out);
+    return json;
+}

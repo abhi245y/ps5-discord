@@ -232,24 +232,12 @@ static void api_send(int c, const char *body)
         reply(c, "400 Bad Request", "text/plain", "message", 7);
         return;
     }
-    cJSON *out = cJSON_CreateObject();
-    cJSON_AddStringToObject(out, "mobile_network_type", "unknown");
-    cJSON_AddStringToObject(out, "content", content);
-    if (nonce && is_id(nonce))
-        cJSON_AddStringToObject(out, "nonce", nonce);
-    cJSON_AddFalseToObject(out, "tts");
-    cJSON_AddNumberToObject(out, "flags", 0);
-    if (sticker && is_id(sticker))
-        cJSON_AddItemToArray(cJSON_AddArrayToObject(out, "sticker_ids"), cJSON_CreateString(sticker));
     const char *reply_to = cJSON_GetStringValue(cJSON_GetObjectItem(in, "reply_to"));
-    if (reply_to && is_id(reply_to)) {
-        cJSON *ref = cJSON_AddObjectToObject(out, "message_reference");
-        cJSON_AddStringToObject(ref, "channel_id", channel);
-        cJSON_AddStringToObject(ref, "message_id", reply_to);
-    }
-    char *json = cJSON_PrintUnformatted(out), path[64];
+    char *json = chat_message_json(channel, content, nonce && is_id(nonce) ? nonce : NULL,
+                                   sticker && is_id(sticker) ? sticker : NULL,
+                                   reply_to && is_id(reply_to) ? reply_to : NULL),
+         path[64];
     snprintf(path, sizeof path, "/channels/%s/messages", channel);
-    cJSON_Delete(out);
     cJSON_Delete(in);
     reply_rest(c, rest("POST", path, json));
     free(json);

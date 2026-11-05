@@ -739,6 +739,72 @@ static void test_overlay_line(void)
     assert(n <= 2047 && (int)strlen(line) == n && line[n - 2] == '~' && line[n - 1] == '-');
 }
 
+// send.bin: the overlay's typed message, and the JSON body it is posted with.
+static void write_outbox(const char *path, uint64_t magic, uint64_t seq, uint32_t len, const char *text)
+{
+    static struct {
+        uint64_t signature, seq;
+        uint32_t len, reserved;
+        char text[8192];
+    } box;
+    memset(&box, 0, sizeof box);
+    box.signature = magic;
+    box.seq = seq;
+    box.len = len;
+    memcpy(box.text, text, strlen(text) < sizeof box.text ? strlen(text) : sizeof box.text);
+    FILE *f = fopen(path, "wb");
+    assert(f && fwrite(&box, 1, sizeof box, f) == sizeof box);
+    fclose(f);
+}
+
+static void test_outbox(void)
+{
+    static char text[8193];
+    const char *path = "build/host/send-test.bin";
+    const uint64_t magic = 0x31434f504c564f44ULL;
+    const char *msg = "caf\xc3\xa9 \xe2\x82\xac \"quoted\" \\ line\nbreak, and more than 48 characters long";
+    write_outbox(path, magic, 77, (uint32_t)strlen(msg), msg);
+    assert(overlay_read_outbox(path, text, sizeof text) == 77 && strcmp(text, msg) == 0);
+    assert(overlay_read_outbox(path, text, sizeof text) == 77); // the same file again: the same seq (the feed skips it)
+    write_outbox(path, magic ^ 1, 78, 3, "abc"); // wrong magic
+    assert(overlay_read_outbox(path, text, sizeof text) == 0);
+    write_outbox(path, magic, 79, 8193, "abc"); // longer than the buffer
+    assert(overlay_read_outbox(path, text, sizeof text) == 0);
+    write_outbox(path, magic, 80, 0, ""); // empty
+    assert(overlay_read_outbox(path, text, sizeof text) == 0);
+    write_outbox(path, magic, 81, 3, "abc");
+    assert(overlay_read_outbox(path, text, 3) == 0); // no room for the NUL
+    memset(text, 0x78, 8192);
+    text[8192] = 0;
+    write_outbox(path, magic, 82, 8192, text);
+    assert(overlay_read_outbox(path, text, sizeof text) == 82 && strlen(text) == 8192);
+    FILE *f = fopen(path, "wb"); // a short file
+    assert(f && fwrite("short", 1, 5, f) == 5);
+    fclose(f);
+    assert(overlay_read_outbox(path, text, sizeof text) == 0);
+    remove(path);
+    assert(overlay_read_outbox(path, text, sizeof text) == 0); // missing
+
+    char *json = chat_message_json("123", msg, NULL, NULL, NULL);
+    cJSON *j = cJSON_Parse(json);
+    assert(j && strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(j, "content")), msg) == 0);
+    assert(cJSON_IsFalse(cJSON_GetObjectItem(j, "tts")) && cJSON_GetObjectItem(j, "flags")->valueint == 0);
+    assert(strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(j, "mobile_network_type")), "unknown") == 0);
+    assert(!cJSON_GetObjectItem(j, "nonce") && !cJSON_GetObjectItem(j, "sticker_ids"));
+    assert(strstr(json, "\\\"quoted\\\"") && strstr(json, "\\n") && !strchr(json, '\n')); // escaped, one line
+    cJSON_Delete(j);
+    free(json);
+    json = chat_message_json("123", "hi", "42", "7", "9");
+    j = cJSON_Parse(json);
+    assert(strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(j, "nonce")), "42") == 0);
+    assert(strcmp(cJSON_GetStringValue(cJSON_GetArrayItem(cJSON_GetObjectItem(j, "sticker_ids"), 0)), "7") == 0);
+    cJSON *ref = cJSON_GetObjectItem(j, "message_reference");
+    assert(strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(ref, "channel_id")), "123") == 0);
+    assert(strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(ref, "message_id")), "9") == 0);
+    cJSON_Delete(j);
+    free(json);
+}
+
 // A 6x6 RGB PNG (Sub and Paeth filtered rows) through png_circle, and its output decoded.
 static void test_png_circle(void)
 {
@@ -808,6 +874,7 @@ int main(void)
 {
     test_resample();
     test_overlay_line();
+    test_outbox();
     test_png_circle();
     test_gateway_rules();
     test_http_parse();

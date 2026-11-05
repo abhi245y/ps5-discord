@@ -72,6 +72,8 @@ struct Keepalive {std::uint64_t signature=magic,token=0,at_ms=0;};
 constexpr std::uint64_t keepalive_stale_ms=5000;
 // An app action for the core (worker_dir/cmd.bin): a short word, a fresh seq each time.
 struct Command {std::uint64_t signature=magic,seq=0;char text[48]{};};
+// A typed message for the core (worker_dir/send.bin): up to 2000 characters, UTF-8, len bytes.
+struct Outbox {std::uint64_t signature=magic,seq=0;std::uint32_t len=0,reserved=0;char text[8192]{};};
 struct Attempt {std::uint64_t signature=magic,epoch=0,token=0;std::int32_t pid=0;std::uint32_t reserved=0;};
 inline std::uint64_t now_ms(){timespec t{};if(clock_gettime(CLOCK_MONOTONIC,&t))return 0;
     return std::uint64_t(t.tv_sec)*1000+std::uint64_t(t.tv_nsec)/1000000;}
