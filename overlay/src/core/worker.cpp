@@ -525,16 +525,18 @@ void scene_focusable(bool on,void* field){
     (void)prop_set_int(class_scene,scene,"Frontable",v);
     (void)prop_set(class_scene,scene,"DefaultFocusWidget",on?field:nullptr);
 }
-// SetFocus, BeginEdit(), then BeginEdit(Dualshock4): true once the keyboard is open.
+// SetFocus, BeginEdit(Dualshock4), then BeginEdit(): true once the keyboard is open. Probe 5:
+// BeginEdit() starts it for an unknown device, and its keys never took the pad (probes 2-4).
 bool try_edit(void* field,const char* when){
     bool focus=false,begin=false;void* exception=nullptr;
     if(method_set_focus){invoke_ex(method_set_focus,field,nullptr,focus,&exception);describe_exception("SetFocus",exception);}
-    exception=nullptr;invoke_ex(method_begin_edit,field,nullptr,begin,&exception);describe_exception("BeginEdit",exception);
-    bool now=field_editing(field);
-    if(!now&&method_begin_edit_device){
-        int device=1;void* args[1]={&device};bool ok=false;exception=nullptr;
-        invoke_ex(method_begin_edit_device,field,args,ok,&exception);describe_exception("BeginEdit(device)",exception);
-        now=field_editing(field);note("EDIT %s begin(device) ok=%d editing=%d",when,ok,now);}
+    bool now=false;
+    if(method_begin_edit_device){
+        int device=1;void* args[1]={&device};exception=nullptr;
+        invoke_ex(method_begin_edit_device,field,args,begin,&exception);describe_exception("BeginEdit(device)",exception);
+        now=field_editing(field);note("EDIT %s begin(device) ok=%d editing=%d",when,begin,now);}
+    if(!now){exception=nullptr;invoke_ex(method_begin_edit,field,nullptr,begin,&exception);describe_exception("BeginEdit",exception);
+        now=field_editing(field);}
     note("EDIT %s focus=%d begin=%d editing=%d",when,focus,begin,now);
     log_focus(when,field);
     return now;
@@ -750,9 +752,8 @@ PadData pad_hook(int device){
             else if(now-since>=options_hold_ms.load(std::memory_order_relaxed)&&!options_fired.exchange(true,std::memory_order_relaxed))
                 edit_cancel.store(true,std::memory_order_release);}
         else{options_since.store(0,std::memory_order_relaxed);options_fired.store(false,std::memory_order_relaxed);}
-        // Probe 4: the keyboard reads the pad itself (the right stick moved it in probe 2);
-        // ShellUI's PUI gets a quiet pad, or its D-pad/Cross handling takes the field's focus.
-        PadData quiet{};quiet.skip=data.skip;return quiet;}
+        // ShellUI gets the real pad, as for its own text fields (a quiet one changed nothing in probe 4).
+        return data;}
     if((buttons&(bit_l3|bit_r3))==(bit_l3|bit_r3)){
         if(!chord_held.exchange(true,std::memory_order_relaxed)){
             chords.fetch_add(1,std::memory_order_relaxed);
