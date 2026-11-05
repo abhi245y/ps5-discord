@@ -77,6 +77,8 @@ struct Row
 constexpr const char *kQualities[] = {"720p · 30 fps", "720p · 60 fps", "1080p · 30 fps", "1080p · 60 fps"};
 // Prefs::notify_server and quiet_hours (the core's notify.c has the same hours).
 constexpr const char *kServerMessages[] = {"Off", "As in Discord", "Every message"};
+// Prefs::bt_handsfree: the headset in calls (overlay/src/app/discord_app.inc says the same).
+constexpr const char *kCallModes[] = {"High quality", "Low latency"};
 // Prefs::overlay_glance.
 constexpr const char *kGlance[] = {"Off", "While someone talks", "Always"};
 constexpr const char *kPlaces[] = {"Top right", "Top left", "Bottom right", "Bottom left", "Middle right", "Middle left"};
@@ -203,9 +205,11 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
             headset.value = "Connecting…", headset.desc = "A paired headset is coming on.";
         else
             headset.desc = "Select to connect or pair one.";
+        if (!b.airpods) // other headsets are always hands-free in calls
+            return {power, headset};
         return {power, headset,
-                toggle_row("Hands-free in calls", "Less delay, phone-quality sound. Try it if others can't hear you.",
-                           "bt_handsfree", s.prefs.bt_handsfree)};
+                choice_row("Call mode", "Low latency uses hands-free: less delay, phone-quality sound.",
+                           "bt_handsfree", kCallModes, s.prefs.bt_handsfree ? 1 : 0)};
     }
     case 3: {
         const std::string &st = s.overlay_state;

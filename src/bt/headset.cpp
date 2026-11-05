@@ -123,6 +123,7 @@ struct Snapshot
     bool on = false;
     std::string state = "off", message, adapter;
     std::string name, addr, route, mic = "off";
+    bool airpods = false; // it has Apple's mic stream: Call mode's High quality
     int pps = 0, queueMs = 0, delayReport = -1; // tenths of a ms, the headset's own
     long micFrames = 0, micErrors = 0;
     double decodeUs = 0;
@@ -357,6 +358,7 @@ class Radio
                 std::lock_guard<std::mutex> lock(g_mu);
                 g_snap.name = m_bt.peerName();
                 g_snap.addr = m_bt.peerAddress();
+                g_snap.airpods = m_airpods;
             }
             route(m_airpods ? "airpods" : "a2dp", "off");
             m_micFailed = m_hfpFailed = m_wantSco = m_stopSession = m_resetA2dp = false;
@@ -415,6 +417,7 @@ class Radio
             g_snap.name.clear();
             g_snap.addr.clear();
             g_snap.route.clear();
+            g_snap.airpods = false;
             g_snap.mic = "off";
         }
         publish("idle", ok              ? "disconnected"
@@ -714,6 +717,7 @@ extern "C" cJSON* hs_state_json(void)
         cJSON_AddStringToObject(h, "name", g_snap.name.c_str());
         cJSON_AddStringToObject(h, "addr", g_snap.addr.c_str());
         cJSON_AddStringToObject(h, "route", g_snap.route.c_str());
+        cJSON_AddBoolToObject(h, "airpods", g_snap.airpods);
         cJSON_AddStringToObject(h, "mic", g_snap.mic.c_str());
         cJSON_AddNumberToObject(h, "mic_frames", static_cast<double>(g_snap.micFrames));
         cJSON_AddNumberToObject(h, "mic_errors", static_cast<double>(g_snap.micErrors));

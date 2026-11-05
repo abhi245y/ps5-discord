@@ -29,7 +29,7 @@
 // The overlay engine's data folder (overlay/src/core/protocol.hpp parent_dir).
 #define OVERLAY_DIR "/data/discord-overlay-poc"
 #define APP_ASSETS "/data/homebrew/PPSA99072/assets" // the app's /app0/assets
-#define IDLE_LINE "3|-|o|0||0||||||"
+#define IDLE_LINE "3|x|o|0||0||||||" // state x: the core quit (the overlay goes inert)
 // overlay/src/core/protocol.hpp Command, written by the overlay (Builder::send).
 typedef struct {
     uint64_t signature, seq;
@@ -279,6 +279,8 @@ static void compose(char *line, int cap, time_t *live_since)
     overlay_headset bt = {0};
     cJSON *hs = hs_state_json();
     bt.on = cJSON_IsTrue(cJSON_GetObjectItem(hs, "on"));
+    if (bt.on && cJSON_IsTrue(cJSON_GetObjectItem(cJSON_GetObjectItem(hs, "headset"), "airpods")))
+        bt.on = 2; // AirPods connected: Call mode can offer High quality
     const char *addr = cJSON_GetStringValue(cJSON_GetObjectItem(cJSON_GetObjectItem(hs, "headset"), "addr"));
     snprintf(bt.connected, sizeof bt.connected, "%s", addr ? addr : "");
     cJSON *d;
@@ -353,6 +355,8 @@ static void run_command(const char *what)
         r = hs_connect(what + 11);
     else if (strcmp(what, "bt disconnect") == 0)
         r = hs_disconnect();
+    else if (strcmp(what, "bt on") == 0 || strcmp(what, "bt off") == 0)
+        r = hs_power(what[4] == 'n'); // Settings' switch, kept for the next start too
     else
         why = "unknown";
     LOG("overlay: %s -> %d %s", what, r, why);

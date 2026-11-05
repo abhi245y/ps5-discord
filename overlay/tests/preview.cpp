@@ -68,7 +68,7 @@ int main(int argc,char** argv){
     if(!build(b))return 1;
     char line[1024];
     auto feed=[&](const char* people,const char* live="",const char* set=kSet){
-        std::snprintf(line,sizeof line,"3|c|o|1|%s|%d|Raid Night|42:10|720p \xc2\xb7 30 fps|%s|1~68:A5~68:A5^AirPods Pro;00:1B^Buds|%s",
+        std::snprintf(line,sizeof line,"3|c|o|1|%s|%d|Raid Night|42:10|720p \xc2\xb7 30 fps|%s|2~68:A5~68:A5^AirPods Pro;00:1B^Buds|%s",
             live,live[0]?3:0,set,people);
         on_text(line,b);};
     const char* four="11~11_ab~Mira~t,12~~Theo~-,13~13_cd~Ana~m,14~~Kenji~d";
@@ -84,7 +84,10 @@ int main(int argc,char** argv){
     on_pad(0x800,0,0,b);on_pad(0x8,0,0,b);on_pad(0x80,0,0,b);dump(dir,"settings-card-open");on_pad(0x40,0,0,b);
     on_pad(0x800,0,0,b);dump(dir,"settings-alerts");
     on_pad(0x8,0,0,b);on_pad(0x8,0,0,b);on_pad(0x8,0,0,b);on_pad(0x80,0,0,b);dump(dir,"settings-alerts-open");
-    on_pad(0x40,0,0,b);on_pad(0x800,0,0,b);on_pad(0x80,0,0,b);dump(dir,"settings-headset-open");
+    on_pad(0x40,0,0,b);on_pad(0x800,0,0,b);dump(dir,"settings-headset");
+    on_pad(0x8,0,0,b);on_pad(0x80,0,0,b);dump(dir,"settings-headset-open");on_pad(0x40,0,0,b);
+    std::snprintf(line,sizeof line,"3|c|o|1||0|Raid Night|42:10|720p|%s|0~~|%s",kSet,four);on_text(line,b);
+    dump(dir,"settings-headset-off");
     std::printf("preview: %d widgets\n",used);
     return 0;
 }

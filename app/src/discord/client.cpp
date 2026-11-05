@@ -1478,6 +1478,7 @@ void Client::poll_voice()
                 bt.addr = text(h, "addr");
                 bt.route = text(h, "route");
                 bt.mic = text(h, "mic");
+                bt.airpods = flag(h, "airpods", false);
                 bt.delay_ms = static_cast<int>(num(h, "headset_delay_ms", -1.0));
             }
             if (b.contains("devices") && b["devices"].is_array())

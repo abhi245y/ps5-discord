@@ -346,6 +346,7 @@ struct Bluetooth
     std::string name, addr; // the connected headset, empty when none
     std::string route;      // airpods (its own mic), a2dp, hands-free
     std::string mic;        // off on failed mSBC CVSD
+    bool airpods = false;   // Apple's mic stream: Call mode's High quality
     int delay_ms = -1;      // what the headset says it adds, -1 when it does not say
     std::vector<Device> devices; // paired first, then found by the last search
 };

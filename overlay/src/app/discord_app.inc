@@ -18,7 +18,8 @@
 //
 // The core's line (src/overlay.c), at most 2047 bytes, fields split by '|':
 //   3|<state>|<me>|<glance>|<live>|<viewers>|<call>|<timer>|<quality>|<settings>|<headsets>|<people>
-//   state  c in a call, j joining, - none        me  o mic on, m muted, d deafened
+//   state  c in a call, j joining, - none, x the core quit (nothing opens)
+//   me     o mic on, m muted, d deafened
 //   glance 1 show the talking card               live  Go Live's time, "" when off
 //   settings  the kSettings values, dot-separated     headsets  on~connected addr~addr^name;...
 //   people id~avatar~name~flag,...  (talking first; flag t talking, m muted, d deafened, -)
@@ -63,7 +64,8 @@ constexpr const char* kPlaces[]={"Top right","Top left","Bottom right","Bottom l
 constexpr const char* kOnOff[]={"Off","On"};
 constexpr const char* kServer[]={"Off","As in Discord","Every message"};
 constexpr const char* kQuiet[]={"Off","22:00 \xe2\x80\x93 07:00","23:00 \xe2\x80\x93 08:00","00:00 \xe2\x80\x93 08:00","21:00 \xe2\x80\x93 06:00"};
-constexpr const char* kAudio[]={"Headset mic","Hands-free"};
+// Low latency: hands-free in calls (less delay, phone-quality sound).
+constexpr const char* kCallModes[]={"High quality","Low latency"};
 constexpr Setting kSettings[]={
     {"Quality","golive_quality",0,3,kQualities,0,nullptr},
     {"Mic gain","mic_gain",0,10,nullptr,20,"%"},
@@ -75,10 +77,12 @@ constexpr Setting kSettings[]={
     {"Server messages","notify_server",0,2,kServer,0,nullptr},
     {"PS5 alerts while playing","notify_system",0,1,kOnOff,0,nullptr},
     {"Quiet hours","quiet_hours",0,4,kQuiet,0,nullptr},
-    {"Call audio","bt_handsfree",0,1,kAudio,0,nullptr},
+    {"Call mode","bt_handsfree",0,1,kCallModes,0,nullptr},
 };
 constexpr int kSettingCount=int(sizeof kSettings/sizeof *kSettings);
-constexpr int kHeadset=-1; // the headset row: the paired headsets and Disconnect
+constexpr int kHeadset=-1;   // the headset row: the paired headsets and Disconnect
+constexpr int kBluetooth=-2; // Bluetooth on or off (the adapter)
+constexpr int kCallMode=10;  // AirPods only: other headsets are always hands-free in calls
 // The tabs and their rows (kSettings indexes).
 struct Tab { const char* name; float w; int rows[4]; int count; };
 constexpr Tab kTabs[]={
@@ -86,12 +90,14 @@ constexpr Tab kTabs[]={
     {"Voice",76,{1,2},2},
     {"Card",66,{3,4,5},3},
     {"Alerts",76,{6,7,8,9},4},
-    {"Headset",96,{kHeadset,10},2},
+    {"Headset",96,{kBluetooth,kHeadset,kCallMode},3}, // Call mode only with AirPods (rows_in)
 };
 constexpr int kTabCount=int(sizeof kTabs/sizeof *kTabs),kSettingRows=4,kOptions=6;
 constexpr float kTabY=150,kItemY=214,kItemH=62,kItemStep=70,kOptionH=48;
 enum class Kind{choice,toggle,slider,stepper};
 Kind kind_of(int s){
+    if(s==kBluetooth)return Kind::toggle;
+    if(s==kHeadset)return Kind::choice;
     const Setting& set=kSettings[s];
     if(set.names==kOnOff)return Kind::toggle;
     if(set.names)return Kind::choice;
@@ -105,7 +111,7 @@ struct State {
     char live[16]="", call[64]="", timer[16]="", quality[32]="";
     int viewers=0;
     int set[kSettingCount]={0,5,5,1,0,3,1,1,1,0,0};
-    bool bt_on=false;
+    bool bt_on=false,airpods=false; // airpods: Call mode applies (others are hands-free in calls)
     char connected[18]="";
     char dev_addr[4][18]={}, dev_name[4][40]={};
     int devices=0;
@@ -114,6 +120,12 @@ struct State {
 };
 
 State st;
+// A change the core has not confirmed yet wins over its lines for a moment (fast slider
+// presses otherwise step back to a value from a line already on its way).
+struct Pending { int value=0; std::uint64_t until=0; };
+Pending pending[kSettingCount+1]; // the last: Bluetooth on/off
+std::uint64_t frame_now=0;
+constexpr std::uint64_t kPendingFrames=90; // 1.5 s at 60 fps
 bool open=false;
 int focus=0;      // the focused tile
 bool settings=false; // the panel shows the mini settings
@@ -193,7 +205,7 @@ bool parse(const char* line,State& s){
     for(int i=0;i<kSettingCount&&*v;i++){char one[8];field(&v,one,sizeof one,'.');std::sscanf(one,"%d",&s.set[i]);}
     char bt[400];field(&p,bt,sizeof bt);
     const char* q=bt;
-    field(&q,f,sizeof f,'~');s.bt_on=f[0]=='1';
+    field(&q,f,sizeof f,'~');s.bt_on=f[0]=='1'||f[0]=='2';s.airpods=f[0]=='2';
     field(&q,s.connected,sizeof s.connected,'~');
     while(*q&&s.devices<4){
         char one[64];field(&q,one,sizeof one,';');
@@ -259,9 +271,10 @@ int choices(int s,const char* out[kOptions],int& current){
 }
 
 void value_text(int s,char* out,std::size_t cap){
+    if(s==kBluetooth){std::snprintf(out,cap,"%s",st.bt_on?"On":"Off");return;}
     if(s==kHeadset){
         int d=-1;for(int i=0;i<st.devices;i++)if(!std::strcmp(st.dev_addr[i],st.connected))d=i;
-        std::snprintf(out,cap,"%s",!st.devices?"None paired":!st.bt_on?"Bluetooth off":d<0?"Not connected":st.dev_name[d]);
+        std::snprintf(out,cap,"%s",!st.bt_on?"Bluetooth off":!st.devices?"None paired":d<0?"Not connected":st.dev_name[d]);
         return;}
     const Setting& set=kSettings[s];const int v=st.set[s];
     if(s==0&&st.live[0])std::snprintf(out,cap,"Live now");
@@ -272,13 +285,17 @@ void value_text(int s,char* out,std::size_t cap){
 
 bool can_open(int s){ // a row whose choices open
     if(s==kHeadset)return st.devices&&st.bt_on;
+    if(s==kBluetooth)return false;
     return kind_of(s)==Kind::choice&&!(s==0&&st.live[0]);
 }
+
+// The rows a tab shows now: Call mode only while AirPods are connected.
+int rows_in(const Tab& t){return t.count-(t.rows[t.count-1]==kCallMode&&!st.airpods);}
 
 // Where the settings' rows end (with the open row's choices).
 float settings_end(){
     const Tab& t=kTabs[tab];
-    float end=kItemY+kItemStep*(t.count-1)+kItemH;
+    float end=kItemY+kItemStep*(rows_in(t)-1)+kItemH;
     if(expanded){const char* names[kOptions];int current=0;end+=20+kOptionH*choices(t.rows[row],names,current);}
     return end;
 }
@@ -290,8 +307,8 @@ void render_settings(Builder& b){
     b.set_rect(chip_l1,{x,kTabY+7,38,26});x+=38+7;
     for(int i=0;i<kTabCount;i++){
         b.set_rect(tab_pill[i],{x,kTabY,kTabs[i].w,40});
-        b.set_rect(tab_word[i],{x,kTabY+5,kTabs[i].w,32});
-        b.set_tint(tab_pill[i],i==tab?kCoral:Color{0.17f,0.18f,0.20f,1});
+        b.set_rect(tab_word[i],{x,kTabY+8,kTabs[i].w,32}); // PUI sets text high in its box
+        b.set_tint(tab_pill[i],i==tab?kCoral:Color{0.235f,0.247f,0.275f,1});
         x+=kTabs[i].w+7;}
     b.set_rect(chip_r1,{x,kTabY+7,38,26});
     for(int i=0;i<kTabCount;i++){show(b,tab_pill[i],settings);show(b,tab_word[i],settings);}
@@ -303,25 +320,25 @@ void render_settings(Builder& b){
     const float drop_h=expanded?12+kOptionH*count+8:0;
     int slider=0;
     for(int i=0;i<kSettingRows;i++){
-        const bool used=settings&&i<t.count;
+        const bool used=settings&&i<rows_in(t);
         const int s=used?t.rows[i]:0;
         const float y=kItemY+kItemStep*i+(expanded&&i>row?drop_h:0);
         char text[96];
         if(used){
             b.set_rect(set_bg[i],{kRowX,y,kRowW,kItemH});
             b.set_rect(set_name[i],{kRowX+22,y+15,260,36});
-            b.set_text(set_name[i],s==kHeadset?"Headset":kSettings[s].title);
+            b.set_text(set_name[i],s==kHeadset?"Headset":s==kBluetooth?"Bluetooth":kSettings[s].title);
             value_text(s,text,sizeof text);
             b.set_text(set_value[i],text);
             b.set_rect(set_value[i],{kRowX+200,y+15,kRowW-(can_open(s)?262:222),36});
             b.set_rect(set_chevron[i],{kRowX+kRowW-50,y+19,24,24});
             art(b,set_chevron[i],expanded&&i==row?"chevron_up":"chevron_down");
             b.set_rect(set_toggle[i],{kRowX+kRowW-82,y+14,60,34});}
-        const bool toggle=used&&s!=kHeadset&&kind_of(s)==Kind::toggle;
-        if(toggle)art(b,set_toggle[i],st.set[s]?"toggle_on":"toggle_off");
+        const bool toggle=used&&kind_of(s)==Kind::toggle;
+        if(toggle)art(b,set_toggle[i],(s==kBluetooth?st.bt_on:st.set[s])?"toggle_on":"toggle_off");
         show(b,set_bg[i],used);show(b,set_name[i],used);show(b,set_value[i],used&&!toggle);
         show(b,set_chevron[i],used&&can_open(s));show(b,set_toggle[i],toggle);
-        if(used&&s!=kHeadset&&kind_of(s)==Kind::slider&&slider<2){
+        if(used&&s>=0&&kind_of(s)==Kind::slider&&slider<2){
             const Setting& set=kSettings[s];
             const float frac=float(st.set[s]-set.min)/float(set.max-set.min),tx=kRowX+250;
             b.set_rect(slider_track[slider],{tx,y+27,170,8});
@@ -333,7 +350,7 @@ void render_settings(Builder& b){
     for(int i=0;i<2;i++){show(b,slider_track[i],settings&&i<slider);show(b,slider_fill[i],settings&&i<slider);
         show(b,slider_knob[i],settings&&i<slider);}
     b.set_rect(set_focus,{kRowX,kItemY+kItemStep*row,kRowW,kItemH});
-    show(b,set_focus,settings&&t.count);
+    show(b,set_focus,settings&&rows_in(t));
 
     // The inline choices.
     const float dy=kItemY+kItemStep*row+kItemH+6;
@@ -440,15 +457,15 @@ void render(Builder& b){
     // Hints: Cross, Circle and Options (L1/R1 on the settings); their words follow the page.
     b.set_text(hint_text[0],"Select");
     b.set_text(hint_text[1],settings&&!expanded?"Back":"Close");
-    b.set_text(hint_text[2],settings?"Category":"Settings");
-    art(b,hint_icon[2],settings?"chip_l1r1":"chip_options");
-    for(int i=0;i<3;i++){show(b,hint_icon[i],open);show(b,hint_text[i],open);}
+    b.set_text(hint_text[2],"Settings");
+    for(int i=0;i<3;i++){show(b,hint_icon[i],open&&(i<2||!settings));show(b,hint_text[i],open&&(i<2||!settings));}
 }
 
 }  // namespace
 
 void reset(){
-    st=State{};open=false;focus=0;stick=0;settings=false;tab=row=option=0;expanded=false;
+    st=State{};open=false;focus=0;stick=0;settings=false;tab=row=option=0;expanded=false;frame_now=0;
+    for(Pending& p:pending)p=Pending{};
     chip_l1=chip_r1=set_focus=drop_bg=drop_on=drop_check=nullptr;
     for(int i=0;i<kTabCount;i++)tab_pill[i]=tab_word[i]=nullptr;
     for(int i=0;i<kSettingRows;i++)set_bg[i]=set_name[i]=set_value[i]=set_chevron[i]=set_toggle[i]=nullptr;
@@ -554,6 +571,7 @@ void apply(int s,int v,Builder& b){
     v=v<set.min?set.min:v>set.max?set.max:v;
     if(v==st.set[s])return;
     st.set[s]=v;
+    pending[s]={v,frame_now+kPendingFrames};
     char command[48];std::snprintf(command,sizeof command,"set %s %d",set.key,v);
     b.send(command);
     if(s==5)b.set_hold((v+3)*100);
@@ -571,7 +589,7 @@ void settings_pad(std::uint32_t down,Builder& b){
         if(down&kCircle)expanded=false;
         else if(move&&count)option=((option+move)%count+count)%count;
         else if(down&kCross){
-            if(s!=kHeadset)apply(s,kSettings[s].min+option,b);
+            if(s>=0)apply(s,kSettings[s].min+option,b);
             else{
                 char command[48];
                 if(option>=st.devices)std::snprintf(command,sizeof command,"bt disconnect");
@@ -582,12 +600,17 @@ void settings_pad(std::uint32_t down,Builder& b){
     if(down&kCircle){settings=false;render(b);return;}
     const int switch_tab=((down&kR1)?1:0)-((down&kL1)?1:0);
     if(switch_tab){tab=((tab+switch_tab)%kTabCount+kTabCount)%kTabCount;row=0;render(b);return;}
-    if(move&&t.count)row=((row+move)%t.count+t.count)%t.count;
-    if(s!=kHeadset&&change){
+    const int n=rows_in(t);
+    if(move&&n)row=((row+move)%n+n)%n;
+    if(s>=0&&change){
         const Kind k=kind_of(s);
         if(k==Kind::slider||k==Kind::stepper)apply(s,st.set[s]+change,b);}
     if(down&kCross){
-        if(s!=kHeadset&&kind_of(s)==Kind::toggle)apply(s,!st.set[s],b);
+        if(s==kBluetooth){
+            st.bt_on=!st.bt_on;
+            pending[kSettingCount]={st.bt_on,frame_now+kPendingFrames*4}; // the adapter takes a few seconds
+            b.send(st.bt_on?"bt on":"bt off");}
+        else if(s>=0&&kind_of(s)==Kind::toggle)apply(s,!st.set[s],b);
         else if(can_open(s)){
             const char* names[kOptions];int current=0;
             const int count=choices(s,names,current);
@@ -597,6 +620,7 @@ void settings_pad(std::uint32_t down,Builder& b){
 }  // namespace
 
 void on_gesture(Gesture,Builder& b){
+    if(!open&&st.state=='x')return; // the core is gone: nothing to show or do
     open=!open;
     focus=0;stick=0;settings=false;expanded=false;
     b.set_capture(open);
@@ -618,10 +642,20 @@ void on_pad(std::uint32_t down,float lx,float,Builder& b){
 void on_text(const char* line,Builder& b){
     const int hold=st.set[5];
     if(!parse(line,st))return;
+    for(int i=0;i<kSettingCount;i++){ // confirmed, or given up on: the core's value again
+        Pending& p=pending[i];
+        if(!p.until)continue;
+        if(frame_now>=p.until||st.set[i]==p.value)p.until=0;else st.set[i]=p.value;}
+    Pending& bt=pending[kSettingCount];
+    if(bt.until){if(frame_now>=bt.until||st.bt_on==(bt.value!=0))bt.until=0;else st.bt_on=bt.value!=0;}
+    if(row>=rows_in(kTabs[tab])){row=rows_in(kTabs[tab])-1;expanded=false;} // AirPods left: Call mode went
     if(st.set[5]!=hold)b.set_hold((st.set[5]+3)*100);
+    if(st.state=='x'&&open){ // the core quit with the panel open: close it, the game gets its pad
+        open=settings=expanded=false;
+        b.set_capture(false);}
     render(b);
 }
 
-void on_tick(std::uint64_t){}
+void on_tick(std::uint64_t frame){frame_now=frame;}
 
 }}  // namespace oui::app

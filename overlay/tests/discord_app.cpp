@@ -121,7 +121,7 @@ int main(){
     assert(shows("Quality"));
     assert(w(set_focus)->visible);
     assert(!w(tile[0])->visible);
-    assert(shows("720p \xc2\xb7 30 fps")&&shows("Category")&&w(set_chevron[0])->visible);
+    assert(shows("720p \xc2\xb7 30 fps")&&!shows("Category")&&!w(hint_icon[2])->visible&&w(set_chevron[0])->visible);
     on_pad(0x80,0,0,b); // open Quality's choices
     assert(w(drop_bg)->visible&&shows("1080p \xc2\xb7 60 fps")&&w(drop_on)->r.y==w(drop_bg)->r.y+6);
     on_pad(0x8,0,0,b);on_pad(0x80,0,0,b);
@@ -130,6 +130,12 @@ int main(){
     assert(shows("Mic gain")&&shows("Call volume")&&w(slider_knob[0])->visible&&shows("100%"));
     const float knob=w(slider_knob[0])->r.x;
     on_pad(0x4,0,0,b);assert(!std::strcmp(sent,"set mic_gain 6")&&w(slider_knob[0])->r.x>knob&&shows("120%"));
+    // Fast presses: a line from before them does not pull the slider back.
+    on_pad(0x4,0,0,b);assert(shows("140%"));
+    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.6.5.1.0.3.1.1.1.0.0|1~68:A5~68:A5^AirPods;00:1B^Buds|11~11_ab~Mira~-",b);
+    assert(shows("140%"));
+    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.7.5.1.0.3.1.1.1.0.0|1~68:A5~68:A5^AirPods;00:1B^Buds|11~11_ab~Mira~-",b);
+    assert(shows("140%")); // confirmed
     on_pad(0x800,0,0,b); // Card: Show, Position, Hold Options
     on_pad(0x8,0,0,b);on_pad(0x80,0,0,b); // Position's choices: six, Top right checked
     assert(shows("Middle left")&&w(drop_check)->visible);
@@ -141,8 +147,15 @@ int main(){
     assert(w(set_toggle[0])->visible&&ends(w(set_toggle[0])->path,"toggle_on.png"));
     on_pad(0x80,0,0,b);assert(!std::strcmp(sent,"set notify_dm 0")&&ends(w(set_toggle[0])->path,"toggle_off.png"));
     on_pad(0x80,0,0,b); // and back on
-    on_pad(0x800,0,0,b); // Headset: the paired ones and Disconnect
-    assert(shows("AirPods"));
+    on_pad(0x800,0,0,b); // Headset: Bluetooth, the paired ones and Disconnect, Call mode
+    assert(shows("Bluetooth")&&shows("AirPods")&&!shows("Call mode")); // not AirPods' own mic: no Call mode
+    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0|2~68:A5~68:A5^AirPods;00:1B^Buds|11~11_ab~Mira~-",b);
+    assert(shows("Call mode")&&shows("High quality")); // AirPods connected (2)
+    on_pad(0x80,0,0,b);assert(!std::strcmp(sent,"bt off")&&ends(w(set_toggle[0])->path,"toggle_off.png"));
+    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0|1~68:A5~68:A5^AirPods;00:1B^Buds|11~11_ab~Mira~-",b);
+    assert(ends(w(set_toggle[0])->path,"toggle_off.png")); // the core's line has not caught up: still off
+    on_pad(0x80,0,0,b);assert(!std::strcmp(sent,"bt on"));
+    on_pad(0x8,0,0,b); // the headset row
     on_pad(0x80,0,0,b);assert(shows("Buds")&&shows("Disconnect")&&w(drop_check)->r.y==w(drop_bg)->r.y+6+10);
     on_pad(0x8,0,0,b);on_pad(0x80,0,0,b);assert(!std::strcmp(sent,"bt connect 00:1B"));
     on_pad(0x80,0,0,b);on_pad(0x2,0,0,b);on_pad(0x80,0,0,b);assert(!std::strcmp(sent,"bt disconnect")); // up wraps to Disconnect
@@ -163,6 +176,12 @@ int main(){
     sent[0]=0;on_pad(0x80,0,0,b);assert(!sent[0]&&shows("Live now")&&!w(drop_bg)->visible&&!w(set_chevron[0])->visible);
     on_pad(0x40,0,0,b);on_gesture(oui::Gesture::Chord,b);
 
+    on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0|1~~|",b);
+    // The core quit: an open panel closes and gives the pad back; nothing opens until it is back.
+    on_gesture(oui::Gesture::Chord,b);assert(capturing&&w(dock)->visible);
+    on_text("3|x|o|0||0||||||",b);
+    assert(!capturing&&!w(dock)->visible&&!w(card)->visible);
+    on_gesture(oui::Gesture::Chord,b);assert(!capturing&&!w(dock)->visible);
     on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0|1~~|",b);
     // Not ours: ignored.
     on_text("1|c|o|1||Raid Night|",b);on_text("",b);on_text(nullptr,b);

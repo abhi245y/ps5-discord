@@ -23,7 +23,8 @@ typedef struct {
 // The line (overlay/src/app/discord_app.inc reads it), at most 2047 bytes; talking people
 // first. live: the Go Live time ("" when off); quality: Go Live's ("720p · 30 fps").
 // Exposed for the selftest.
-// The paired headsets (up to four) and the connected one's address ("" when none).
+// The paired headsets (up to four) and the connected one's address ("" when none). on: 0
+// Bluetooth off, 1 on, 2 on with AirPods connected (Call mode only applies to those).
 typedef struct {
     int on, count;
     char connected[18];
