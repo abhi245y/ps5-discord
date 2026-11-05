@@ -421,6 +421,7 @@ static int running(void)
 
 static uint64_t launched_at;
 static volatile int reloading;
+static volatile int quitting; // overlay_shutdown: the feed writes no more lines (the beat would undo IDLE_LINE)
 
 // A payload from the app's assets to elfldr.
 static void send_elf(const char *path)
@@ -537,7 +538,7 @@ static void *feed(void *arg)
             overlay_reload();
         }
         compose(line, sizeof line, &live_since);
-        if (strcmp(line, last) != 0 && write_line(line) == 0)
+        if (!quitting && strcmp(line, last) != 0 && write_line(line) == 0)
             snprintf(last, sizeof last, "%s", line);
         // Any other seq is a new command: the overlay's come from the console's uptime clock,
         // which starts over at a reboot (newer ones were smaller and were all ignored).
@@ -553,6 +554,8 @@ static void *feed(void *arg)
 
 void overlay_shutdown(void)
 {
+    quitting = 1;
+    usleep(250000); // a feed pass already past the check finishes (it sleeps 200 ms between)
     write_line(IDLE_LINE); // the overlay stays loaded; it hides until the core is back
 }
 

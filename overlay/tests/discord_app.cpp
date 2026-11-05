@@ -196,8 +196,9 @@ int main(){
     on_tick(1,b);on_text("3|c4|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~t",b);
     assert(w(card)->visible); // the beat digit after the state is ignored
     on_gesture(oui::Gesture::Chord,b);assert(capturing);
-    on_tick(1+60*10,b);assert(capturing); // not yet
-    on_tick(2+60*10,b);assert(!capturing&&!w(dock)->visible&&!w(card)->visible);
+    on_tick(300,b);on_text("3|c9|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~t",b); // only the beat
+    on_tick(300+60*10,b);assert(capturing); // not yet: 10 s from the last beat
+    on_tick(301+60*10,b);assert(!capturing&&!w(dock)->visible&&!w(card)->visible);
     on_gesture(oui::Gesture::Chord,b);assert(!capturing);
     on_text("3|c5|o|1||0|Raid Night|1:01|720p|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~t",b);assert(w(card)->visible);
     on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0|1~~|",b);

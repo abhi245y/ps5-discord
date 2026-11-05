@@ -125,7 +125,8 @@ State st;
 struct Pending { int value=0; std::uint64_t until=0; };
 Pending pending[kSettingCount+1]; // the last: Bluetooth on/off
 std::uint64_t frame_now=0;
-std::uint64_t alive_at=0; // the frame of the core's last line: it changes every second (the beat)
+std::uint64_t alive_at=0;
+char seen[2048]=""; // the last line without its beat // the frame of the core's last line: it changes every second (the beat)
 constexpr std::uint64_t kStaleFrames=60*10; // 10 s without one: the core crashed or was killed
 constexpr std::uint64_t kPendingFrames=90; // 1.5 s at 60 fps
 bool open=false;
@@ -481,7 +482,7 @@ void render(Builder& b){
 }  // namespace
 
 void reset(){
-    st=State{};open=false;focus=0;stick=0;settings=false;tab=row=option=0;expanded=false;frame_now=0;alive_at=0;
+    st=State{};open=false;focus=0;stick=0;settings=false;tab=row=option=0;expanded=false;frame_now=0;alive_at=0;seen[0]=0;
     for(Pending& p:pending)p=Pending{};
     chip_l1=chip_r1=set_focus=drop_bg=drop_on=drop_check=nullptr;
     for(int i=0;i<kTabCount;i++)tab_pill[i]=tab_word[i]=nullptr;
@@ -669,6 +670,13 @@ void go_inert(Builder& b){
 }
 
 void on_text(const char* line,Builder& b){
+    // Only the beat changed (the digit after the state, every second): alive, nothing to draw.
+    char now[2048];
+    std::snprintf(now,sizeof now,"%s",line?line:"");
+    if(now[0]&&now[1]&&now[2]&&now[3]>='0'&&now[3]<='9')std::memmove(now+3,now+4,std::strlen(now+4)+1);
+    const bool same=!std::strcmp(now,seen);
+    std::snprintf(seen,sizeof seen,"%s",now);
+    if(same&&st.state!='x'){alive_at=frame_now;return;}
     const int hold=st.set[5];
     if(!parse(line,st))return;
     alive_at=frame_now;
