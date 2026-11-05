@@ -59,6 +59,8 @@ std::uint64_t command_seq=0;                 // UI thread only
 std::atomic<bool> holding{false};
 std::atomic<bool> editing{false}; // the keyboard is open: ShellUI gets the real pad, the app none
 std::atomic<unsigned> edit_pad_logged{0};
+std::atomic<bool> edit_cancel{false}; // Options held while typing: end the keyboard (the way out of one that ignores keys)
+Method* method_end_edit=nullptr;
 std::atomic<int> game_app{-1};
 std::atomic<std::uint64_t> last_input_ms{0};
 constexpr std::uint64_t hold_idle_ms=30000;  // no button reaches us this long: give it back
@@ -505,10 +507,11 @@ void log_focus(const char* when,void* field){
     if(app){(void)prop_get_object(class_application,app,"FocusActiveScene",&active);
         (void)prop_get_object(class_application,app,"FrontActiveScene",&front);
         (void)prop_get_object(class_application,app,"FocusedWidget",&focused);}
-    if(scene)(void)prop_get_bool(class_scene,scene,"FocusActivated",&activated);
+    bool locked=false;
+    if(scene){(void)prop_get_bool(class_scene,scene,"FocusActivated",&activated);(void)prop_get_bool(class_scene,scene,"InputLocked",&locked);}
     (void)prop_get_bool(class_widget,field,"Focused",&has);
-    note("EDIT focus %s: active_is_ours=%d front_is_ours=%d focused_is_field=%d scene_activated=%d field_focused=%d",
-        when,active&&active==scene,front&&front==scene,focused&&focused==field,activated,has);
+    note("EDIT focus %s: active_is_ours=%d front_is_ours=%d focused_is_field=%d scene_activated=%d field_focused=%d input_locked=%d",
+        when,active&&active==scene,front&&front==scene,focused&&focused==field,activated,has,locked);
 }
 // Our scene is made with Focusable=0 (the home screen keeps its focus); a field in it can
 // only take focus, and the keyboard only open, while the scene is focusable.
@@ -518,7 +521,7 @@ void scene_focusable(bool on,void* field){
     void* scene=scene_handle?fn<void*(*)(std::uint32_t)>(GcTarget)(scene_handle):nullptr;
     int v=on?1:0;
     if(!scene)return;
-    (void)prop_set_int(class_scene,scene,"Focusable",v);(void)prop_set_int(class_scene,scene,"NodeFocusable",v);
+    (void)prop_set_int(class_scene,scene,"Focusable",v); // NodeFocusable: NotSupportedException on 13.00
     (void)prop_set_int(class_scene,scene,"Frontable",v);
     (void)prop_set(class_scene,scene,"DefaultFocusWidget",on?field:nullptr);
 }
@@ -558,6 +561,12 @@ int engine_edit_poll(void*,void* widget,char* out,int cap){
     if(!field)return -1;
     bool now=field_editing(field);
     if(!now&&edit_retry&&!--edit_retry)now=try_edit(field,"retry"); // once, two polls later
+    bool cancelled=false;
+    if(edit_cancel.exchange(false,std::memory_order_acq_rel)){
+        bool ok=false;void* exception=nullptr;
+        if(method_end_edit){invoke_ex(method_end_edit,field,nullptr,ok,&exception);describe_exception("EndEdit",exception);}
+        note("EDIT cancelled by Options ok=%d editing=%d",ok,field_editing(field));
+        now=false;cancelled=true;} // given up on either way: the overlay takes the pad back
     void* text=nullptr;
     if(!prop_get_object(class_field,field,"Text",&text))text=nullptr;
     utf8_of(text,out,cap);
@@ -565,7 +574,7 @@ int engine_edit_poll(void*,void* widget,char* out,int cap){
     if(was!=now)note("EDIT %s chars=%d",now?"open":"closed",int(std::strlen(out)));
     // Closed, or never opened within 8 s (the app stops asking at 10): the focus goes back, or
     // the home screen's D-pad stays dead.
-    if(!now&&edit_begun_at&&(was||now_ms()-edit_begun_at>8000)){
+    if(!now&&edit_begun_at&&(was||cancelled||now_ms()-edit_begun_at>8000)){
         edit_begun_at=0;
         if(method_release_focus){
             bool ok=false;void* exception=nullptr;invoke_ex(method_release_focus,field,nullptr,ok,&exception);
@@ -735,6 +744,12 @@ PadData pad_hook(int device){
     if(editing.load(std::memory_order_acquire)){ // the system keyboard is open: it reads the pad
         last_input_ms.store(now_ms(),std::memory_order_relaxed);
         if(data.down&&edit_pad_logged.fetch_add(1,std::memory_order_relaxed)<20)note("EDIT PAD down=%x",data.down);
+        if(buttons&bit_options){
+            const std::uint64_t now=now_ms(),since=options_since.load(std::memory_order_relaxed);
+            if(!since)options_since.store(now,std::memory_order_relaxed);
+            else if(now-since>=options_hold_ms.load(std::memory_order_relaxed)&&!options_fired.exchange(true,std::memory_order_relaxed))
+                edit_cancel.store(true,std::memory_order_release);}
+        else{options_since.store(0,std::memory_order_relaxed);options_fired.store(false,std::memory_order_relaxed);}
         return data;}
     if((buttons&(bit_l3|bit_r3))==(bit_l3|bit_r3)){
         if(!chord_held.exchange(true,std::memory_order_relaxed)){
@@ -805,7 +820,8 @@ bool resolve_update_methods(){
             method_is_editing=fn<Method*(*)(void*,const char*,int)>(MethodFromName)(class_field,"IsEditing",0);
             method_set_focus=method_inherited(class_field,"SetFocus",0);
             method_release_focus=method_inherited(class_field,"ReleaseFocus",0);
-            method_begin_edit_device=fn<Method*(*)(void*,const char*,int)>(MethodFromName)(class_field,"BeginEdit",1);}
+            method_begin_edit_device=fn<Method*(*)(void*,const char*,int)>(MethodFromName)(class_field,"BeginEdit",1);
+            method_end_edit=fn<Method*(*)(void*,const char*,int)>(MethodFromName)(class_field,"EndEdit",0);}
         note("KEYBOARD field=%p begin=%p editing=%p focus=%p",class_field,method_begin_edit,method_is_editing,method_set_focus);
         describe_types();
         note("PICTURES image=%p asset=%p ctor=%p",class_image,class_asset,method_asset_ctor);
