@@ -151,6 +151,10 @@ int main(){
     assert(shows("Bluetooth")&&shows("AirPods")&&!shows("Call mode")); // not AirPods' own mic: no Call mode
     on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0|2~68:A5~68:A5^AirPods;00:1B^Buds|11~11_ab~Mira~-",b);
     assert(shows("Call mode")&&shows("High quality")); // AirPods connected (2)
+    on_pad(0x8,0,0,b);on_pad(0x8,0,0,b);assert(w(set_focus)->r.y==kItemY+kItemStep*2); // on Call mode
+    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0|1~68:A5~68:A5^AirPods;00:1B^Buds|11~11_ab~Mira~-",b);
+    assert(!shows("Call mode")&&w(set_focus)->r.y==kItemY+kItemStep); // AirPods went: focus moves up a row
+    on_pad(0x2,0,0,b); // back to Bluetooth
     on_pad(0x80,0,0,b);assert(!std::strcmp(sent,"bt off")&&ends(w(set_toggle[0])->path,"toggle_off.png"));
     on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0|1~68:A5~68:A5^AirPods;00:1B^Buds|11~11_ab~Mira~-",b);
     assert(ends(w(set_toggle[0])->path,"toggle_off.png")); // the core's line has not caught up: still off
