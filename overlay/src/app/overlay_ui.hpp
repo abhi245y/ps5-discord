@@ -55,6 +55,17 @@ public:
     bool set_rect(void* widget,const Rect& r){return vt&&vt->set_rect_fn&&vt->set_rect_fn(ctx,widget,&r);}
     // How long Options is held to open the panel (ms; the engine keeps 300-1500).
     bool set_hold(int ms){return vt&&vt->set_hold_fn&&vt->set_hold_fn(ctx,ms);}
+    // A text field the system keyboard types into, hidden until begin_edit. nullptr when
+    // this ShellUI has no keyboard for us (the class or its methods are missing).
+    void* add_field(const Rect& r,const char* placeholder){
+        return vt&&vt->add_field_fn?vt->add_field_fn(ctx,&r,placeholder):nullptr;}
+    // Shows the field empty and opens the system keyboard on it, for this console user (the
+    // keyboard is per user; 0 leaves ShellUI's). While it is open ShellUI gets the real pad
+    // and on_pad gets nothing.
+    bool begin_edit(void* field,int user){return vt&&vt->begin_edit_fn&&vt->begin_edit_fn(ctx,field,user);}
+    // 1 while the keyboard is open, 0 once it closed, -1 on error; out gets the text so far
+    // (UTF-8), the final text once it closed.
+    int edit_poll(void* field,char* out,int cap){return vt&&vt->edit_poll_fn?vt->edit_poll_fn(ctx,field,out,cap):-1;}
     float screen_width() const{return vt&&vt->screen_w_fn?vt->screen_w_fn(ctx):1920.f;}
     float screen_height() const{return vt&&vt->screen_h_fn?vt->screen_h_fn(ctx):1080.f;}
 
@@ -75,6 +86,9 @@ public:
         bool(*set_text_style_fn)(void*,void*,float,int,const Color*,int);
         bool(*set_rect_fn)(void*,void*,const Rect*);
         bool(*set_hold_fn)(void*,int);
+        void*(*add_field_fn)(void*,const Rect*,const char*);
+        bool(*begin_edit_fn)(void*,void*,int);
+        int(*edit_poll_fn)(void*,void*,char*,int);
     };
     const Vt* vt=nullptr;
     void* ctx=nullptr;

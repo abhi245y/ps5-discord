@@ -43,7 +43,7 @@ const Color kLeaveInk{1.0f,0.42f,0.37f,1};
 
 // GamePadButtons bits, read on 13.00 (worker.log "PAD down=", 2026-11-02/03).
 constexpr std::uint32_t kLeft=0x1,kUp=0x2,kRight=0x4,kDown=0x8,kCircle=0x40,kCross=0x80,kOptionsButton=0x100,
-                        kL1=0x400,kR1=0x800;
+                        kL1=0x400,kR1=0x800,kTriangle=0x20;
 constexpr float kStickMove=0.6f,kStickRest=0.3f;
 
 // A: the panel.
@@ -111,6 +111,7 @@ struct State {
     char live[16]="", call[64]="", timer[16]="", quality[32]="";
     int viewers=0;
     int set[kSettingCount]={0,5,5,1,0,3,1,1,1,0,0};
+    int user=0; // the console user on screen (after the settings): the system keyboard is theirs
     bool bt_on=false,airpods=false; // airpods: Call mode applies (others are hands-free in calls)
     char connected[18]="";
     char dev_addr[4][18]={}, dev_name[4][40]={};
@@ -126,7 +127,11 @@ struct Pending { int value=0; std::uint64_t until=0; };
 Pending pending[kSettingCount+1]; // the last: Bluetooth on/off
 std::uint64_t frame_now=0;
 std::uint64_t alive_at=0;
-char seen[2048]=""; // the last line without its beat // the frame of the core's last line: it changes every second (the beat)
+char seen[2048]=""; // the last line without its beat
+// The keyboard probe (Chat comes next): Triangle on the call page opens the system keyboard.
+void* edit_field=nullptr;
+int typing=0;              // frames since begin_edit while it runs, 0 when not typing
+bool typing_seen=false;    // the keyboard reported open at least once // the frame of the core's last line: it changes every second (the beat)
 constexpr std::uint64_t kStaleFrames=60*10; // 10 s without one: the core crashed or was killed
 constexpr std::uint64_t kPendingFrames=90; // 1.5 s at 60 fps
 bool open=false;
@@ -208,6 +213,7 @@ bool parse(const char* line,State& s){
     char values[128];field(&p,values,sizeof values);
     const char* v=values;
     for(int i=0;i<kSettingCount&&*v;i++){char one[8];field(&v,one,sizeof one,'.');std::sscanf(one,"%d",&s.set[i]);}
+    if(*v){char one[16];field(&v,one,sizeof one,'.');std::sscanf(one,"%d",&s.user);}
     char bt[400];field(&p,bt,sizeof bt);
     const char* q=bt;
     field(&q,f,sizeof f,'~');s.bt_on=f[0]=='1'||f[0]=='2';s.airpods=f[0]=='2';
@@ -489,7 +495,7 @@ void reset(){
     for(int i=0;i<kSettingRows;i++)set_bg[i]=set_name[i]=set_value[i]=set_chevron[i]=set_toggle[i]=nullptr;
     for(int i=0;i<2;i++)slider_track[i]=slider_fill[i]=slider_knob[i]=nullptr;
     for(int j=0;j<kOptions;j++)drop_word[j]=nullptr;
-    nitro_note[0]=nitro_note[1]=nullptr;armed=-1;
+    nitro_note[0]=nitro_note[1]=nullptr;armed=-1;edit_field=nullptr;typing=0;typing_seen=false;
     dock=dock_mid=dock_end=title=clock=timer=tile_sub=tile_focus=rule=nullptr;
     card=pill=card_head=card_call=you_ring=you_mic=you_text=card_rule=card_hint=nullptr;
     for(int i=0;i<kRows;i++)row_bg[i]=row_avatar[i]=row_ring[i]=row_name[i]=row_icon[i]=nullptr;
@@ -553,6 +559,7 @@ bool build(Builder& b){
     set_focus=image(b,at,"setting_focus");
     drop_bg=image(b,at,"dropdown_3");drop_on=image(b,at,"option_on");drop_check=image(b,at,"check");
     for(int j=0;j<kOptions;j++)drop_word[j]=label(b,at,21,3,kWhite);
+    edit_field=b.add_field({kDockX+37,kDockY+880,kDockW-74,56},"Message"); // optional: no keyboard, no field
     nitro_note[0]=label(b,at,19,3,kText,0,"Needs Nitro or a boosted server");
     nitro_note[1]=label(b,at,19,0,kDim);
     for(void* w:set_name)if(!w)return false;
@@ -660,6 +667,7 @@ void on_pad(std::uint32_t down,float lx,float,Builder& b){
     if(dir||(lx>-kStickRest&&lx<kStickRest))stick=dir;
     if(step){focus=((focus+step)%kTiles+kTiles)%kTiles;render(b);}
     if((down&kCross)&&(st.state=='c'||st.state=='j'))b.send(kCommands[focus]);
+    if((down&kTriangle)&&edit_field&&!typing&&b.begin_edit(edit_field,st.user)){typing=1;typing_seen=false;}
 }
 
 // The core is gone (state x): close an open panel so the game gets its pad back.
@@ -694,6 +702,15 @@ void on_text(const char* line,Builder& b){
 
 void on_tick(std::uint64_t frame,Builder& b){
     frame_now=frame;
+    if(typing){ // the keyboard: done once it closed (or never opened within 2 s)
+        char text[256];
+        const int r=b.edit_poll(edit_field,text,sizeof text);
+        typing_seen|=r==1;
+        if(r<0||(r==0&&(typing_seen||++typing>120))){
+            typing=0;
+            b.set_visible(edit_field,false);
+            if(r==0&&typing_seen&&text[0]){char command[48];std::snprintf(command,sizeof command,"typed %s",text);b.send(command);}}
+        else if(r==1)typing=1;}
     if(st.state!='x'&&frame_now-alive_at>kStaleFrames){ // no beat: as if the core quit
         st.state='x';
         go_inert(b);

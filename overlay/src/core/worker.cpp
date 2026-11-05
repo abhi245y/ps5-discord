@@ -34,6 +34,8 @@ void* class_application=nullptr,*class_scene=nullptr;
 Method* method_append=nullptr,*method_find=nullptr,*method_font_ctor=nullptr;
 // Pictures (optional: without them the overlay has panels and text only).
 void* class_image=nullptr,*class_asset=nullptr;Method* method_asset_ctor=nullptr;
+// The system keyboard: a PUI TextField (UI2) whose BeginEdit opens the OSK. Optional.
+void* class_field=nullptr;Method* method_begin_edit=nullptr,*method_is_editing=nullptr,*method_set_focus=nullptr;
 std::atomic<Update> original{nullptr};
 std::atomic<PadCall> pad_original{nullptr};
 std::atomic<ShareCall> share_original{nullptr};
@@ -54,6 +56,7 @@ std::uint64_t command_seq=0;                 // UI thread only
 // Holding the game while the panel is open (the system menu's way): the impose status set
 // and controller focus with the system. game_app is whose focus to give back.
 std::atomic<bool> holding{false};
+std::atomic<bool> editing{false}; // the keyboard is open: ShellUI gets the real pad, the app none
 std::atomic<int> game_app{-1};
 std::atomic<std::uint64_t> last_input_ms{0};
 constexpr std::uint64_t hold_idle_ms=30000;  // no button reaches us this long: give it back
@@ -453,10 +456,72 @@ bool engine_set_rect(void*,void* widget,const oui::Rect* r){
         prop_set_float(type,object,"Width",r->w)&&prop_set_float(type,object,"Height",r->h);}
 bool engine_set_hold(void*,int ms){
     options_hold_ms.store(std::uint64_t(ms<300?300:ms>1500?1500:ms),std::memory_order_relaxed);return true;}
+// A managed string's text as UTF-8 (MonoString: 16-byte object header, int32 length, UTF-16).
+void utf8_of(void* str,char* out,int cap){
+    int at=0;
+    if(str&&cap>0){
+        const std::int32_t n=*reinterpret_cast<const std::int32_t*>(static_cast<const char*>(str)+16);
+        const std::uint16_t* c=reinterpret_cast<const std::uint16_t*>(static_cast<const char*>(str)+20);
+        for(std::int32_t i=0;i<n&&n<100000;i++){
+            std::uint32_t u=c[i];
+            if(u>=0xd800&&u<0xdc00&&i+1<n&&c[i+1]>=0xdc00&&c[i+1]<0xe000)u=0x10000+((u-0xd800)<<10)+(c[++i]-0xdc00);
+            char b[4];int k=0;
+            if(u<0x80)b[k++]=char(u);
+            else if(u<0x800){b[k++]=char(0xc0|u>>6);b[k++]=char(0x80|(u&63));}
+            else if(u<0x10000){b[k++]=char(0xe0|u>>12);b[k++]=char(0x80|((u>>6)&63));b[k++]=char(0x80|(u&63));}
+            else{b[k++]=char(0xf0|u>>18);b[k++]=char(0x80|((u>>12)&63));b[k++]=char(0x80|((u>>6)&63));b[k++]=char(0x80|(u&63));}
+            if(at+k>=cap)break;
+            std::memcpy(out+at,b,k);at+=k;}}
+    if(cap>0)out[at]=0;
+}
+bool field_editing(void* field){
+    bool ok=false;void* boxed=method_is_editing?invoke(method_is_editing,field,nullptr,ok):nullptr;
+    void* v=ok&&boxed?fn<void*(*)(void*)>(ObjectUnbox)(boxed):nullptr;
+    return v&&*static_cast<unsigned char*>(v);
+}
+void* engine_add_field(void*,const oui::Rect* r,const char* placeholder){
+    void* root=scene_root_handle?fn<void*(*)(std::uint32_t)>(GcTarget)(scene_root_handle):nullptr;
+    if(!root||!r||!class_field||!method_begin_edit||!method_is_editing)return nullptr;
+    void* field=fn<void*(*)(void*,void*)>(ObjectNew)(domain,class_field);
+    if(!field)return nullptr;
+    fn<void(*)(void*)>(ObjectInit)(field);
+    int focusable=1,hidden=0,max=200;
+    if(!prop_set_int(class_field,field,"Focusable",focusable)||
+       !prop_set_float(class_field,field,"X",r->x)||!prop_set_float(class_field,field,"Y",r->y)||
+       !prop_set_float(class_field,field,"Width",r->w)||!prop_set_float(class_field,field,"Height",r->h)||
+       !prop_set_int(class_field,field,"Visible",hidden)){note("UI field props failed");return nullptr;}
+    (void)prop_set_int(class_field,field,"MaxLength",max);
+    if(placeholder)(void)prop_set(class_field,field,"PlaceHolder",fn<void*(*)(void*,const char*)>(StringNew)(domain,placeholder));
+    if(!append_child(root,field)){note("UI field attach failed");return nullptr;}
+    std::uint32_t id=slot_store(field,false);
+    return id?reinterpret_cast<void*>(std::uintptr_t(id)):nullptr;}
+bool engine_begin_edit(void*,void* widget,int user){
+    void* field=slot_object(static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(widget)));
+    if(!field)return false;
+    int shown=1;(void)prop_set_int(class_field,field,"Visible",shown);
+    (void)prop_set(class_field,field,"Text",fn<void*(*)(void*,const char*)>(StringNew)(domain,""));
+    if(user>0)(void)prop_set_int(class_field,field,"UserId",user);
+    bool focus=false,begin=false;
+    if(method_set_focus)invoke(method_set_focus,field,nullptr,focus);
+    invoke(method_begin_edit,field,nullptr,begin);
+    const bool now=field_editing(field);
+    editing.store(now,std::memory_order_release);
+    note("EDIT begin user=%d focus=%d begin=%d editing=%d",user,focus,begin,now);
+    return begin;}
+int engine_edit_poll(void*,void* widget,char* out,int cap){
+    void* field=slot_object(static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(widget)));
+    if(!field)return -1;
+    const bool now=field_editing(field);
+    void* text=nullptr;
+    if(!prop_get_object(class_field,field,"Text",&text))text=nullptr;
+    utf8_of(text,out,cap);
+    if(editing.exchange(now,std::memory_order_acq_rel)!=now)note("EDIT %s chars=%d",now?"open":"closed",int(std::strlen(out)));
+    return now?1:0;}
 constexpr oui::Builder::Vt engine_vt{
     engine_add_panel,engine_add_label,engine_set_text,engine_set_visible,engine_set_color,
     engine_screen_w,engine_screen_h,engine_set_capture,engine_send,
-    engine_add_image,engine_set_image,engine_set_tint,engine_set_text_style,engine_set_rect,engine_set_hold};
+    engine_add_image,engine_set_image,engine_set_tint,engine_set_text_style,engine_set_rect,engine_set_hold,
+    engine_add_field,engine_begin_edit,engine_edit_poll};
 oui::Builder ui_builder(){return oui::Builder{&engine_vt,nullptr};}
 void refresh_text(){
     char text[text_limit];
@@ -588,10 +653,10 @@ void update_hook(Object* instance){
     if(gesture_requested.exchange(false,std::memory_order_acq_rel)){
         oui::app::on_gesture(oui::Gesture::Chord,builder);
         note("GESTURE chords=%u",chords.load());}
-    if(holding.load()&&now_ms()-last_input_ms.load()>hold_idle_ms){
+    if(holding.load()&&!editing.load()&&now_ms()-last_input_ms.load()>hold_idle_ms){
         // Nothing reached us for a while: maybe ShellUI sees no pad without focus. Close.
         release_game("idle");capture.store(false);oui::app::on_gesture(oui::Gesture::Chord,builder);}
-    if(capture.load(std::memory_order_acquire)){
+    if(capture.load(std::memory_order_acquire)&&!editing.load(std::memory_order_acquire)){
         float x=0,y=0;std::uint32_t bx=stick_x.load(std::memory_order_relaxed),by=stick_y.load(std::memory_order_relaxed);
         std::memcpy(&x,&bx,4);std::memcpy(&y,&by,4);
         oui::app::on_pad(pending_down.exchange(0,std::memory_order_acq_rel),x,y,builder);}
@@ -612,6 +677,9 @@ PadData pad_hook(int device){
     pad_polls.fetch_add(1,std::memory_order_relaxed);
     std::uint32_t buttons=data.buttons;
     last_buttons.store(buttons,std::memory_order_relaxed);
+    if(editing.load(std::memory_order_acquire)){ // the system keyboard is open: it reads the pad
+        last_input_ms.store(now_ms(),std::memory_order_relaxed);
+        return data;}
     if((buttons&(bit_l3|bit_r3))==(bit_l3|bit_r3)){
         if(!chord_held.exchange(true,std::memory_order_relaxed)){
             chords.fetch_add(1,std::memory_order_relaxed);
@@ -675,6 +743,12 @@ bool resolve_update_methods(){
         class_image=fn<void*(*)(void*,const char*,const char*)>(ClassFromName)(pui,"Sce.PlayStation.PUI.UI2","ImageBox");
         class_asset=fn<void*(*)(void*,const char*,const char*)>(ClassFromName)(pui,"Sce.PlayStation.PUI","ImageAsset");
         method_asset_ctor=class_asset?method_taking(class_asset,".ctor","System.String"):nullptr;
+        class_field=fn<void*(*)(void*,const char*,const char*)>(ClassFromName)(pui,"Sce.PlayStation.PUI.UI2","TextField");
+        if(class_field){
+            method_begin_edit=fn<Method*(*)(void*,const char*,int)>(MethodFromName)(class_field,"BeginEdit",0);
+            method_is_editing=fn<Method*(*)(void*,const char*,int)>(MethodFromName)(class_field,"IsEditing",0);
+            method_set_focus=method_inherited(class_field,"SetFocus",0);}
+        note("KEYBOARD field=%p begin=%p editing=%p focus=%p",class_field,method_begin_edit,method_is_editing,method_set_focus);
         describe_types();
         note("PICTURES image=%p asset=%p ctor=%p",class_image,class_asset,method_asset_ctor);
         Method* remove_scene=fn<Method*(*)(void*,const char*,int)>(MethodFromName)(class_scene,"RemoveFromSuperScene",0);

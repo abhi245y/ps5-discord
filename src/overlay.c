@@ -20,6 +20,7 @@
 #include "chat.h"
 #include "headset.h"
 #include "prefs.h"
+#include "rp_pair.h"
 #include "stream.h"
 #include "http.h"
 #include "log.h"
@@ -303,6 +304,8 @@ static void compose(char *line, int cap, time_t *live_since)
     int n = 0;
     for (size_t i = 0; i < sizeof keys / sizeof *keys; i++)
         n += snprintf(settings + n, sizeof settings - (size_t)n, "%s%d", i ? "." : "", prefs_get(keys[i]));
+    // Then the console user on screen: the overlay's system keyboard opens for them.
+    snprintf(settings + n, sizeof settings - (size_t)n, ".%d", (int)rp_foreground());
     overlay_headset bt = {0};
     cJSON *hs = hs_state_json();
     bt.on = cJSON_IsTrue(cJSON_GetObjectItem(hs, "on"));
@@ -391,6 +394,8 @@ static void run_command(const char *what)
         r = hs_disconnect();
     else if (strcmp(what, "bt on") == 0 || strcmp(what, "bt off") == 0)
         r = hs_power(what[4] == 'n'); // Settings' switch, kept for the next start too
+    else if (strncmp(what, "typed ", 6) == 0)
+        LOG("overlay: keyboard probe typed \"%s\"", what + 6); // ponytail: the probe; Chat sends it
     else
         why = "unknown";
     LOG("overlay: %s -> %d %s", what, r, why);

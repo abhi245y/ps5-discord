@@ -39,10 +39,14 @@ bool capturing=false;
 char sent[64]="";
 bool set_capture(void*,bool on){capturing=on;return true;}
 bool send(void*,const char* t){std::snprintf(sent,sizeof sent,"%s",t);return true;}
+int edit_user=-1,edit_state=0;char edit_text[64]="";
+void* add_field(void*,const oui::Rect* r,const char*){void* f=add(false,false,r,nullptr);static_cast<Widget*>(f)->visible=false;return f;}
+bool begin_edit(void*,void* f,int user){edit_user=user;static_cast<Widget*>(f)->visible=true;return true;}
+int edit_poll(void*,void*,char* out,int cap){std::snprintf(out,cap,"%s",edit_text);return edit_state;}
 float sw(void*){return 1920;}
 float sh(void*){return 1080;}
 const oui::Builder::Vt vt{add_panel,add_label,set_text,set_visible,set_color,sw,sh,set_capture,send,
-                          add_image,set_image,set_tint,set_style,set_rect,set_hold};
+                          add_image,set_image,set_tint,set_style,set_rect,set_hold,add_field,begin_edit,edit_poll};
 
 Widget* w(void* p){return static_cast<Widget*>(p);}
 bool shows(const char* text){
@@ -57,7 +61,7 @@ int main(){
     oui::Builder b{&vt,nullptr};
     reset();
     assert(build(b));
-    assert(used==118);
+    assert(used==119);
     for(int i=0;i<used;i++)assert(!widgets[i].visible); // nothing before the core says anything
 
     // In a call, two talking, the card on: their avatars and names, "You" under them.
@@ -201,6 +205,18 @@ int main(){
     on_tick(301+60*10,b);assert(!capturing&&!w(dock)->visible&&!w(card)->visible);
     on_gesture(oui::Gesture::Chord,b);assert(!capturing);
     on_text("3|c5|o|1||0|Raid Night|1:01|720p|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~t",b);assert(w(card)->visible);
+    on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0|1~~|",b);
+    // The keyboard probe: Triangle on the call page opens it for the console user; its text
+    // goes to the core once it closed.
+    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0.268435457|1~~|11~11_ab~Mira~t",b);
+    on_gesture(oui::Gesture::Chord,b);assert(capturing);
+    sent[0]=0;on_pad(0x20,0,0,b);assert(edit_user==268435457&&w(edit_field)->visible);
+    edit_state=1;std::snprintf(edit_text,sizeof edit_text,"om");on_tick(10,b);assert(!sent[0]);
+    std::snprintf(edit_text,sizeof edit_text,"omw");edit_state=0;on_tick(11,b);
+    assert(!std::strcmp(sent,"typed omw")&&!w(edit_field)->visible);
+    sent[0]=0;on_pad(0x20,0,0,b);edit_state=0;for(int i=0;i<125;i++)on_tick(12+i,b); // never opened: given up
+    assert(!sent[0]&&!w(edit_field)->visible);
+    on_gesture(oui::Gesture::Chord,b);assert(!capturing);
     on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0|1~~|",b);
     // Not ours: ignored.
     on_text("1|c|o|1||Raid Night|",b);on_text("",b);on_text(nullptr,b);
