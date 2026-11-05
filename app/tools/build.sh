@@ -284,6 +284,7 @@ done
 # The in-game overlay service (overlay/: make all there); the core starts it when Settings say so.
 [[ ! -f $root/../overlay/build/overlay-service.elf ]] || cp "$root/../overlay/build/overlay-service.elf" "$app/assets/overlay.elf"
 [[ ! -f $root/../overlay/build/overlay-restart.elf ]] || cp "$root/../overlay/build/overlay-restart.elf" "$app/assets/overlay-restart.elf"
+[[ ! -f $root/../overlay/build/overlay.build ]] || cp "$root/../overlay/build/overlay.build" "$app/assets/overlay.build"
 # The core payload, which the app starts when it is not running (build it first: make at the repo root).
 if [[ -f $root/../build/ps5-discord.elf ]]; then
     cp "$root/../build/ps5-discord.elf" "$app/assets/"

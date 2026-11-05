@@ -60,6 +60,7 @@ build/parent-service.o: src/core/parent.cpp src/core/protocol.hpp $(HASH_SOURCES
 	$(CXX_PS5) $(FLAGS) -DOVERLAY_MODE=5 -c $< -o $@
 build/overlay-service.elf: build/parent-service.o $(OBJECTS)
 	$(CXX_PS5) $(FLAGS) $^ -o $@
+	printf '%s' $(BUILD_ID) > build/overlay.build # the core compares it with the running one's
 inspect: build/overlay-worker.elf
 	python3 tools/check_elf.py $<
 build/safety-test: tests/safety.cpp src/core/protocol.hpp src/core/hook.hpp

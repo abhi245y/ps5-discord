@@ -218,6 +218,7 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
         Row on = toggle_row("In-game overlay",
                             !s.prefs.overlay      ? "Shows the call over your games."
                             : st == "running"     ? "Ready in your games."
+                            : st == "outdated"    ? "An update is ready. Reload it below."
                             : st == "starting"    ? "Loading…"
                             : st == "reloading"   ? "Reloading the home screen…"
                                                   : "Not loaded. Reload it below.",

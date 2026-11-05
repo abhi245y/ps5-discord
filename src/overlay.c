@@ -509,6 +509,29 @@ int overlay_reload(void)
     return 0;
 }
 
+// The running overlay is from another build than the app's (an update came): its build id
+// (request.bin, after the signature) against assets/overlay.build (the overlay Makefile's).
+static int outdated(void)
+{
+    uint64_t running_build = 0;
+    char want[24] = "";
+    FILE *f = fopen(OVERLAY_DIR "/request.bin", "rb");
+    if (f) {
+        uint64_t head[2];
+        if (fread(head, 1, sizeof head, f) == sizeof head && head[0] == OVERLAY_MAGIC)
+            running_build = head[1];
+        fclose(f);
+    }
+    f = fopen(APP_ASSETS "/overlay.build", "r");
+    if (f) {
+        if (!fgets(want, sizeof want, f))
+            want[0] = 0;
+        fclose(f);
+    }
+    const uint64_t bundled = strtoull(want, NULL, 16);
+    return running_build && bundled && running_build != bundled;
+}
+
 const char *overlay_state(void)
 {
     if (prefs_get("overlay") != 1)
@@ -516,7 +539,7 @@ const char *overlay_state(void)
     if (reloading)
         return "reloading";
     if (running())
-        return "running";
+        return outdated() ? "outdated" : "running";
     return launched_at && mono_ms() - launched_at < 20000 ? "starting" : "stopped";
 }
 
@@ -552,10 +575,16 @@ static void *feed(void *arg)
             reload_at = now + 5000;
             LOG("overlay: not loaded at start, reloading the home screen in 5 s");
             notify_system("Discord", "Reloading the home screen in 5 seconds to load the overlay.", NULL);
+        } else if (on && up && !auto_reloaded && !reloading && now - started < 60000 && outdated()) {
+            // An update came: the home screen still runs the old overlay. Reload it once, with notice.
+            auto_reloaded = 1;
+            reload_at = now + 5000;
+            LOG("overlay: an older build is running, reloading the home screen in 5 s");
+            notify_system("Discord", "Reloading the home screen in 5 seconds to update the overlay.", NULL);
         }
         if (reload_at && now >= reload_at) {
             reload_at = 0;
-            if (!running())
+            if (!running() || outdated())
                 overlay_reload();
         }
         compose(line, sizeof line, &live_since);
