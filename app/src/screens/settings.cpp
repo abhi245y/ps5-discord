@@ -234,7 +234,7 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
             choice_row("Card position", "Where the talking card sits.", "overlay_pos", kPlaces, s.prefs.overlay_pos),
             choice_row("Hold Options", "Opens the panel; most games pause first. L3+R3 works too.", "overlay_hold",
                        kHold, s.prefs.overlay_hold),
-            toggle_row("Load at start", "If it isn't loaded when Discord opens, the home screen reloads by itself.",
+            toggle_row("Load at start", "If it isn't loaded when Discord starts, the home screen reloads after a notice.",
                        "overlay_autoload", s.prefs.overlay_autoload),
             reload,
         };

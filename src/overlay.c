@@ -23,6 +23,7 @@
 #include "stream.h"
 #include "http.h"
 #include "log.h"
+#include "notify.h"
 #include "png_circle.h"
 #include "voice.h"
 
@@ -410,13 +411,20 @@ static int running(void)
         uint64_t signature, token, at_ms, updates;
         int32_t state;
     } st;
+    static uint64_t last_ok; // ponytail: racy across threads, a stale value only delays 3 s
     FILE *f = fopen(OVERLAY_DIR "/status.bin", "rb");
-    if (!f)
-        return 0;
-    const int ok = fread(&st, 1, sizeof st, f) == sizeof st;
-    fclose(f);
+    const int ok = f && fread(&st, 1, sizeof st, f) == sizeof st;
+    if (f)
+        fclose(f);
     const uint64_t now = mono_ms();
-    return ok && st.signature == OVERLAY_MAGIC && st.state == 2 && st.at_ms <= now + 1000 && now - st.at_ms < 3000;
+    if (!ok || st.signature != OVERLAY_MAGIC) // caught mid-write (5 a second): the last good read stands
+        return last_ok && now - last_ok < 3000;
+    if (st.state == 2 && st.at_ms <= now + 1000 && now - st.at_ms < 3000) {
+        last_ok = now;
+        return 1;
+    }
+    last_ok = 0;
+    return 0;
 }
 
 static uint64_t launched_at;
@@ -521,21 +529,34 @@ static void *feed(void *arg)
     overlay_command c;
     uint64_t seen = read_command(&c); // one left from before this core ran is not new
     int auto_reloaded = 0;
+    const uint64_t started = mono_ms();
+    uint64_t down_since = 0, reload_at = 0;
     mkdir(OVERLAY_DIR, 0755);
     mkdir(OVERLAY_DIR "/av", 0755);
     for (;;) {
         const int on = prefs_get("overlay") == 1;
-        if (on && !launched && !running()) {
+        const uint64_t now = mono_ms();
+        const int up = running();
+        down_since = up ? 0 : down_since ? down_since : now;
+        if (on && !launched && !up) {
             launch();
             launched = 1;
         } else if (!on && running() && !reloading) {
             stop_service(); // switched off in Settings
             launched = 0;
         } else if (on && launched && !auto_reloaded && !reloading && prefs_get("overlay_autoload") == 1 &&
-                   mono_ms() - launched_at > 20000 && !running()) {
-            auto_reloaded = 1; // the launch was refused (this home screen had one): Load at start reloads it, once
-            LOG("overlay: not loaded at start, reloading the home screen");
-            overlay_reload();
+                   now - started < 60000 && down_since && now - down_since > 10000) {
+            // Load at start: only while this core starts (it outlives the app), and only after the
+            // overlay stayed down for 10 s (the launch was refused: this home screen had one).
+            auto_reloaded = 1;
+            reload_at = now + 5000;
+            LOG("overlay: not loaded at start, reloading the home screen in 5 s");
+            notify_system("Discord", "Reloading the home screen in 5 seconds to load the overlay.", NULL);
+        }
+        if (reload_at && now >= reload_at) {
+            reload_at = 0;
+            if (!running())
+                overlay_reload();
         }
         compose(line, sizeof line, &live_since);
         if (!quitting && strcmp(line, last) != 0 && write_line(line) == 0)
