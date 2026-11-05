@@ -11,7 +11,9 @@ VENDOR := vendor/shellui-loader
 OBJECTS := build/pt.o build/loader.o build/injector.o build/remote-call.o build/blob.o
 .PHONY: all test inspect clean preview
 all: build/overlay-resolve.elf build/overlay-observe.elf build/overlay-widget.elf build/overlay-input.elf build/overlay-restart.elf build/overlay-service.elf inspect
-build/overlay-worker.elf: src/core/worker.cpp src/core/protocol.hpp src/core/hook.hpp src/app/overlay_ui.hpp src/app/overlay_app.cpp src/app/discord_app.inc $(VENDOR)/prologue.hpp
+# The build id is baked into both halves (worker and loader): any change to it rebuilds both,
+# or the loader's request carries an id the embedded worker refuses.
+build/overlay-worker.elf: $(HASH_SOURCES) Makefile
 	@mkdir -p build
 	$(CXX_PS5) $(FLAGS) -nostdlib++ -shared -Wl,-e,elf_main -Wl,-Bsymbolic -Wl,--hash-style=sysv src/core/worker.cpp -lkernel_sys -lSceLibcInternal -o $@
 build/blob.c: build/overlay-worker.elf tools/embed.py
