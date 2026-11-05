@@ -3,7 +3,7 @@ SDK := $(abspath $(PS5_PAYLOAD_SDK))
 CXX_PS5 := $(SDK)/bin/prospero-clang++
 CC_PS5 := $(SDK)/bin/prospero-clang
 export LLVM_CONFIG
-HASH_SOURCES := src/core/worker.cpp src/core/protocol.hpp src/core/hook.hpp \
+HASH_SOURCES := src/core/worker.cpp src/core/protocol.hpp src/core/hook.hpp src/core/parent.cpp \
              src/app/overlay_ui.hpp src/app/overlay_app.cpp src/app/discord_app.inc vendor/shellui-loader/prologue.hpp
 BUILD_ID := $(shell cat $(HASH_SOURCES) | sha256sum | cut -c1-16)
 FLAGS := -O2 -g -march=znver2 -fPIC -std=c++20 -fno-exceptions -fno-rtti -fno-threadsafe-statics -Wall -Wextra -Werror -fno-omit-frame-pointer -DOVERLAY_BUILD=0x$(BUILD_ID)ULL -Isrc -Isrc/core -Isrc/app -Ivendor/shellui-loader
