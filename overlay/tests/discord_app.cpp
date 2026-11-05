@@ -17,7 +17,7 @@ Widget widgets[128];
 int used=0;
 
 void* add(bool label,bool image,const oui::Rect* r,const char* text){
-    assert(used<96); // the engine's limit
+    assert(used<160); // the engine's limit
     Widget& w=widgets[used++];
     w.label=label;w.image=image;w.r=*r;
     std::snprintf(image?w.path:w.text,128,"%s",text?text:"");
@@ -57,7 +57,7 @@ int main(){
     oui::Builder b{&vt,nullptr};
     reset();
     assert(build(b));
-    assert(used==91);
+    assert(used==114);
     for(int i=0;i<used;i++)assert(!widgets[i].visible); // nothing before the core says anything
 
     // In a call, two talking, the card on: their avatars and names, "You" under them.
@@ -110,24 +110,47 @@ int main(){
     sent[0]=0;on_pad(0x80,0,0,b);assert(!sent[0]); // nothing to act on
     on_gesture(oui::Gesture::Chord,b);
 
-    // The mini settings: Options opens them, up/down moves, left/right changes and tells the
-    // core, the headset row connects; Circle goes back to the call page.
+    // The mini settings: Options opens them on the Go Live tab; L1/R1 moves along the tabs;
+    // Cross opens a row's choices inline (up/down, Cross picks), flips a toggle; left/right
+    // moves a slider; the headset row connects and disconnects; Circle goes back.
     on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0|1~68:A5~68:A5^AirPods;00:1B^Buds|11~11_ab~Mira~-",b);
     on_gesture(oui::Gesture::Chord,b);
     on_pad(0x100,0,0,b);
-    assert(shows("Settings")&&shows("Go Live quality")&&w(item_focus)->visible&&!w(tile[0])->visible);
-    assert(shows("\xe2\x80\xb9  720p \xc2\xb7 30 fps  \xe2\x80\xba")&&shows("100%")&&shows("Top right")&&shows("0.6 s"));
-    on_pad(0x4,0,0,b);assert(!std::strcmp(sent,"set golive_quality 1"));
-    on_pad(0x8,0,0,b);on_pad(0x4,0,0,b);assert(!std::strcmp(sent,"set mic_gain 6")&&shows("\xe2\x80\xb9  120%  \xe2\x80\xba"));
-    for(int i=0;i<3;i++)on_pad(0x8,0,0,b);
-    on_pad(0x4,0,0,b);assert(!std::strcmp(sent,"set overlay_pos 1"));
-    on_pad(0x8,0,0,b);on_pad(0x1,0,0,b);assert(!std::strcmp(sent,"set overlay_hold 2")&&hold_ms==500); // 0.5 s
-    for(int i=0;i<6;i++)on_pad(0x2,0,0,b); // up past the top: wraps to the headset row
-    assert(shows("\xe2\x80\xb9  AirPods \xc2\xb7 on  \xe2\x80\xba")&&shows("Disconnect"));
-    on_pad(0x80,0,0,b);assert(!std::strcmp(sent,"bt disconnect"));
-    on_pad(0x4,0,0,b);on_pad(0x80,0,0,b);assert(!std::strcmp(sent,"bt connect 00:1B"));
+    assert(!std::strcmp(w(title)->text,"Settings"));
+    assert(shows("Go Live"));
+    assert(shows("Quality"));
+    assert(w(set_focus)->visible);
+    assert(!w(tile[0])->visible);
+    assert(shows("720p \xc2\xb7 30 fps")&&shows("Category")&&w(set_chevron[0])->visible);
+    on_pad(0x80,0,0,b); // open Quality's choices
+    assert(w(drop_bg)->visible&&shows("1080p \xc2\xb7 60 fps")&&w(drop_on)->r.y==w(drop_bg)->r.y+6);
+    on_pad(0x8,0,0,b);on_pad(0x80,0,0,b);
+    assert(!std::strcmp(sent,"set golive_quality 1")&&!w(drop_bg)->visible&&shows("720p \xc2\xb7 60 fps"));
+    on_pad(0x800,0,0,b); // R1: Voice
+    assert(shows("Mic gain")&&shows("Call volume")&&w(slider_knob[0])->visible&&shows("100%"));
+    const float knob=w(slider_knob[0])->r.x;
+    on_pad(0x4,0,0,b);assert(!std::strcmp(sent,"set mic_gain 6")&&w(slider_knob[0])->r.x>knob&&shows("120%"));
+    on_pad(0x800,0,0,b); // Card: Show, Position, Hold Options
+    on_pad(0x8,0,0,b);on_pad(0x80,0,0,b); // Position's choices: six, Top right checked
+    assert(shows("Middle left")&&w(drop_check)->visible);
+    assert(w(set_bg[2])->r.y>kItemY+kItemStep*2); // the row under it moved down
+    on_pad(0x8,0,0,b);on_pad(0x80,0,0,b);assert(!std::strcmp(sent,"set overlay_pos 1"));
+    on_pad(0x8,0,0,b);on_pad(0x1,0,0,b);assert(!std::strcmp(sent,"set overlay_hold 2")&&hold_ms==500);
+    assert(shows("\xe2\x80\xb9  0.5 s  \xe2\x80\xba"));
+    on_pad(0x800,0,0,b); // Alerts: a toggle flips with Cross
+    assert(w(set_toggle[0])->visible&&ends(w(set_toggle[0])->path,"toggle_on.png"));
+    on_pad(0x80,0,0,b);assert(!std::strcmp(sent,"set notify_dm 0")&&ends(w(set_toggle[0])->path,"toggle_off.png"));
+    on_pad(0x80,0,0,b); // and back on
+    on_pad(0x800,0,0,b); // Headset: the paired ones and Disconnect
+    assert(shows("AirPods"));
+    on_pad(0x80,0,0,b);assert(shows("Buds")&&shows("Disconnect")&&w(drop_check)->r.y==w(drop_bg)->r.y+6+10);
+    on_pad(0x8,0,0,b);on_pad(0x80,0,0,b);assert(!std::strcmp(sent,"bt connect 00:1B"));
+    on_pad(0x80,0,0,b);on_pad(0x2,0,0,b);on_pad(0x80,0,0,b);assert(!std::strcmp(sent,"bt disconnect")); // up wraps to Disconnect
+    on_pad(0x80,0,0,b);on_pad(0x40,0,0,b);assert(!w(drop_bg)->visible&&w(set_focus)->visible); // Circle closes the choices
+    on_pad(0x400,0,0,b);on_pad(0x400,0,0,b);on_pad(0x400,0,0,b);on_pad(0x400,0,0,b); // L1 back to Go Live
+    assert(shows("Quality"));
     on_pad(0x40,0,0,b); // Circle: back to the call page
-    assert(!w(item_focus)->visible&&w(tile[0])->visible&&!std::strcmp(w(title)->text,"Raid Night"));
+    assert(!w(set_focus)->visible&&w(tile[0])->visible&&!std::strcmp(w(title)->text,"Raid Night"));
     on_gesture(oui::Gesture::Chord,b);
     // The card where Settings put it: top left after "set overlay_pos 1".
     on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.1.3.1.1.1.0.0|1~~|11~11_ab~Mira~t",b);
@@ -137,7 +160,7 @@ int main(){
     // Live: the quality row is fixed.
     on_text("3|c|o|1|0:05|2|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0|1~~|",b);
     on_gesture(oui::Gesture::Chord,b);on_pad(0x100,0,0,b);
-    sent[0]=0;on_pad(0x4,0,0,b);assert(!sent[0]&&shows("Live now"));
+    sent[0]=0;on_pad(0x80,0,0,b);assert(!sent[0]&&shows("Live now")&&!w(drop_bg)->visible&&!w(set_chevron[0])->visible);
     on_pad(0x40,0,0,b);on_gesture(oui::Gesture::Chord,b);
 
     on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0|1~~|",b);

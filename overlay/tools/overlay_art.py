@@ -115,6 +115,32 @@ def glyph(name, size, colour, shape):
     save(img, name, size, size)
 
 
+def toggle(name, on):
+    img, d = canvas(60, 34)
+    d.rounded_rectangle((0, 0, 60 * S - 1, 34 * S - 1), 17 * S, fill=CORAL if on else (70, 74, 82, 255))
+    x = 43 if on else 17
+    d.ellipse(((x - 13) * S, 4 * S, (x + 13) * S, 30 * S), fill=WHITE)
+    save(img, name, 60, 34)
+
+
+def chevron(name, up):
+    img, d = canvas(24, 24)
+    k = S
+    pts = [(5, 15), (12, 8), (19, 15)] if up else [(5, 9), (12, 16), (19, 9)]
+    d.line([(x * k, y * k) for x, y in pts], fill=WHITE, width=3 * k, joint="curve")
+    save(img, name, 24, 24)
+
+
+def ring_dot(name, size):
+    img, d = canvas(size, size)
+    d.ellipse((0, 0, size * S - 1, size * S - 1), fill=WHITE)
+    save(img, name, size, size)
+
+
+def check(d, k):
+    d.line([(14 * k, 33 * k), (27 * k, 46 * k), (50 * k, 20 * k)], fill=WHITE, width=int(7 * k), joint="curve")
+
+
 def text_pill(name, w, h, fill, text, size, outline=False, dot=False):
     img, d = canvas(w, h)
     if outline:
@@ -147,8 +173,25 @@ def main():
     rounded("tile_leave", 122, 140, 16, LEAVE)
     rounded("tile_focus", 134, 152, 21, None, WHITE, 3)
     rounded("line", 519, 2, 0, LINE)
-    # The mini settings: the focused row.
-    rounded("setting_focus", 519, 56, 14, TILE, CORAL, 2)
+    # The mini settings (tabs, rows, inline dropdown): discord_app.inc kTabW and friends.
+    for w in (92, 76, 66, 76, 96):
+        rounded("pill_%d" % w, w, 40, 20, WHITE)  # tinted: coral when its tab is open
+    text_pill("chip_l1", 38, 26, None, "L1", 12, outline=True)
+    text_pill("chip_r1", 38, 26, None, "R1", 12, outline=True)
+    text_pill("chip_l1r1", 82, 28, None, "L1 / R1", 12, outline=True)
+    rounded("setting_row", 519, 62, 14, CARD)
+    rounded("setting_focus", 519, 62, 14, None, CORAL, 2)
+    toggle("toggle_on", True)
+    toggle("toggle_off", False)
+    chevron("chevron_down", False)
+    chevron("chevron_up", True)
+    rounded("slider_track", 170, 8, 4, (70, 74, 82, 255))
+    rounded("slider_fill", 170, 8, 4, CORAL)
+    ring_dot("slider_knob", 26)
+    for k in range(2, 7):
+        rounded("dropdown_%d" % k, 499, 12 + 48 * k, 14, (24, 26, 31, 255))
+    rounded("option_on", 483, 44, 10, CORAL)
+    icon("check", check, 32)
     ring("ring", 106, 4, CORAL)
     glyph("glyph_cross", 37, (122, 160, 255, 255), "cross")
     glyph("glyph_circle", 37, (255, 92, 110, 255), "circle")

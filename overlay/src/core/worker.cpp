@@ -65,7 +65,7 @@ constexpr std::size_t text_limit=2048;      // text.bin, bytes
 char last_text[text_limit]{};                // UI thread only
 float ui_screen_w=1920,ui_screen_h=1080;     // UI thread only
 struct WidgetSlot{std::uint32_t handle=0,asset=0;bool label=false;char path[160]{};};
-constexpr std::uint32_t widget_limit=96;
+constexpr std::uint32_t widget_limit=160;
 WidgetSlot widget_slots[widget_limit];       // UI thread only, app-facing ids
 static_assert(std::atomic<Update>::is_always_lock_free&&std::atomic<PadCall>::is_always_lock_free&&
     std::atomic<ShareCall>::is_always_lock_free&&std::atomic<std::uint64_t>::is_always_lock_free);
