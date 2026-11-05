@@ -584,7 +584,7 @@ void update_hook(Object* instance){
         return;}
     if((tick%text_period_ticks)==0)refresh_text();
     oui::Builder builder=ui_builder();
-    oui::app::on_tick(tick);
+    oui::app::on_tick(tick,builder);
     if(gesture_requested.exchange(false,std::memory_order_acq_rel)){
         oui::app::on_gesture(oui::Gesture::Chord,builder);
         note("GESTURE chords=%u",chords.load());}

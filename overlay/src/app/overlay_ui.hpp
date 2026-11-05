@@ -93,7 +93,7 @@ void on_text(const char* line,Builder& b);
 // bits, L3/R3 excluded: they are the chord) and the left stick (-1..1), every frame.
 void on_pad(std::uint32_t down,float lx,float ly,Builder& b);
 // Every rendered frame after build (UI thread). Keep it cheap.
-void on_tick(std::uint64_t frame);
+void on_tick(std::uint64_t frame,Builder& b);
 // Reset internal state; used by the host test harness.
 void reset();
 

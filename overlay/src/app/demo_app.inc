@@ -38,7 +38,7 @@ void on_text(const char* line,Builder& b){
     }
 }
 
-void on_tick(std::uint64_t){}
+void on_tick(std::uint64_t,Builder&){}
 
 void on_pad(std::uint32_t,float,float,Builder&){}
 

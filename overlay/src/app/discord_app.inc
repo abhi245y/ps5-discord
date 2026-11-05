@@ -125,6 +125,8 @@ State st;
 struct Pending { int value=0; std::uint64_t until=0; };
 Pending pending[kSettingCount+1]; // the last: Bluetooth on/off
 std::uint64_t frame_now=0;
+std::uint64_t alive_at=0; // the frame of the core's last line: it changes every second (the beat)
+constexpr std::uint64_t kStaleFrames=60*10; // 10 s without one: the core crashed or was killed
 constexpr std::uint64_t kPendingFrames=90; // 1.5 s at 60 fps
 bool open=false;
 int focus=0;      // the focused tile
@@ -153,6 +155,8 @@ void* set_chevron[kSettingRows]={}; void* set_toggle[kSettingRows]={};
 void* slider_track[2]={}; void* slider_fill[2]={}; void* slider_knob[2]={};
 void* set_focus=nullptr; void* drop_bg=nullptr; void* drop_on=nullptr; void* drop_check=nullptr;
 void* drop_word[kOptions]={};
+void* nitro_note[2]={}; // under Quality's choices: above 720p · 30 fps is Nitro's
+int armed=-1;           // the Quality choice Select was pressed on once (it asks twice)
 
 const char* const kCommands[kTiles]={"mute","deafen","golive","leave"};
 
@@ -292,12 +296,17 @@ bool can_open(int s){ // a row whose choices open
 // The rows a tab shows now: Call mode only while AirPods are connected.
 int rows_in(const Tab& t){return t.count-(t.rows[t.count-1]==kCallMode&&!st.airpods);}
 
+// The highlighted Quality choice needs Nitro (or a boosted server); like the app, only
+// asked when going up from 720p · 30 fps.
+bool nitro_choice(){return expanded&&kTabs[tab].rows[row]==0&&option>0&&st.set[0]==0;}
+constexpr float kNoteH=76;
+
 // Where the settings' rows end (with the open row's choices).
 float settings_end(){
     const Tab& t=kTabs[tab];
     float end=kItemY+kItemStep*(rows_in(t)-1)+kItemH;
     if(expanded){const char* names[kOptions];int current=0;end+=20+kOptionH*choices(t.rows[row],names,current);}
-    return end;
+    return end+(nitro_choice()?kNoteH:0);
 }
 
 void render_settings(Builder& b){
@@ -366,6 +375,14 @@ void render_settings(Builder& b){
     show(b,drop_bg,settings&&expanded);show(b,drop_on,settings&&expanded);
     show(b,drop_check,settings&&expanded&&current<count);
     for(int j=0;j<kOptions;j++)show(b,drop_word[j],settings&&expanded&&j<count);
+    const bool note=settings&&nitro_choice();
+    if(note){
+        const float ny=dy+12+kOptionH*count+12;
+        b.set_rect(nitro_note[0],{kRowX+22,ny,kRowW-44,30});
+        b.set_rect(nitro_note[1],{kRowX+22,ny+32,kRowW-44,30});
+        b.set_text(nitro_note[1],armed==option?"Select again to use it":"Without them it may lag or fail for viewers");
+        b.set_text_style(nitro_note[1],19,0,armed==option?kCoral:kDim,0);}
+    show(b,nitro_note[0],note);show(b,nitro_note[1],note);
 }
 
 void render(Builder& b){
@@ -464,13 +481,14 @@ void render(Builder& b){
 }  // namespace
 
 void reset(){
-    st=State{};open=false;focus=0;stick=0;settings=false;tab=row=option=0;expanded=false;frame_now=0;
+    st=State{};open=false;focus=0;stick=0;settings=false;tab=row=option=0;expanded=false;frame_now=0;alive_at=0;
     for(Pending& p:pending)p=Pending{};
     chip_l1=chip_r1=set_focus=drop_bg=drop_on=drop_check=nullptr;
     for(int i=0;i<kTabCount;i++)tab_pill[i]=tab_word[i]=nullptr;
     for(int i=0;i<kSettingRows;i++)set_bg[i]=set_name[i]=set_value[i]=set_chevron[i]=set_toggle[i]=nullptr;
     for(int i=0;i<2;i++)slider_track[i]=slider_fill[i]=slider_knob[i]=nullptr;
     for(int j=0;j<kOptions;j++)drop_word[j]=nullptr;
+    nitro_note[0]=nitro_note[1]=nullptr;armed=-1;
     dock=dock_mid=dock_end=title=clock=timer=tile_sub=tile_focus=rule=nullptr;
     card=pill=card_head=card_call=you_ring=you_mic=you_text=card_rule=card_hint=nullptr;
     for(int i=0;i<kRows;i++)row_bg[i]=row_avatar[i]=row_ring[i]=row_name[i]=row_icon[i]=nullptr;
@@ -534,6 +552,8 @@ bool build(Builder& b){
     set_focus=image(b,at,"setting_focus");
     drop_bg=image(b,at,"dropdown_3");drop_on=image(b,at,"option_on");drop_check=image(b,at,"check");
     for(int j=0;j<kOptions;j++)drop_word[j]=label(b,at,21,3,kWhite);
+    nitro_note[0]=label(b,at,19,3,kText,0,"Needs Nitro or a boosted server");
+    nitro_note[1]=label(b,at,19,0,kDim);
     for(void* w:set_name)if(!w)return false;
     for(void* w:drop_word)if(!w)return false;
 
@@ -586,8 +606,10 @@ void settings_pad(std::uint32_t down,Builder& b){
     if(expanded){
         const char* names[kOptions];int current=0;
         const int count=choices(s,names,current);
+        const int was_armed=armed;armed=-1;
         if(down&kCircle)expanded=false;
         else if(move&&count)option=((option+move)%count+count)%count;
+        else if((down&kCross)&&nitro_choice()&&was_armed!=option){armed=option;render(b);return;} // asks once more
         else if(down&kCross){
             if(s>=0)apply(s,kSettings[s].min+option,b);
             else{
@@ -639,9 +661,17 @@ void on_pad(std::uint32_t down,float lx,float,Builder& b){
     if((down&kCross)&&(st.state=='c'||st.state=='j'))b.send(kCommands[focus]);
 }
 
+// The core is gone (state x): close an open panel so the game gets its pad back.
+void go_inert(Builder& b){
+    if(!open)return;
+    open=settings=expanded=false;
+    b.set_capture(false);
+}
+
 void on_text(const char* line,Builder& b){
     const int hold=st.set[5];
     if(!parse(line,st))return;
+    alive_at=frame_now;
     for(int i=0;i<kSettingCount;i++){ // confirmed, or given up on: the core's value again
         Pending& p=pending[i];
         if(!p.until)continue;
@@ -650,12 +680,16 @@ void on_text(const char* line,Builder& b){
     if(bt.until){if(frame_now>=bt.until||st.bt_on==(bt.value!=0))bt.until=0;else st.bt_on=bt.value!=0;}
     if(row>=rows_in(kTabs[tab])){row=rows_in(kTabs[tab])-1;expanded=false;} // AirPods left: Call mode went
     if(st.set[5]!=hold)b.set_hold((st.set[5]+3)*100);
-    if(st.state=='x'&&open){ // the core quit with the panel open: close it, the game gets its pad
-        open=settings=expanded=false;
-        b.set_capture(false);}
+    if(st.state=='x')go_inert(b);
     render(b);
 }
 
-void on_tick(std::uint64_t frame){frame_now=frame;}
+void on_tick(std::uint64_t frame,Builder& b){
+    frame_now=frame;
+    if(st.state!='x'&&frame_now-alive_at>kStaleFrames){ // no beat: as if the core quit
+        st.state='x';
+        go_inert(b);
+        render(b);}
+}
 
 }}  // namespace oui::app

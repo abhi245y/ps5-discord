@@ -368,6 +368,7 @@ struct Prefs
     int overlay_glance = 1;    // its talking card: 0 off, 1 while someone talks, 2 always
     int overlay_pos = 0;       // where the card sits (screens/settings.cpp kPlaces)
     int overlay_hold = 3;      // holding Options 0.3 s + this many tenths opens the panel
+    bool overlay_autoload = false; // not loaded when Discord starts: reload the home screen by itself
 
     void set(const std::string &key, int value) // a set_pref request, applied here
     {
@@ -399,6 +400,8 @@ struct Prefs
             overlay_pos = value;
         else if (key == "overlay_hold")
             overlay_hold = value;
+        else if (key == "overlay_autoload")
+            overlay_autoload = value != 0;
     }
 };
 

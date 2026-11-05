@@ -217,6 +217,29 @@ static void fetch_avatars(const chat_person *people, int count)
     }
 }
 
+// The avatars the call shows, for avatar_thread: downloads stay off the feed's loop, which
+// writes the beat every second (a slow download made the overlay think the core was gone).
+static pthread_mutex_t avatar_mu = PTHREAD_MUTEX_INITIALIZER;
+static chat_person avatar_want[MAX_PEOPLE];
+static int avatar_count;
+
+static void *avatar_thread(void *arg)
+{
+    (void)arg;
+    static chat_person people[MAX_PEOPLE];
+    for (;;) {
+        pthread_mutex_lock(&avatar_mu);
+        const int count = avatar_count;
+        memcpy(people, avatar_want, sizeof people);
+        pthread_mutex_unlock(&avatar_mu);
+        fetch_avatars(people, count);
+        usleep(200000);
+    }
+    return NULL;
+}
+
+static uint64_t mono_ms(void);
+
 static void compose(char *line, int cap, time_t *live_since)
 {
     char *text = voice_state_json();
@@ -248,7 +271,10 @@ static void compose(char *line, int cap, time_t *live_since)
         talking |= p->flag == 't';
     }
     cJSON_Delete(v);
-    fetch_avatars(people, count);
+    pthread_mutex_lock(&avatar_mu);
+    memcpy(avatar_want, people, sizeof(chat_person) * (size_t)count);
+    avatar_count = count;
+    pthread_mutex_unlock(&avatar_mu);
 
     char timer[16] = "";
     if (state == 'c' && since > 0)
@@ -295,6 +321,13 @@ static void compose(char *line, int cap, time_t *live_since)
     cJSON_Delete(hs);
     overlay_line(line, cap, state, me, glance, live, live[0] ? stream_viewers() : 0, call, timer, quality, settings,
                  &bt, shown, count);
+    // The beat: a digit after the state ("3|c7|...") that changes every second, so the line is
+    // rewritten while the core lives; the overlay goes inert when it stops (crash, kill).
+    const size_t n = strlen(line);
+    if (n + 2 <= (size_t)cap) {
+        memmove(line + 4, line + 3, n - 2);
+        line[3] = (char)('0' + (mono_ms() / 1000) % 10);
+    }
 }
 
 static int write_line(const char *line)
@@ -486,6 +519,7 @@ static void *feed(void *arg)
     int launched = 0;
     overlay_command c;
     uint64_t seen = read_command(&c); // one left from before this core ran is not new
+    int auto_reloaded = 0;
     mkdir(OVERLAY_DIR, 0755);
     mkdir(OVERLAY_DIR "/av", 0755);
     for (;;) {
@@ -496,6 +530,11 @@ static void *feed(void *arg)
         } else if (!on && running() && !reloading) {
             stop_service(); // switched off in Settings
             launched = 0;
+        } else if (on && launched && !auto_reloaded && !reloading && prefs_get("overlay_autoload") == 1 &&
+                   mono_ms() - launched_at > 20000 && !running()) {
+            auto_reloaded = 1; // the launch was refused (this home screen had one): Load at start reloads it, once
+            LOG("overlay: not loaded at start, reloading the home screen");
+            overlay_reload();
         }
         compose(line, sizeof line, &live_since);
         if (strcmp(line, last) != 0 && write_line(line) == 0)
@@ -525,6 +564,7 @@ void overlay_init(void)
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     pthread_t t;
     pthread_create(&t, &attr, feed, NULL);
+    pthread_create(&t, &attr, avatar_thread, NULL);
     pthread_attr_destroy(&attr);
 }
 #else

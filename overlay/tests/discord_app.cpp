@@ -57,7 +57,7 @@ int main(){
     oui::Builder b{&vt,nullptr};
     reset();
     assert(build(b));
-    assert(used==116);
+    assert(used==118);
     for(int i=0;i<used;i++)assert(!widgets[i].visible); // nothing before the core says anything
 
     // In a call, two talking, the card on: their avatars and names, "You" under them.
@@ -124,8 +124,13 @@ int main(){
     assert(shows("720p \xc2\xb7 30 fps")&&!shows("Category")&&!w(hint_icon[2])->visible&&w(set_chevron[0])->visible);
     on_pad(0x80,0,0,b); // open Quality's choices
     assert(w(drop_bg)->visible&&shows("1080p \xc2\xb7 60 fps")&&w(drop_on)->r.y==w(drop_bg)->r.y+6);
-    on_pad(0x8,0,0,b);on_pad(0x80,0,0,b);
+    assert(!w(nitro_note[0])->visible); // 720p · 30 fps: nothing to say
+    on_pad(0x8,0,0,b);assert(shows("Needs Nitro or a boosted server")&&shows("Without them it may lag or fail for viewers"));
+    sent[0]=0;on_pad(0x80,0,0,b); // the first Select only asks
+    assert(!sent[0]&&w(drop_bg)->visible&&shows("Select again to use it"));
+    on_pad(0x80,0,0,b);
     assert(!std::strcmp(sent,"set golive_quality 1")&&!w(drop_bg)->visible&&shows("720p \xc2\xb7 60 fps"));
+    assert(!w(nitro_note[0])->visible);
     on_pad(0x800,0,0,b); // R1: Voice
     assert(shows("Mic gain")&&shows("Call volume")&&w(slider_knob[0])->visible&&shows("100%"));
     const float knob=w(slider_knob[0])->r.x;
@@ -186,6 +191,15 @@ int main(){
     on_text("3|x|o|0||0||||||",b);
     assert(!capturing&&!w(dock)->visible&&!w(card)->visible);
     on_gesture(oui::Gesture::Chord,b);assert(!capturing&&!w(dock)->visible);
+    on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0|1~~|",b);
+    // The core crashed: no new line (no beat) for 10 s acts like the quit line.
+    on_tick(1,b);on_text("3|c4|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~t",b);
+    assert(w(card)->visible); // the beat digit after the state is ignored
+    on_gesture(oui::Gesture::Chord,b);assert(capturing);
+    on_tick(1+60*10,b);assert(capturing); // not yet
+    on_tick(2+60*10,b);assert(!capturing&&!w(dock)->visible&&!w(card)->visible);
+    on_gesture(oui::Gesture::Chord,b);assert(!capturing);
+    on_text("3|c5|o|1||0|Raid Night|1:01|720p|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~t",b);assert(w(card)->visible);
     on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0|1~~|",b);
     // Not ours: ignored.
     on_text("1|c|o|1||Raid Night|",b);on_text("",b);on_text(nullptr,b);

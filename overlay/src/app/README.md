@@ -19,7 +19,7 @@ namespace oui { namespace app {
 bool build(Builder& b);                        // once, when the scene is ready
 void on_gesture(Gesture g, Builder& b);        // L3+R3 chord edge
 void on_text(const char* line, Builder& b);    // new content line (deduped)
-void on_tick(std::uint64_t frame);             // every rendered frame
+void on_tick(std::uint64_t frame, Builder& b); // every rendered frame
 }}
 ```
 

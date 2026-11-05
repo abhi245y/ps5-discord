@@ -79,7 +79,8 @@ int main(int argc,char** argv){
     feed("11~11_ab~Mira~t");on_gesture(oui::Gesture::Chord,b);dump(dir,"call-one");on_gesture(oui::Gesture::Chord,b);
     feed(four);on_gesture(oui::Gesture::Chord,b);dump(dir,"call-four");
     on_pad(0x100,0,0,b);dump(dir,"settings-golive");
-    on_pad(0x80,0,0,b);dump(dir,"settings-golive-open");on_pad(0x40,0,0,b);
+    on_pad(0x80,0,0,b);dump(dir,"settings-golive-open");
+    on_pad(0x8,0,0,b);dump(dir,"settings-golive-nitro");on_pad(0x80,0,0,b);dump(dir,"settings-golive-armed");on_pad(0x40,0,0,b);
     on_pad(0x800,0,0,b);dump(dir,"settings-voice");
     on_pad(0x800,0,0,b);on_pad(0x8,0,0,b);on_pad(0x80,0,0,b);dump(dir,"settings-card-open");on_pad(0x40,0,0,b);
     on_pad(0x800,0,0,b);dump(dir,"settings-alerts");

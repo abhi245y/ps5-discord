@@ -28,6 +28,7 @@ static pref prefs[] = {
     {"overlay", 0, 1, 0, 0},        // in-game overlay (overlay/, loaded into the system UI): off until tested
     {"overlay_pos", 0, 5, 0, 0},    // its talking card: top right, top left, bottom right, bottom left, middle right, middle left
     {"overlay_hold", 0, 12, 3, 3},  // holding Options 0.3 s + this many tenths opens the panel
+    {"overlay_autoload", 0, 1, 0, 0}, // the core starts and the overlay is not loaded: reload the home screen
 };
 #define COUNT ((int)(sizeof prefs / sizeof *prefs))
 
