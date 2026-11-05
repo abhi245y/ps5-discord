@@ -9,7 +9,7 @@ BUILD_ID := $(shell cat $(HASH_SOURCES) | sha256sum | cut -c1-16)
 FLAGS := -O2 -g -march=znver2 -fPIC -std=c++20 -fno-exceptions -fno-rtti -fno-threadsafe-statics -Wall -Wextra -Werror -fno-omit-frame-pointer -DOVERLAY_BUILD=0x$(BUILD_ID)ULL -Isrc -Isrc/core -Isrc/app -Ivendor/shellui-loader
 VENDOR := vendor/shellui-loader
 OBJECTS := build/pt.o build/loader.o build/injector.o build/remote-call.o build/blob.o
-.PHONY: all test inspect clean
+.PHONY: all test inspect clean preview
 all: build/overlay-resolve.elf build/overlay-observe.elf build/overlay-widget.elf build/overlay-input.elf build/overlay-restart.elf build/overlay-service.elf inspect
 build/overlay-worker.elf: src/core/worker.cpp src/core/protocol.hpp src/core/hook.hpp src/app/overlay_ui.hpp src/app/overlay_app.cpp src/app/discord_app.inc $(VENDOR)/prologue.hpp
 	@mkdir -p build
@@ -71,6 +71,14 @@ build/worker-test: tests/worker.cpp src/core/worker.cpp src/core/protocol.hpp sr
 build/discord-app-test: tests/discord_app.cpp src/app/discord_app.inc src/app/overlay_ui.hpp
 	@mkdir -p build
 	$(CXX) -std=c++20 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer tests/discord_app.cpp -o $@
+# The overlay's layout as pictures (tools/preview.py), for a look before a console run.
+build/preview: tests/preview.cpp src/app/discord_app.inc src/app/overlay_ui.hpp
+	@mkdir -p build
+	$(CXX) -std=c++20 -g -O1 -Wall -Wextra -Werror tests/preview.cpp -o $@
+preview: build/preview
+	@mkdir -p build/preview-out
+	./build/preview build/preview-out
+	python3 tools/preview.py build/preview-out
 test: build/safety-test build/worker-test build/discord-app-test
 	./build/safety-test
 	./build/worker-test

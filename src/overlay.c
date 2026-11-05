@@ -496,8 +496,10 @@ static void *feed(void *arg)
         compose(line, sizeof line, &live_since);
         if (strcmp(line, last) != 0 && write_line(line) == 0)
             snprintf(last, sizeof last, "%s", line);
+        // Any other seq is a new command: the overlay's come from the console's uptime clock,
+        // which starts over at a reboot (newer ones were smaller and were all ignored).
         const uint64_t seq = read_command(&c);
-        if (seq > seen) {
+        if (seq && seq != seen) {
             seen = seq;
             run_command(c.text);
         }

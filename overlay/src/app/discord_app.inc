@@ -89,7 +89,7 @@ constexpr Tab kTabs[]={
     {"Headset",96,{kHeadset,10},2},
 };
 constexpr int kTabCount=int(sizeof kTabs/sizeof *kTabs),kSettingRows=4,kOptions=6;
-constexpr float kTabY=124,kItemY=192,kItemH=62,kItemStep=70,kOptionH=48;
+constexpr float kTabY=150,kItemY=214,kItemH=62,kItemStep=70,kOptionH=48;
 enum class Kind{choice,toggle,slider,stepper};
 Kind kind_of(int s){
     const Setting& set=kSettings[s];
@@ -123,7 +123,7 @@ int option=0;     // the focused choice
 int stick=0;      // the stick's last direction: -1 left, 1 right, 0 at rest
 
 // The panel.
-void* dock=nullptr; void* title=nullptr; void* clock=nullptr; void* timer=nullptr;
+void* dock=nullptr; void* dock_mid=nullptr; void* dock_end=nullptr; void* title=nullptr; void* clock=nullptr; void* timer=nullptr;
 void* row_bg[kRows]={}; void* row_avatar[kRows]={}; void* row_ring[kRows]={}; void* row_name[kRows]={};
 void* row_icon[kRows]={};
 void* tile[kTiles]={}; void* tile_icon[kTiles]={}; void* tile_label[kTiles]={}; void* tile_sub=nullptr;
@@ -214,25 +214,21 @@ bool parse(const char* line,State& s){
 
 namespace {
 
-// The panel follows its rows (n, 0-4): the tiles right under the last one, then the rule
-// and the hints; the art has a panel for each height (overlay_art.py).
-float tiles_y(int n){return kRowY+kRowStep*n+10;}
-float rule_y(int n){return n?tiles_y(n)+172:kDockY+166;}
-float dock_height(int n){return n?tiles_y(n)+236:264;} // its bottom: the hints + 42
-
-void place(Builder& b,int n){
-    char name[16];std::snprintf(name,sizeof name,"dock_%d",n);
-    art(b,dock,name);
-    b.set_rect(dock,{kDockX,kDockY,kDockW,dock_height(n)});
-    const float ty=tiles_y(n);
-    for(int i=0;i<kTiles;i++){
-        const float x=kRowX+kTileStep*i;
-        b.set_rect(tile[i],{x,ty,kTileW,kTileH});
-        b.set_rect(tile_icon[i],{x+38,ty+(i==2?22:28),46,46});
-        b.set_rect(tile_label[i],{x,ty+(i==2?76:86),kTileW,30});}
-    b.set_rect(tile_sub,{kRowX+kTileStep*2,ty+104,kTileW,24});
-    b.set_rect(tile_focus,{kRowX+kTileStep*focus-6,ty-6,134,152});
-    const float ry=rule_y(n),hy=ry+28;
+// The panel is three slices (rounded top, a middle that stretches, rounded bottom), so it
+// ends under whatever it holds: content_end is that, the rule and the hints follow it.
+void place(Builder& b,float tiles_top,float content_end){
+    const float ry=content_end+32,hy=ry+28,bottom=hy+70;
+    b.set_rect(dock,{kDockX,kDockY,kDockW,40});
+    b.set_rect(dock_mid,{kDockX,kDockY+40,kDockW,bottom-kDockY-80});
+    b.set_rect(dock_end,{kDockX,bottom-40,kDockW,40});
+    if(tiles_top>0){
+        for(int i=0;i<kTiles;i++){
+            const float x=kRowX+kTileStep*i;
+            b.set_rect(tile[i],{x,tiles_top,kTileW,kTileH});
+            b.set_rect(tile_icon[i],{x+38,tiles_top+(i==2?22:28),46,46});
+            b.set_rect(tile_label[i],{x,tiles_top+(i==2?76:86),kTileW,30});}
+        b.set_rect(tile_sub,{kRowX+kTileStep*2,tiles_top+104,kTileW,24});
+        b.set_rect(tile_focus,{kRowX+kTileStep*focus-6,tiles_top-6,134,152});}
     b.set_rect(rule,{kRowX,ry,kRowW,2});
     // A label's text sits high in its box: 5 px lower lines it up with the 37 px glyphs.
     const Rect glyph_at[3]={{1361,hy+1,37,37},{1510,hy+1,37,37},{1650,hy+5,78,28}};
@@ -242,7 +238,8 @@ void place(Builder& b,int n){
 
 void set_avatar(Builder& b,void* w,const Person& who){
     char p[160];
-    if(who.avatar[0])path(p,sizeof p,kAvatars,who.avatar);else p[0]=0;
+    if(who.avatar[0])path(p,sizeof p,kAvatars,who.avatar);
+    else path(p,sizeof p,kArt,"avatar_none"); // until the core has fetched it
     b.set_image(w,p);
 }
 
@@ -276,6 +273,14 @@ void value_text(int s,char* out,std::size_t cap){
 bool can_open(int s){ // a row whose choices open
     if(s==kHeadset)return st.devices&&st.bt_on;
     return kind_of(s)==Kind::choice&&!(s==0&&st.live[0]);
+}
+
+// Where the settings' rows end (with the open row's choices).
+float settings_end(){
+    const Tab& t=kTabs[tab];
+    float end=kItemY+kItemStep*(t.count-1)+kItemH;
+    if(expanded){const char* names[kOptions];int current=0;end+=20+kOptionH*choices(t.rows[row],names,current);}
+    return end;
 }
 
 void render_settings(Builder& b){
@@ -419,11 +424,15 @@ void render(Builder& b){
     b.set_text(tile_label[2],st.live[0]?"Stop":"Go Live");
     b.set_text(tile_label[3],"Leave");
     b.set_text(tile_sub,st.live[0]?st.live:st.quality);
-    place(b,settings?kRows:in_call?(st.count<kRows?st.count:kRows):0);
+    const int n=in_call?(st.count<kRows?st.count:kRows):0;
+    const float tiles_top=kRowY+kRowStep*n+(n?10:0);
+    if(settings)place(b,0,settings_end());
+    else if(in_call)place(b,tiles_top,tiles_top+kTileH);
+    else place(b,0,kDockY+100);
     const bool tiles_on=call_page&&in_call;
     for(int i=0;i<kTiles;i++){show(b,tile[i],tiles_on);show(b,tile_icon[i],tiles_on);show(b,tile_label[i],tiles_on);}
     show(b,tile_sub,tiles_on);show(b,tile_focus,tiles_on);
-    show(b,dock,open);show(b,title,open);show(b,clock,call_page&&in_call&&st.timer[0]);show(b,timer,call_page&&in_call);
+    show(b,dock,open);show(b,dock_mid,open);show(b,dock_end,open);show(b,title,open);show(b,clock,call_page&&in_call&&st.timer[0]);show(b,timer,call_page&&in_call);
     show(b,rule,open);
 
     render_settings(b);
@@ -445,7 +454,7 @@ void reset(){
     for(int i=0;i<kSettingRows;i++)set_bg[i]=set_name[i]=set_value[i]=set_chevron[i]=set_toggle[i]=nullptr;
     for(int i=0;i<2;i++)slider_track[i]=slider_fill[i]=slider_knob[i]=nullptr;
     for(int j=0;j<kOptions;j++)drop_word[j]=nullptr;
-    dock=title=clock=timer=tile_sub=tile_focus=rule=nullptr;
+    dock=dock_mid=dock_end=title=clock=timer=tile_sub=tile_focus=rule=nullptr;
     card=pill=card_head=card_call=you_ring=you_mic=you_text=card_rule=card_hint=nullptr;
     for(int i=0;i<kRows;i++)row_bg[i]=row_avatar[i]=row_ring[i]=row_name[i]=row_icon[i]=nullptr;
     for(int i=0;i<kTiles;i++)tile[i]=tile_icon[i]=tile_label[i]=nullptr;
@@ -455,7 +464,9 @@ void reset(){
 
 bool build(Builder& b){
     // A: the panel, back to front.
-    dock=image(b,{kDockX,kDockY,kDockW,kDockH},"dock_4");
+    dock=image(b,{kDockX,kDockY,kDockW,40},"dock_top");
+    dock_mid=image(b,{kDockX,kDockY+40,kDockW,kDockH-80},"dock_mid");
+    dock_end=image(b,{kDockX,kDockY+kDockH-40,kDockW,40},"dock_bottom");
     title=label(b,{kDockX+37,kDockY+40,kDockW-74,54},40,1,kWhite);
     clock=image(b,{kDockX+38,kDockY+94,26,26},"clock");
     if(clock)b.set_tint(clock,kDim);

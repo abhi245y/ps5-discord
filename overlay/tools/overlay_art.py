@@ -131,9 +131,9 @@ def chevron(name, up):
     save(img, name, 24, 24)
 
 
-def ring_dot(name, size):
+def ring_dot(name, size, colour=WHITE):
     img, d = canvas(size, size)
-    d.ellipse((0, 0, size * S - 1, size * S - 1), fill=WHITE)
+    d.ellipse((0, 0, size * S - 1, size * S - 1), fill=colour)
     save(img, name, size, size)
 
 
@@ -164,9 +164,14 @@ def text_pill(name, w, h, fill, text, size, outline=False, dot=False):
 def main():
     os.makedirs(OUT, exist_ok=True)
     # A: the call panel.
-    # The panel's height follows its rows (discord_app.inc dock_height): 0 to 4.
-    for n in range(5):
-        rounded("dock_%d" % n, 568, 264 if n == 0 else 430 + 143 * n, 28, DOCK)
+    # The panel in three slices: discord_app.inc stretches the middle to fit what it holds.
+    img, d = canvas(568, 80)
+    d.rounded_rectangle((0, 0, 568 * S - 1, 80 * S - 1), 28 * S, fill=DOCK)
+    whole = img.resize((568, 80), Image.LANCZOS)
+    whole.crop((0, 0, 568, 40)).save(os.path.join(OUT, "dock_top.png"), optimize=True)
+    whole.crop((0, 40, 568, 80)).save(os.path.join(OUT, "dock_bottom.png"), optimize=True)
+    rounded("dock_mid", 568, 8, 0, DOCK)
+    ring_dot("avatar_none", 106, (60, 64, 72, 255))
     rounded("row", 519, 132, 16, CARD)
     rounded("tile", 122, 140, 16, TILE)
     rounded("tile_live", 122, 140, 16, CORAL)

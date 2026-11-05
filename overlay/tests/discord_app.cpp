@@ -57,14 +57,14 @@ int main(){
     oui::Builder b{&vt,nullptr};
     reset();
     assert(build(b));
-    assert(used==114);
+    assert(used==116);
     for(int i=0;i<used;i++)assert(!widgets[i].visible); // nothing before the core says anything
 
     // In a call, two talking, the card on: their avatars and names, "You" under them.
     on_text("3|c|o|1||0|Raid Night|42:10|720p \xc2\xb7 30 fps|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~t,12~~Kenji~t,13~13_cd~Ana~m,14~14_ef~Theo~-",b);
     assert(w(card)->visible&&!w(pill)->visible&&shows("Raid Night"));
     assert(shows("Mira")&&shows("Kenji")&&shows("You \xc2\xb7 mic on"));
-    assert(ends(w(talk_avatar[0])->path,"/av/11_ab.png")&&w(talk_avatar[1])->path[0]==0); // not fetched yet
+    assert(ends(w(talk_avatar[0])->path,"/av/11_ab.png")&&ends(w(talk_avatar[1])->path,"avatar_none.png")); // not fetched yet
     assert(w(card)->r.h==325&&ends(w(card)->path,"glance_2.png")&&w(you_ring)->r.y==34+107+120-25);
     assert(!w(talk_avatar[2])->visible&&!w(dock)->visible);
 
@@ -81,7 +81,7 @@ int main(){
     assert(w(row_ring[0])->visible&&!w(row_ring[1])->visible);
     assert(ends(w(row_icon[1])->path,"mic_off.png")&&ends(w(row_icon[2])->path,"headphones_off.png"));
     assert(shows("Mute")&&shows("Deafen")&&shows("Go Live")&&shows("720p \xc2\xb7 30 fps")&&shows("Leave"));
-    assert(w(tile_focus)->r.x==1347-6&&w(tile[0])->r.y==184+143*4+10&&w(dock)->r.h==1002&&ends(w(dock)->path,"dock_4.png"));
+    assert(w(tile_focus)->r.x==1347-6&&w(tile[0])->r.y==184+143*4+10&&w(dock_end)->r.y==1036-40&&w(dock_mid)->r.h==1036-34-80);
     on_pad(0x80,0,0,b);assert(!std::strcmp(sent,"mute"));
     on_pad(0x4,0,0,b);on_pad(0x80,0,0,b);assert(!std::strcmp(sent,"deafen")&&w(tile_focus)->r.x==1347+132-6);
     on_pad(0,0.9f,0,b);on_pad(0,0.9f,0,b);on_pad(0x80,0.9f,0,b);assert(!std::strcmp(sent,"golive")); // held: one step
@@ -92,7 +92,7 @@ int main(){
     // One person: the panel ends under them.
     on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~-",b);
     on_gesture(oui::Gesture::Chord,b);
-    assert(w(tile[0])->r.y==184+143+10&&w(dock)->r.h==573&&ends(w(dock)->path,"dock_1.png")&&w(rule)->r.y==184+143+10+172);
+    assert(w(tile[0])->r.y==184+143+10&&w(dock_end)->r.y==184+143+10+140+32+28+70-40&&w(rule)->r.y==184+143+10+172);
     on_gesture(oui::Gesture::Chord,b);
 
     // Muted and live: the tiles say so.
