@@ -512,10 +512,28 @@ void log_focus(const char* when,void* field){
 // Our scene is made with Focusable=0 (the home screen keeps its focus); a field in it can
 // only take focus, and the keyboard only open, while the scene is focusable.
 std::uint64_t edit_begun_at=0; // a begin_edit whose focus is not given back yet (UI thread)
-void scene_focusable(bool on){
+int edit_retry=0;               // polls until the one retry (PUI may update focusable scenes next frame)
+void scene_focusable(bool on,void* field){
     void* scene=scene_handle?fn<void*(*)(std::uint32_t)>(GcTarget)(scene_handle):nullptr;
     int v=on?1:0;
-    if(scene){(void)prop_set_int(class_scene,scene,"Focusable",v);(void)prop_set_int(class_scene,scene,"Frontable",v);}
+    if(!scene)return;
+    (void)prop_set_int(class_scene,scene,"Focusable",v);(void)prop_set_int(class_scene,scene,"NodeFocusable",v);
+    (void)prop_set_int(class_scene,scene,"Frontable",v);
+    (void)prop_set(class_scene,scene,"DefaultFocusWidget",on?field:nullptr);
+}
+// SetFocus, BeginEdit(), then BeginEdit(Dualshock4): true once the keyboard is open.
+bool try_edit(void* field,const char* when){
+    bool focus=false,begin=false;void* exception=nullptr;
+    if(method_set_focus){invoke_ex(method_set_focus,field,nullptr,focus,&exception);describe_exception("SetFocus",exception);}
+    exception=nullptr;invoke_ex(method_begin_edit,field,nullptr,begin,&exception);describe_exception("BeginEdit",exception);
+    bool now=field_editing(field);
+    if(!now&&method_begin_edit_device){
+        int device=1;void* args[1]={&device};bool ok=false;exception=nullptr;
+        invoke_ex(method_begin_edit_device,field,args,ok,&exception);describe_exception("BeginEdit(device)",exception);
+        now=field_editing(field);note("EDIT %s begin(device) ok=%d editing=%d",when,ok,now);}
+    note("EDIT %s focus=%d begin=%d editing=%d",when,focus,begin,now);
+    log_focus(when,field);
+    return now;
 }
 bool engine_begin_edit(void*,void* widget,int user){
     void* field=slot_object(static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(widget)));
@@ -524,24 +542,17 @@ bool engine_begin_edit(void*,void* widget,int user){
     (void)prop_set(class_field,field,"Text",fn<void*(*)(void*,const char*)>(StringNew)(domain,""));
     if(user>0)(void)prop_set_int(class_field,field,"UserId",user);
     log_focus("before",field);
-    scene_focusable(true);edit_begun_at=now_ms();
-    bool focus=false,begin=false;void* exception=nullptr;
-    if(method_set_focus){invoke_ex(method_set_focus,field,nullptr,focus,&exception);describe_exception("SetFocus",exception);}
-    log_focus("after focus",field);
-    exception=nullptr;invoke_ex(method_begin_edit,field,nullptr,begin,&exception);describe_exception("BeginEdit",exception);
-    bool now=field_editing(field);
-    if(!now&&method_begin_edit_device){ // the pad's own device type
-        int device=1;void* args[1]={&device};bool ok=false;exception=nullptr;
-        invoke_ex(method_begin_edit_device,field,args,ok,&exception);describe_exception("BeginEdit(device)",exception);
-        now=field_editing(field);note("EDIT begin(device) ok=%d editing=%d",ok,now);}
-    log_focus("after begin",field);
+    scene_focusable(true,field);edit_begun_at=now_ms();
+    const bool now=try_edit(field,"first");
+    edit_retry=now?0:2;
     editing.store(now,std::memory_order_release);
-    note("EDIT begin user=%d focus=%d begin=%d editing=%d",user,focus,begin,now);
-    return begin;}
+    note("EDIT begin user=%d editing=%d",user,now);
+    return true;}
 int engine_edit_poll(void*,void* widget,char* out,int cap){
     void* field=slot_object(static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(widget)));
     if(!field)return -1;
-    const bool now=field_editing(field);
+    bool now=field_editing(field);
+    if(!now&&edit_retry&&!--edit_retry)now=try_edit(field,"retry"); // once, two polls later
     void* text=nullptr;
     if(!prop_get_object(class_field,field,"Text",&text))text=nullptr;
     utf8_of(text,out,cap);
@@ -554,7 +565,7 @@ int engine_edit_poll(void*,void* widget,char* out,int cap){
         if(method_release_focus){
             bool ok=false;void* exception=nullptr;invoke_ex(method_release_focus,field,nullptr,ok,&exception);
             describe_exception("ReleaseFocus",exception);note("EDIT focus released=%d",ok);}
-        scene_focusable(false);}
+        scene_focusable(false,nullptr);}
     return now?1:0;}
 constexpr oui::Builder::Vt engine_vt{
     engine_add_panel,engine_add_label,engine_set_text,engine_set_visible,engine_set_color,
