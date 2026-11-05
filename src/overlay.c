@@ -323,9 +323,9 @@ static void compose(char *line, int cap, time_t *live_since)
                  &bt, shown, count);
     // The beat: a digit after the state ("3|c7|...") that changes every second, so the line is
     // rewritten while the core lives; the overlay goes inert when it stops (crash, kill).
-    const size_t n = strlen(line);
-    if (n + 2 <= (size_t)cap) {
-        memmove(line + 4, line + 3, n - 2);
+    const size_t len = strlen(line);
+    if (len + 2 <= (size_t)cap) {
+        memmove(line + 4, line + 3, len - 2);
         line[3] = (char)('0' + (mono_ms() / 1000) % 10);
     }
 }
