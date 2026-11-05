@@ -537,7 +537,7 @@ static void *feed(void *arg)
         const int on = prefs_get("overlay") == 1;
         const uint64_t now = mono_ms();
         const int up = running();
-        down_since = up ? 0 : down_since ? down_since : now;
+        down_since = up || reloading ? 0 : down_since ? down_since : now; // a reload is not down
         if (on && !launched && !up) {
             launch();
             launched = 1;
