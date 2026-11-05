@@ -431,7 +431,9 @@ void* engine_add_image(void*,const oui::Rect* r,const char* path){
 bool engine_set_tint(void*,void* widget,const oui::Color* c){
     void* object=slot_object(static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(widget)));
     if(!object||!c||!class_image)return false;
-    UiColor tint=ui_color(*c);
+    // Not linear(): PUI draws pictures as stored, so the tint multiplies those values directly
+    // (a linear grey 0.235 came out near black on 13.00, coral turned red).
+    UiColor tint{c->r,c->g,c->b,c->a,false,{}};
     return prop_set(class_image,object,"FilterColor",&tint);}
 bool engine_set_text_style(void*,void* widget,float size,int weight,const oui::Color* c,int align){
     void* label=slot_object(static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(widget)));
