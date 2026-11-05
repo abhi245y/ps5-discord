@@ -36,6 +36,7 @@ Method* method_append=nullptr,*method_find=nullptr,*method_font_ctor=nullptr;
 void* class_image=nullptr,*class_asset=nullptr;Method* method_asset_ctor=nullptr;
 // The system keyboard: a PUI TextField (UI2) whose BeginEdit opens the OSK. Optional.
 void* class_field=nullptr;Method* method_begin_edit=nullptr,*method_is_editing=nullptr,*method_set_focus=nullptr,*method_release_focus=nullptr;
+Method* method_begin_edit_device=nullptr; // BeginEdit(DeviceType): 1 is Dualshock4 (PUI's DeviceType)
 std::atomic<Update> original{nullptr};
 std::atomic<PadCall> pad_original{nullptr};
 std::atomic<ShareCall> share_original{nullptr};
@@ -495,16 +496,45 @@ void* engine_add_field(void*,const oui::Rect* r,const char* placeholder){
     if(!append_child(root,field)){note("UI field attach failed");return nullptr;}
     std::uint32_t id=slot_store(field,false);
     return id?reinterpret_cast<void*>(std::uintptr_t(id)):nullptr;}
+// Where PUI's focus is, for the keyboard probe: is it our scene / our field.
+void log_focus(const char* when,void* field){
+    void* app=app_handle?fn<void*(*)(std::uint32_t)>(GcTarget)(app_handle):nullptr;
+    void* scene=scene_handle?fn<void*(*)(std::uint32_t)>(GcTarget)(scene_handle):nullptr;
+    void* active=nullptr,*front=nullptr,*focused=nullptr;bool activated=false,has=false;
+    if(app){(void)prop_get_object(class_application,app,"FocusActiveScene",&active);
+        (void)prop_get_object(class_application,app,"FrontActiveScene",&front);
+        (void)prop_get_object(class_application,app,"FocusedWidget",&focused);}
+    if(scene)(void)prop_get_bool(class_scene,scene,"FocusActivated",&activated);
+    (void)prop_get_bool(class_widget,field,"Focused",&has);
+    note("EDIT focus %s: active_is_ours=%d front_is_ours=%d focused_is_field=%d scene_activated=%d field_focused=%d",
+        when,active&&active==scene,front&&front==scene,focused&&focused==field,activated,has);
+}
+// Our scene is made with Focusable=0 (the home screen keeps its focus); a field in it can
+// only take focus, and the keyboard only open, while the scene is focusable.
+std::uint64_t edit_begun_at=0; // a begin_edit whose focus is not given back yet (UI thread)
+void scene_focusable(bool on){
+    void* scene=scene_handle?fn<void*(*)(std::uint32_t)>(GcTarget)(scene_handle):nullptr;
+    int v=on?1:0;
+    if(scene){(void)prop_set_int(class_scene,scene,"Focusable",v);(void)prop_set_int(class_scene,scene,"Frontable",v);}
+}
 bool engine_begin_edit(void*,void* widget,int user){
     void* field=slot_object(static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(widget)));
     if(!field)return false;
     int shown=1;(void)prop_set_int(class_field,field,"Visible",shown);
     (void)prop_set(class_field,field,"Text",fn<void*(*)(void*,const char*)>(StringNew)(domain,""));
     if(user>0)(void)prop_set_int(class_field,field,"UserId",user);
+    log_focus("before",field);
+    scene_focusable(true);edit_begun_at=now_ms();
     bool focus=false,begin=false;void* exception=nullptr;
     if(method_set_focus){invoke_ex(method_set_focus,field,nullptr,focus,&exception);describe_exception("SetFocus",exception);}
+    log_focus("after focus",field);
     exception=nullptr;invoke_ex(method_begin_edit,field,nullptr,begin,&exception);describe_exception("BeginEdit",exception);
-    const bool now=field_editing(field);
+    bool now=field_editing(field);
+    if(!now&&method_begin_edit_device){ // the pad's own device type
+        int device=1;void* args[1]={&device};bool ok=false;exception=nullptr;
+        invoke_ex(method_begin_edit_device,field,args,ok,&exception);describe_exception("BeginEdit(device)",exception);
+        now=field_editing(field);note("EDIT begin(device) ok=%d editing=%d",ok,now);}
+    log_focus("after begin",field);
     editing.store(now,std::memory_order_release);
     note("EDIT begin user=%d focus=%d begin=%d editing=%d",user,focus,begin,now);
     return begin;}
@@ -515,11 +545,16 @@ int engine_edit_poll(void*,void* widget,char* out,int cap){
     void* text=nullptr;
     if(!prop_get_object(class_field,field,"Text",&text))text=nullptr;
     utf8_of(text,out,cap);
-    if(editing.exchange(now,std::memory_order_acq_rel)!=now){
-        note("EDIT %s chars=%d",now?"open":"closed",int(std::strlen(out)));
-        if(!now&&method_release_focus){ // or PUI focus stays on the hidden field (a dead D-pad at home)
+    const bool was=editing.exchange(now,std::memory_order_acq_rel);
+    if(was!=now)note("EDIT %s chars=%d",now?"open":"closed",int(std::strlen(out)));
+    // Closed, or never opened within 8 s (the app stops asking at 10): the focus goes back, or
+    // the home screen's D-pad stays dead.
+    if(!now&&edit_begun_at&&(was||now_ms()-edit_begun_at>8000)){
+        edit_begun_at=0;
+        if(method_release_focus){
             bool ok=false;void* exception=nullptr;invoke_ex(method_release_focus,field,nullptr,ok,&exception);
-            describe_exception("ReleaseFocus",exception);note("EDIT focus released=%d",ok);}}
+            describe_exception("ReleaseFocus",exception);note("EDIT focus released=%d",ok);}
+        scene_focusable(false);}
     return now?1:0;}
 constexpr oui::Builder::Vt engine_vt{
     engine_add_panel,engine_add_label,engine_set_text,engine_set_visible,engine_set_color,
@@ -752,7 +787,8 @@ bool resolve_update_methods(){
             method_begin_edit=fn<Method*(*)(void*,const char*,int)>(MethodFromName)(class_field,"BeginEdit",0);
             method_is_editing=fn<Method*(*)(void*,const char*,int)>(MethodFromName)(class_field,"IsEditing",0);
             method_set_focus=method_inherited(class_field,"SetFocus",0);
-            method_release_focus=method_inherited(class_field,"ReleaseFocus",0);}
+            method_release_focus=method_inherited(class_field,"ReleaseFocus",0);
+            method_begin_edit_device=fn<Method*(*)(void*,const char*,int)>(MethodFromName)(class_field,"BeginEdit",1);}
         note("KEYBOARD field=%p begin=%p editing=%p focus=%p",class_field,method_begin_edit,method_is_editing,method_set_focus);
         describe_types();
         note("PICTURES image=%p asset=%p ctor=%p",class_image,class_asset,method_asset_ctor);
