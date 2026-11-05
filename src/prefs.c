@@ -43,6 +43,13 @@ static pref *find(const char *key)
     return NULL;
 }
 
+static volatile int loaded; // a console user's settings are in (prefs_load ran once)
+
+int prefs_loaded(void)
+{
+    return loaded;
+}
+
 void prefs_load(const char *data_dir, int32_t user)
 {
     pthread_mutex_lock(&lock);
@@ -57,6 +64,7 @@ void prefs_load(const char *data_dir, int32_t user)
             f = fopen(file, "r");
     }
     if (!f) {
+        loaded = 1;
         pthread_mutex_unlock(&lock);
         return;
     }
@@ -68,6 +76,7 @@ void prefs_load(const char *data_dir, int32_t user)
             p->value = v;
     }
     fclose(f);
+    loaded = 1;
     pthread_mutex_unlock(&lock);
 }
 

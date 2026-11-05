@@ -9,6 +9,7 @@
 #include <sys/file.h>
 #include <sys/wait.h>
 #include <pthread.h>
+#include <atomic>
 #include <signal.h>
 #include <fcntl.h>
 #include <csignal>
@@ -171,6 +172,26 @@ int main(){
     char usb[96];std::snprintf(usb,sizeof usb,"/mnt/usb0/discord-overlay-%s.log",mode_names[OVERLAY_MODE]);
     usblog=std::fopen(usb,"a");
     std::signal(SIGTERM,stop);std::signal(SIGINT,stop);
+#if OVERLAY_MODE==5
+    // Service: one process (it was a parent watching a forked loader; payload managers listed
+    // both as discord-overlay.elf). The loader runs in a thread; this one is its watchdog and
+    // ends the whole process if the loader hangs, which also ends its tracing of ShellUI.
+    static std::atomic<int> loader_done{0};static std::intptr_t loader_result=1;
+    struct Loader{static void* go(void*){loader_result=std::intptr_t(run());loader_done.store(1);return nullptr;}};
+    auto began=now_ms();
+    {pthread_attr_t attr;pthread_t loader;if(pthread_attr_init(&attr))return 1;
+        int rc=pthread_attr_setstacksize(&attr,2*1024*1024);if(!rc)rc=pthread_create(&loader,&attr,Loader::go,nullptr);
+        pthread_attr_destroy(&attr);if(rc)return 1;
+        for(bool asked=false;!loader_done.load();usleep(50000)){
+            // The watchdog only counts while the worker is not reporting.
+            {Status s;if(read_file(parent_dir,"status.bin",s)&&s.signature==magic&&s.state==State::Observing&&
+                 s.at_ms<=now_ms()+1000&&now_ms()<=s.at_ms+2000&&!overlay_abort_requested)began=now_ms();}
+            auto elapsed=now_ms()-began;
+            if(!asked&&elapsed>=80000){overlay_abort_requested=1;asked=true;} // the loader stops beating, asks the worker to stop
+            if(elapsed>=90000){note("WATCHDOG: loader stuck; ending the service process");std::_Exit(1);}}
+        pthread_join(loader,nullptr);}
+    const int status=int(loader_result)<<8; // as a child's exit status was logged
+#else
     auto began=now_ms();pid_t child=fork();if(child<0)return 1;
     if(!child){pthread_attr_t attr;pthread_t worker;if(pthread_attr_init(&attr))_exit(1);
         int rc=pthread_attr_setstacksize(&attr,2*1024*1024);if(!rc)rc=pthread_create(&worker,&attr,thread_main,nullptr);
@@ -184,6 +205,7 @@ int main(){
 #endif
         auto elapsed=now_ms()-began;if(!signaled&&(overlay_abort_requested||elapsed>=80000)){kill(child,SIGTERM);signaled=true;}
         if(elapsed>=90000){note("WATCHDOG: killing only owned loader worker; inspect ShellUI state before any retry");kill(child,SIGKILL);while(waitpid(child,&status,0)<0&&errno==EINTR){}break;}usleep(50000);}
+#endif
     note("worker status=0x%x",status);close(lock);if(logfile)std::fclose(logfile);if(usblog)std::fclose(usblog);
     return WIFEXITED(status)?WEXITSTATUS(status):1;
 }

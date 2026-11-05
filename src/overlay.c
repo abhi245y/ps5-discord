@@ -552,19 +552,25 @@ static void *feed(void *arg)
     overlay_command c;
     uint64_t seen = read_command(&c); // one left from before this core ran is not new
     int auto_reloaded = 0;
+    // Nothing is decided on the defaults: overlay reads 0 until the user's settings load, and a
+    // running overlay (from the core before) was stopped as if switched off (2026-11-05).
+    while (!prefs_loaded())
+        usleep(200000);
     const uint64_t started = mono_ms();
+    uint64_t off_since = 0;
     uint64_t down_since = 0, reload_at = 0;
     mkdir(OVERLAY_DIR, 0755);
     mkdir(OVERLAY_DIR "/av", 0755);
     for (;;) {
         const int on = prefs_get("overlay") == 1;
         const uint64_t now = mono_ms();
+        off_since = on ? 0 : off_since ? off_since : now; // switched off for a second, not a reload's blip
         const int up = running();
         down_since = up || reloading ? 0 : down_since ? down_since : now; // a reload is not down
         if (on && !launched && down_since && now - down_since > 3000) {
             launch(); // one already running (a core before this one loaded it) is used as it is
             launched = 1;
-        } else if (!on && running() && !reloading) {
+        } else if (!on && off_since && now - off_since > 1000 && up && !reloading) {
             stop_service(); // switched off in Settings
             launched = 0;
         } else if (on && launched && !auto_reloaded && !reloading && prefs_get("overlay_autoload") == 1 &&

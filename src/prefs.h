@@ -8,6 +8,7 @@
 
 // The console user's settings (DATA_DIR/prefs-<user>); before the first, the defaults.
 void prefs_load(const char *data_dir, int32_t user);
+int prefs_loaded(void); // 0 until a console user's settings were loaded: values are the defaults
 int prefs_get(const char *key);                  // the default when never set
 int prefs_set(const char *key, int value);       // 0 when known and in range; saved at once
 cJSON *prefs_json(void);                         // every key and its value
