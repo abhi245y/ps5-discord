@@ -154,7 +154,14 @@ static int run(){
 }
 static void stop(int){overlay_abort_requested=1;}
 static void* thread_main(void*){return reinterpret_cast<void*>(std::intptr_t(run()));}
+extern "C" int sceKernelSetProcessName(const char* name);
 int main(){
+    // Payload managers list elfldr's processes as payload.elf: say whose this one is.
+#if OVERLAY_MODE==5
+    sceKernelSetProcessName("discord-overlay.elf");
+#elif OVERLAY_MODE==4
+    sceKernelSetProcessName("discord-overlay-restart.elf");
+#endif
     if(mkdir(parent_dir,0700)&&errno!=EEXIST)return 1;
     char p[256];path(p,sizeof p,parent_dir,"parent.lock");int lock=open(p,O_CREAT|O_RDWR,0600);
 #if OVERLAY_MODE!=4 // restart works with a service running: its worker dies with ShellUI, its loader then stops

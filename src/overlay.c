@@ -538,8 +538,8 @@ static void *feed(void *arg)
         const uint64_t now = mono_ms();
         const int up = running();
         down_since = up || reloading ? 0 : down_since ? down_since : now; // a reload is not down
-        if (on && !launched && !up) {
-            launch();
+        if (on && !launched && down_since && now - down_since > 3000) {
+            launch(); // one already running (a core before this one loaded it) is used as it is
             launched = 1;
         } else if (!on && running() && !reloading) {
             stop_service(); // switched off in Settings
