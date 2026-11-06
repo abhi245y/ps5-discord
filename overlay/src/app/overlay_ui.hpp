@@ -56,8 +56,9 @@ public:
     // How long Options is held to open the panel (ms; the engine keeps 300-1500).
     bool set_hold(int ms){return vt&&vt->set_hold_fn&&vt->set_hold_fn(ctx,ms);}
     // Hands a typed message (UTF-8, up to 2000 characters) to the console side (send.bin); the
-    // core posts it to the call's text chat.
-    bool send_text(const char* utf8){return vt&&vt->send_text_fn&&vt->send_text_fn(ctx,utf8);}
+    // core posts it to the text chat channel (an id; "" is the call's own chat).
+    bool send_text(const char* utf8,const char* channel=""){
+        return vt&&vt->send_text_fn&&vt->send_text_fn(ctx,utf8,channel);}
     // A label's laid-out text width in px; -1 when the engine cannot measure it.
     float text_width(void* label){return vt&&vt->text_width_fn?vt->text_width_fn(ctx,label):-1.f;}
     float screen_width() const{return vt&&vt->screen_w_fn?vt->screen_w_fn(ctx):1920.f;}
@@ -80,7 +81,7 @@ public:
         bool(*set_text_style_fn)(void*,void*,float,int,const Color*,int);
         bool(*set_rect_fn)(void*,void*,const Rect*);
         bool(*set_hold_fn)(void*,int);
-        bool(*send_text_fn)(void*,const char*);
+        bool(*send_text_fn)(void*,const char*,const char*);
         float(*text_width_fn)(void*,void*);
     };
     const Vt* vt=nullptr;
@@ -96,6 +97,8 @@ bool build(Builder& b);
 void on_gesture(Gesture g,Builder& b);
 // A new content line arrived (text.bin today; the core API later).
 void on_text(const char* line,Builder& b);
+// A new chat feed arrived (chat.bin: the chat's messages and the mentions; deduped, up to 16 KB).
+void on_chat(const char* feed,Builder& b);
 // While capture is on: the buttons newly pressed since the last call (GamePadButtons
 // bits, L3/R3 excluded: they are the chord) and the left stick (-1..1), every frame.
 void on_pad(std::uint32_t down,float lx,float ly,Builder& b);

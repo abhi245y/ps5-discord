@@ -740,14 +740,18 @@ static void test_overlay_line(void)
 }
 
 // send.bin: the overlay's typed message, and the JSON body it is posted with.
-static void write_outbox(const char *path, uint64_t magic, uint64_t seq, uint32_t len, const char *text)
+static void write_outbox_to(const char *path, uint64_t magic, uint64_t seq, uint32_t len, const char *channel,
+                            const char *text)
 {
     static struct {
         uint64_t signature, seq;
         uint32_t len, reserved;
+        char channel[24];
         char text[8192];
     } box;
+    assert(sizeof box == 8240); // protocol.hpp Outbox
     memset(&box, 0, sizeof box);
+    memcpy(box.channel, channel, strlen(channel) < sizeof box.channel ? strlen(channel) : sizeof box.channel);
     box.signature = magic;
     box.seq = seq;
     box.len = len;
@@ -757,6 +761,17 @@ static void write_outbox(const char *path, uint64_t magic, uint64_t seq, uint32_
     fclose(f);
 }
 
+static void write_outbox(const char *path, uint64_t magic, uint64_t seq, uint32_t len, const char *text)
+{
+    write_outbox_to(path, magic, seq, len, "", text);
+}
+
+static char outbox_chan[24];
+static uint64_t read_outbox(const char *path, char *text, size_t cap)
+{
+    return overlay_read_outbox(path, text, cap, outbox_chan, sizeof outbox_chan);
+}
+
 static void test_outbox(void)
 {
     static char text[8193];
@@ -764,26 +779,42 @@ static void test_outbox(void)
     const uint64_t magic = 0x31434f504c564f44ULL;
     const char *msg = "caf\xc3\xa9 \xe2\x82\xac \"quoted\" \\ line\nbreak, and more than 48 characters long";
     write_outbox(path, magic, 77, (uint32_t)strlen(msg), msg);
-    assert(overlay_read_outbox(path, text, sizeof text) == 77 && strcmp(text, msg) == 0);
-    assert(overlay_read_outbox(path, text, sizeof text) == 77); // the same file again: the same seq (the feed skips it)
+    assert(read_outbox(path, text, sizeof text) == 77 && strcmp(text, msg) == 0);
+    assert(read_outbox(path, text, sizeof text) == 77); // the same file again: the same seq (the feed skips it)
     write_outbox(path, magic ^ 1, 78, 3, "abc"); // wrong magic
-    assert(overlay_read_outbox(path, text, sizeof text) == 0);
+    assert(read_outbox(path, text, sizeof text) == 0);
     write_outbox(path, magic, 79, 8193, "abc"); // longer than the buffer
-    assert(overlay_read_outbox(path, text, sizeof text) == 0);
+    assert(read_outbox(path, text, sizeof text) == 0);
     write_outbox(path, magic, 80, 0, ""); // empty
-    assert(overlay_read_outbox(path, text, sizeof text) == 0);
+    assert(read_outbox(path, text, sizeof text) == 0);
     write_outbox(path, magic, 81, 3, "abc");
-    assert(overlay_read_outbox(path, text, 3) == 0); // no room for the NUL
+    assert(read_outbox(path, text, 3) == 0); // no room for the NUL
     memset(text, 0x78, 8192);
     text[8192] = 0;
     write_outbox(path, magic, 82, 8192, text);
-    assert(overlay_read_outbox(path, text, sizeof text) == 82 && strlen(text) == 8192);
+    assert(read_outbox(path, text, sizeof text) == 82 && strlen(text) == 8192);
     FILE *f = fopen(path, "wb"); // a short file
     assert(f && fwrite("short", 1, 5, f) == 5);
     fclose(f);
-    assert(overlay_read_outbox(path, text, sizeof text) == 0);
+    assert(read_outbox(path, text, sizeof text) == 0);
     remove(path);
-    assert(overlay_read_outbox(path, text, sizeof text) == 0); // missing
+    assert(read_outbox(path, text, sizeof text) == 0); // missing
+    // The chat's channel: digits, "" for the call's own chat; anything else is not valid (it goes into a URL).
+    write_outbox_to(path, magic, 90, 2, "1234567890123456789", "hi");
+    assert(read_outbox(path, text, sizeof text) == 90 && strcmp(text, "hi") == 0 && strcmp(outbox_chan, "1234567890123456789") == 0);
+    write_outbox_to(path, magic, 91, 2, "", "hi");
+    assert(read_outbox(path, text, sizeof text) == 91 && outbox_chan[0] == 0);
+    write_outbox_to(path, magic, 92, 2, "12/../34", "hi");
+    assert(read_outbox(path, text, sizeof text) == 0);
+    write_outbox_to(path, magic, 93, 2, "12 34", "hi");
+    assert(read_outbox(path, text, sizeof text) == 0);
+    write_outbox_to(path, magic, 94, 2, "123456789012345678901234", "hi"); // 24 digits: no NUL, too long
+    assert(read_outbox(path, text, sizeof text) == 0);
+    write_outbox_to(path, magic, 95, 2, "12345678901234567890123", "hi"); // 23: the longest
+    assert(read_outbox(path, text, sizeof text) == 95);
+    write_outbox_to(path, magic, 96, 2, "-1", "hi");
+    assert(read_outbox(path, text, sizeof text) == 0);
+    remove(path);
 
     char *json = chat_message_json("123", msg, NULL, NULL, NULL);
     cJSON *j = cJSON_Parse(json);
@@ -870,6 +901,293 @@ static void test_resample(void)
     assert(rs_init(&r, 7, 1) == -1);
 }
 
+// ---- the overlay's Chat and Mentions feed ----
+static int lines_of(const char *feed, char kind)
+{
+    int n = 0;
+    for (const char *p = feed; *p; p = strchr(p, '\n') + 1)
+        n += *p == kind;
+    return n;
+}
+
+static void test_overlay_feed(void)
+{
+    char age[12];
+    overlay_age(age, sizeof age, 0);
+    assert(strcmp(age, "now") == 0);
+    overlay_age(age, sizeof age, -30);
+    assert(strcmp(age, "now") == 0);
+    overlay_age(age, sizeof age, 59);
+    assert(strcmp(age, "now") == 0);
+    overlay_age(age, sizeof age, 60);
+    assert(strcmp(age, "1m") == 0);
+    overlay_age(age, sizeof age, 14 * 60 + 30);
+    assert(strcmp(age, "14m") == 0);
+    overlay_age(age, sizeof age, 3599);
+    assert(strcmp(age, "59m") == 0);
+    overlay_age(age, sizeof age, 3600);
+    assert(strcmp(age, "1h") == 0);
+    overlay_age(age, sizeof age, 3 * 3600 + 5);
+    assert(strcmp(age, "3h") == 0);
+    overlay_age(age, sizeof age, 86400 * 2 + 5);
+    assert(strcmp(age, "2d") == 0);
+    char clock[12];
+    struct tm tm = {.tm_hour = 18, .tm_min = 14};
+    overlay_clock(clock, sizeof clock, &tm);
+    assert(strcmp(clock, "6:14 PM") == 0);
+    tm = (struct tm){.tm_hour = 0, .tm_min = 5};
+    overlay_clock(clock, sizeof clock, &tm);
+    assert(strcmp(clock, "12:05 AM") == 0);
+    tm = (struct tm){.tm_hour = 12, .tm_min = 0};
+    overlay_clock(clock, sizeof clock, &tm);
+    assert(strcmp(clock, "12:00 PM") == 0);
+    tm = (struct tm){.tm_hour = 9, .tm_min = 7};
+    overlay_clock(clock, sizeof clock, &tm);
+    assert(strcmp(clock, "9:07 AM") == 0);
+
+    // Mentions: newest first by time, no id twice, ten at most, a DM is one entry.
+    static overlay_chat c;
+    memset(&c, 0, sizeof c);
+    overlay_mention m = {0};
+    snprintf(m.id, sizeof m.id, "5");
+    snprintf(m.chan, sizeof m.chan, "50");
+    m.at = 1000;
+    assert(overlay_mention_add(&c, &m) == 1);
+    snprintf(m.id, sizeof m.id, "6");
+    m.at = 3000;
+    assert(overlay_mention_add(&c, &m) == 1);
+    snprintf(m.id, sizeof m.id, "7");
+    m.at = 2000;
+    assert(overlay_mention_add(&c, &m) == 1);
+    assert(c.nmen == 3 && !strcmp(c.men[0].id, "6") && !strcmp(c.men[1].id, "7") && !strcmp(c.men[2].id, "5"));
+    assert(overlay_mention_add(&c, &m) == 0 && c.nmen == 3); // the same id
+    for (int i = 0; i < 12; i++) {
+        snprintf(m.id, sizeof m.id, "1%02d", i);
+        m.at = 5000 + i;
+        overlay_mention_add(&c, &m);
+    }
+    assert(c.nmen == OVERLAY_MENTIONS && !strcmp(c.men[0].id, "111") && !strcmp(c.men[9].id, "102"));
+    snprintf(m.id, sizeof m.id, "9");
+    m.at = 10; // older than the ten kept
+    assert(overlay_mention_add(&c, &m) == 0 && c.nmen == OVERLAY_MENTIONS);
+    memset(&c, 0, sizeof c);
+    m.dm = 1;
+    snprintf(m.chan, sizeof m.chan, "20");
+    snprintf(m.id, sizeof m.id, "21");
+    m.at = 100;
+    overlay_mention_add(&c, &m);
+    snprintf(m.id, sizeof m.id, "22");
+    m.at = 200;
+    assert(overlay_mention_add(&c, &m) == 1 && c.nmen == 1 && !strcmp(c.men[0].id, "22"));
+    m.dm = 0;
+    snprintf(m.id, sizeof m.id, "23");
+    m.at = 150; // a channel mention is its own entry
+    overlay_mention_add(&c, &m);
+    assert(c.nmen == 2 && !strcmp(c.men[0].id, "22") && !strcmp(c.men[1].id, "23"));
+
+    // Messages: no id twice, twenty at most (the oldest go), edit and delete by id.
+    memset(&c, 0, sizeof c);
+    overlay_msg om = {0};
+    for (int i = 1; i <= 25; i++) {
+        snprintf(om.id, sizeof om.id, "%d", i);
+        snprintf(om.text, sizeof om.text, "text %d", i);
+        assert(overlay_msg_add(&c, &om) == 1);
+    }
+    assert(c.nmsg == OVERLAY_MSGS && !strcmp(c.msgs[0].id, "6") && !strcmp(c.msgs[19].id, "25"));
+    assert(overlay_msg_add(&c, &om) == 0 && c.nmsg == OVERLAY_MSGS);
+    assert(overlay_msg_edit(&c, "10", "edited") && !strcmp(c.msgs[4].text, "edited") && !overlay_msg_edit(&c, "1", "x"));
+    assert(overlay_msg_remove(&c, "10") && c.nmsg == 19 && !strcmp(c.msgs[4].id, "11") && !overlay_msg_remove(&c, "10"));
+
+    // The feed: separators in user text become spaces, fields are cut, the record layout holds.
+    static char feed[OVERLAY_FEED_MAX];
+    memset(&c, 0, sizeof c);
+    c.kind = 'c';
+    snprintf(c.chan, sizeof c.chan, "555");
+    snprintf(c.title, sizeof c.title, "#raid\tnight");
+    snprintf(c.sub, sizeof c.sub, "Night Shift");
+    c.unseen = 2;
+    c.rev = 7;
+    snprintf(c.focus, sizeof c.focus, "902");
+    snprintf(om.id, sizeof om.id, "901");
+    snprintf(om.avatar, sizeof om.avatar, "11_ab");
+    snprintf(om.name, sizeof om.name, "Mi\nra|~,");
+    snprintf(om.time, sizeof om.time, "6:14 PM");
+    om.mine = 1;
+    char big[400];
+    memset(big, 'x', sizeof big);
+    big[0] = 'a';
+    big[sizeof big - 1] = 0;
+    memcpy(om.text, "a\tb\r\nc, d | e ", 14);
+    memcpy(om.text + 14, big, sizeof om.text - 15);
+    om.text[sizeof om.text - 1] = 0;
+    memset(&c.msgs[0], 0, sizeof c.msgs[0]);
+    c.msgs[0] = om;
+    c.nmsg = 1;
+    overlay_mention m2 = {0};
+    snprintf(m2.id, sizeof m2.id, "903");
+    snprintf(m2.chan, sizeof m2.chan, "555");
+    snprintf(m2.place, sizeof m2.place, "Night Shift \xc2\xb7 #raid-night");
+    snprintf(m2.name, sizeof m2.name, "Kenji");
+    snprintf(m2.text, sizeof m2.text, "you coming?");
+    m2.at = 1000;
+    c.men[0] = m2;
+    c.nmen = 1;
+    int n = overlay_chat_feed(feed, sizeof feed, &c, 1000 + 14 * 60);
+    assert(n == (int)strlen(feed) && feed[n - 1] == '\n');
+    const char *start = "H\tc\t555\t#raid night\tNight Shift\t\t2\t902\t7\nM\t901\t11_ab\tMi ra|~,\t6:14 PM\t1\ta b  c, d | e axxx";
+    assert(!strncmp(feed, start, strlen(start)));
+    assert(lines_of(feed, 'H') == 1 && lines_of(feed, 'M') == 1 && lines_of(feed, 'N') == 1);
+    const char *line = feed;
+    for (int i = 0; i < 3; i++, line = strchr(line, '\n') + 1) { // every record: its tabs, nothing else
+        int tabs = 0;
+        for (const char *q = line; *q != '\n'; q++)
+            tabs += *q == '\t';
+        assert(tabs == (*line == 'H' ? 8 : *line == 'M' ? 6 : 7));
+    }
+    const char *mline = strstr(feed, "\nM\t") + 1;
+    const char *text = mline + strlen("M\t901\t11_ab\tMi ra|~,\t6:14 PM\t1\t");
+    assert((int)strcspn(text, "\n") == 120);
+    assert(strstr(feed, "\nN\t903\t555\tNight Shift \xc2\xb7 #raid-night\t\tKenji\t14m\tyou coming?\n"));
+    // Text is cut between characters, never inside one.
+    snprintf(om.text, sizeof om.text, "abc"); // then two-byte characters: the 120th byte is inside one
+    for (int i = 0; i < 70; i++)
+        strcat(om.text, "\xc3\xa9");
+    c.msgs[0] = om;
+    n = overlay_chat_feed(feed, sizeof feed, &c, 1000);
+    mline = strstr(feed, "\nM\t") + 1;
+    text = mline + strlen("M\t901\t11_ab\tMi ra|~,\t6:14 PM\t1\t");
+    assert((int)strcspn(text, "\n") == 119 && !strncmp(text, "abc\xc3\xa9", 5));
+    // Too much: whole records only, the newest messages stay, the feed stays under the cap.
+    memset(&c.msgs, 0, sizeof c.msgs);
+    for (int i = 0; i < OVERLAY_MSGS; i++) {
+        snprintf(c.msgs[i].id, sizeof c.msgs[i].id, "%d", 100 + i);
+        snprintf(c.msgs[i].name, sizeof c.msgs[i].name, "Person %d", i);
+        memset(c.msgs[i].text, 'y', 150);
+    }
+    c.nmsg = OVERLAY_MSGS;
+    n = overlay_chat_feed(feed, 1500, &c, 1000);
+    assert(n > 0 && n < 1500 && n == (int)strlen(feed) && feed[n - 1] == '\n' && lines_of(feed, 'M') < OVERLAY_MSGS);
+    assert(lines_of(feed, 'M') >= 4 && strstr(feed, "\nM\t119\t")); // the newest is there
+    assert(!strstr(feed, "\nM\t100\t") && lines_of(feed, 'N') == 1);
+    n = overlay_chat_feed(feed, sizeof feed, &c, 1000);
+    assert(lines_of(feed, 'M') == OVERLAY_MSGS && n < OVERLAY_FEED_MAX);
+    n = overlay_chat_feed(feed, 120, &c, 1000); // no room for the messages: the header (and mentions) only if they fit
+    assert(n == (int)strlen(feed) && n < 120 && lines_of(feed, 'M') == 0);
+    n = overlay_chat_feed(feed, 10, &c, 1000); // not even the header
+    assert(n == 0 && feed[0] == 0);
+    memset(&c, 0, sizeof c);
+    n = overlay_chat_feed(feed, sizeof feed, &c, 1000); // nothing: just the header
+    assert(!strcmp(feed, "H\t-\t\t\t\t\t0\t\t0\n"));
+
+    // chat.bin goes in atomically: a temp file and a rename, and nothing is left over.
+    const char *path = "build/host/chat-test.bin";
+    char tmp[64], back[64];
+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    assert(overlay_write_file(path, "one\n") == 0 && overlay_write_file(path, "two\n") == 0);
+    FILE *f = fopen(path, "rb");
+    assert(f && fgets(back, sizeof back, f) && !strcmp(back, "two\n"));
+    fclose(f);
+    assert(!fopen(tmp, "rb"));
+    remove(path);
+    assert(overlay_write_file("build/host/no-such-dir/chat.bin", "x") == -1);
+
+    // Messages from Discord's JSON: names for mentions, our own mention taken out, kinds and times.
+    cJSON *ready = cJSON_Parse(
+        "{\"user\":{\"id\":\"1\",\"username\":\"me\"},"
+        "\"users\":[{\"id\":\"2\",\"username\":\"bob\",\"global_name\":\"Bob\",\"avatar\":\"abc\"},"
+        "{\"id\":\"3\",\"username\":\"cy\"}],"
+        "\"guilds\":[{\"id\":\"10\",\"properties\":{\"name\":\"Night Shift\",\"owner_id\":\"9\"},"
+        "\"roles\":[{\"id\":\"10\",\"permissions\":\"3072\"}],"
+        "\"channels\":[{\"id\":\"11\",\"name\":\"raid-night\",\"type\":0},{\"id\":\"12\",\"name\":\"Raid Voice\",\"type\":2}]}],"
+        "\"merged_members\":[[{\"user_id\":\"1\",\"roles\":[]}]],"
+        "\"private_channels\":[{\"id\":\"20\",\"type\":1,\"recipient_ids\":[\"2\"]},"
+        "{\"id\":\"21\",\"type\":3,\"name\":\"Crew\",\"recipient_ids\":[\"2\",\"3\"]}]}");
+    chat_dispatch("READY", ready);
+    cJSON_Delete(ready);
+    chat_place p;
+    assert(chat_place_of("11", &p) && !strcmp(p.server, "Night Shift") && !strcmp(p.name, "raid-night") && !p.dm && !p.voice);
+    assert(chat_place_of("12", &p) && p.voice && !strcmp(p.name, "Raid Voice"));
+    assert(chat_place_of("20", &p) && p.dm && !strcmp(p.name, "Bob") && !strcmp(p.user, "2") && !strcmp(p.avatar, "abc"));
+    assert(chat_place_of("21", &p) && p.dm && !strcmp(p.name, "Crew") && !p.user[0]);
+    assert(!chat_place_of("99", &p));
+    chat_msg cm;
+    cJSON *j = cJSON_Parse("{\"id\":\"900\",\"channel_id\":\"11\",\"type\":0,\"content\":\"<@1> hi <@2>!\","
+                           "\"timestamp\":\"2026-11-06T18:14:03.123000+00:00\",\"mentions\":[{\"id\":\"1\"}],"
+                           "\"author\":{\"id\":\"2\",\"username\":\"bob\",\"global_name\":\"Bob\",\"avatar\":\"abc\"}}");
+    assert(chat_msg_read(j, &cm) && cm.mine && !strcmp(cm.text, "hi @Bob!") && !strcmp(cm.name, "Bob") &&
+           !strcmp(cm.avatar, "abc") && !strcmp(cm.author, "2"));
+    struct tm want = {.tm_year = 126, .tm_mon = 10, .tm_mday = 6, .tm_hour = 18, .tm_min = 14, .tm_sec = 3};
+    assert(cm.at == timegm(&want));
+    cJSON_Delete(j);
+    j = cJSON_Parse("{\"id\":\"901\",\"channel_id\":\"11\",\"type\":0,\"content\":\"plain\",\"mentions\":[],"
+                    "\"author\":{\"id\":\"3\",\"username\":\"cy\"},\"member\":{\"nick\":\"Cyrus\"}}");
+    assert(chat_msg_read(j, &cm) && !cm.mine && !strcmp(cm.name, "Cyrus") && !strcmp(cm.text, "plain") && cm.avatar[0] == 0);
+    cJSON_Delete(j);
+    j = cJSON_Parse("{\"id\":\"902\",\"channel_id\":\"11\",\"type\":0,\"content\":\"\",\"sticker_items\":[{\"id\":\"1\"}],"
+                    "\"author\":{\"id\":\"3\",\"username\":\"cy\"}}");
+    assert(chat_msg_read(j, &cm) && !strcmp(cm.text, "Sticker"));
+    cJSON_Delete(j);
+    j = cJSON_Parse("{\"id\":\"903\",\"channel_id\":\"11\",\"type\":7,\"content\":\"\",\"author\":{\"id\":\"3\",\"username\":\"cy\"}}");
+    assert(!chat_msg_read(j, &cm)); // a join notice is not a message
+    cJSON_Delete(j);
+    j = cJSON_Parse("{\"id\":\"904\",\"channel_id\":\"11\",\"content\":\"no author\"}");
+    assert(!chat_msg_read(j, &cm));
+    cJSON_Delete(j);
+    j = cJSON_Parse("{\"id\":\"905\",\"channel_id\":\"11\",\"type\":0,\"content\":\"hey @everyone\",\"mention_everyone\":true,"
+                    "\"author\":{\"id\":\"3\",\"username\":\"cy\"}}");
+    assert(chat_msg_read(j, &cm) && cm.mine);
+    cJSON_Delete(j);
+}
+
+static int sink_calls, sink_mention;
+static char sink_type[32];
+static void record_sink(const char *type, cJSON *d, int mention)
+{
+    (void)d;
+    snprintf(sink_type, sizeof sink_type, "%s", type);
+    sink_mention = mention;
+    sink_calls++;
+}
+
+// Which gateway messages reach the overlay, and which of them count as mentions.
+static void test_overlay_sink(void)
+{
+    chat_set_message_sink(record_sink);
+    struct {
+        const char *id, *chan, *guild, *mentions, *author;
+        int type, want;
+    } cases[] = {
+        {"1", "11", ",\"guild_id\":\"10\"", "[{\"id\":\"1\"}]", "2", 0, 1},   // @you in a server
+        {"2", "11", ",\"guild_id\":\"10\"", "[]", "2", 0, 0},                // chatter
+        {"3", "20", "", "[]", "2", 0, 1},                                    // a DM
+        {"4", "20", "", "[]", "1", 0, 0},                                    // our own message
+        {"5", "20", "", "[]", "2", 7, 0},                                    // a join notice
+        {"6", "11", ",\"guild_id\":\"10\"", "[{\"id\":\"1\"}]", "2", 19, 1}, // a reply that mentions us
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
+        char json[512];
+        snprintf(json, sizeof json,
+                 "{\"id\":\"%s\",\"channel_id\":\"%s\",\"type\":%d,\"content\":\"x\",\"mentions\":%s%s,"
+                 "\"author\":{\"id\":\"%s\",\"username\":\"u\"}}",
+                 cases[i].id, cases[i].chan, cases[i].type, cases[i].mentions, cases[i].guild, cases[i].author);
+        cJSON *d = cJSON_Parse(json);
+        sink_calls = 0;
+        chat_dispatch("MESSAGE_CREATE", d);
+        assert(sink_calls == 1 && !strcmp(sink_type, "MESSAGE_CREATE") && sink_mention == cases[i].want);
+        cJSON_Delete(d);
+    }
+    cJSON *d = cJSON_Parse("{\"id\":\"1\",\"channel_id\":\"11\",\"content\":\"edit\"}");
+    sink_calls = 0;
+    chat_dispatch("MESSAGE_UPDATE", d);
+    assert(sink_calls == 1 && !strcmp(sink_type, "MESSAGE_UPDATE") && !sink_mention);
+    chat_dispatch("MESSAGE_DELETE", d);
+    assert(sink_calls == 2 && !strcmp(sink_type, "MESSAGE_DELETE"));
+    chat_dispatch("TYPING_START", d); // not a message
+    assert(sink_calls == 2);
+    cJSON_Delete(d);
+    chat_set_message_sink(NULL);
+}
+
 int main(void)
 {
     test_resample();
@@ -891,6 +1209,8 @@ int main(void)
     test_voice_state();
     test_calls();
     test_audio();
+    test_overlay_feed();
+    test_overlay_sink();
     puts("selftest ok");
     return 0;
 }

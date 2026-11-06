@@ -2,6 +2,7 @@
 // Thread-safe: the gateway thread writes, the web thread reads.
 #pragma once
 #include <cJSON.h>
+#include <time.h>
 
 void chat_set_token(const char *token);
 void chat_token(char *out, size_t cap); // a copy: "" once the session is reset
@@ -35,3 +36,24 @@ int chat_call_people(const char *channel_id, char *name, size_t name_cap, chat_p
 // what, the sender's avatar URL, urgent for a ring. main.c: app_alert (notify.h).
 void chat_set_alert(void (*sink)(const char *context, const char *text, const char *icon, int urgent));
 char *chat_events_json(long since, int wait_ms); // {"next":N, "events":[...]}; waits up to wait_ms for one; caller frees
+
+// Every new, edited or deleted message after the tree took it (gateway thread, no lock held; d is only
+// valid during the call). mention: a new message that counts as a mention (we are mentioned, or a DM).
+void chat_set_message_sink(void (*sink)(const char *type, cJSON *d, int mention));
+// Where a channel is, for the in-game overlay: the server's name ("" for a DM), the channel's name (a DM:
+// the other person, or the group's name), voice for a voice channel's own text chat, and for a one-to-one
+// DM the person's id and avatar hash. 0 when the channel is not in the tree.
+typedef struct {
+    char server[64], name[64];
+    int dm, voice;
+    char user[24], avatar[40];
+} chat_place;
+int chat_place_of(const char *channel_id, chat_place *out);
+// A message object (REST or gateway) as the overlay lists it: plain text (mentions as names), the sender,
+// the time, and mine: it mentions the account (not our own message). 0 for what is not a plain message.
+typedef struct {
+    char id[24], channel[24], author[24], name[48], avatar[40], text[160];
+    time_t at;
+    int mine;
+} chat_msg;
+int chat_msg_read(cJSON *m, chat_msg *out);

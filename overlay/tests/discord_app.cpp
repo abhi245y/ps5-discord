@@ -6,6 +6,8 @@
 #include <cassert>
 #include <cstdio>
 #include <cstring>
+#include <string>
+#include <vector>
 
 namespace {
 struct Widget {
@@ -13,11 +15,11 @@ struct Widget {
     char text[2200]="", path[160]="";
     oui::Rect r{};
 };
-Widget widgets[160];
+Widget widgets[192];
 int used=0;
 
 void* add(bool label,bool image,const oui::Rect* r,const char* text){
-    assert(used<160); // the engine's limit
+    assert(used<192); // the engine's limit
     Widget& w=widgets[used++];
     w.label=label;w.image=image;w.r=*r;
     std::snprintf(image?w.path:w.text,image?160:2200,"%s",text?text:"");
@@ -39,8 +41,8 @@ bool capturing=false;
 char sent[64]="";
 bool set_capture(void*,bool on){capturing=on;return true;}
 bool send(void*,const char* t){std::snprintf(sent,sizeof sent,"%s",t);return true;}
-char sent_text[9000]="";int sent_texts=0;
-bool send_text(void*,const char* t){std::snprintf(sent_text,sizeof sent_text,"%s",t);++sent_texts;return true;}
+char sent_text[9000]="",sent_channel[32]="";int sent_texts=0;
+bool send_text(void*,const char* t,const char* c){std::snprintf(sent_text,sizeof sent_text,"%s",t);std::snprintf(sent_channel,sizeof sent_channel,"%s",c);++sent_texts;return true;}
 float text_width(void*,void* l){return 15.f*float(std::strlen(static_cast<Widget*>(l)->text));} // 15 px a byte
 float sw(void*){return 1920;}
 float sh(void*){return 1080;}
@@ -60,7 +62,7 @@ int main(){
     oui::Builder b{&vt,nullptr};
     reset();
     assert(build(b));
-    assert(used==126);
+    assert(used==170);
     for(int i=0;i<used;i++)assert(!widgets[i].visible); // nothing before the core says anything
 
     // In a call, two talking, the card on: their avatars and names, "You" under them.
@@ -208,7 +210,7 @@ int main(){
     // The keyboard: Triangle on the call page opens it for the call's chat.
     on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~t",b);
     on_gesture(oui::Gesture::Chord,b);assert(capturing);
-    assert(!w(kb_field)->visible&&w(hint_icon[3])->visible&&shows("Chat")&&ends(w(hint_icon[3])->path,"glyph_triangle.png"));
+    assert(!w(kb_field)->visible&&w(hint_icon[3])->visible&&w(hint_text[3])->visible&&!std::strcmp(w(hint_text[3])->text,"Chat")&&ends(w(hint_icon[3])->path,"glyph_triangle.png"));
     auto pad=[&](std::uint32_t d,float lx=0,float ly=0){on_pad(d,lx,ly,b);};
     auto key=[&](int r,int c){kb_row=r;kb_col=c;kb_x=key_center(r,c);pad(0x80);}; // press that key
     auto open_kb=[&]{pad(0x20);assert(kb&&w(kb_field)->visible&&w(kb_pages)->visible&&w(kb_hl)->visible);};
@@ -295,6 +297,7 @@ int main(){
     render_kb(b);
     sent_texts=0;pad(0x2000);
     assert(sent_texts==1&&!std::strcmp(sent_text,long_text)&&std::strlen(sent_text)>48);
+    assert(!std::strcmp(sent_channel,"")); // from the call page: the call's own chat
     assert(!kb&&!w(kb_field)->visible&&!w(kb_input)->visible&&!w(kb_pages)->visible&&!w(kb_hl)->visible&&kb_len==0);
     assert(capturing&&w(dock)->visible);
     open_kb();assert(!std::strcmp(w(kb_input)->text,"Message #Raid Night"));
@@ -325,7 +328,7 @@ int main(){
     on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0|1~~|",b);
     assert(!kb&&!w(kb_field)->visible&&capturing&&kb_len==2);
     // Not in a call: Triangle does nothing, and the hint is not shown.
-    pad(0x20);assert(!kb&&!w(kb_field)->visible&&!w(hint_icon[3])->visible&&!shows("Chat"));
+    pad(0x20);assert(!kb&&!w(kb_field)->visible&&!w(hint_icon[3])->visible&&!w(hint_text[3])->visible);
     on_gesture(oui::Gesture::Chord,b);
     on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~t",b);
     // In the settings: Triangle does nothing.
@@ -334,6 +337,243 @@ int main(){
     pad(0x40);pad(0x20);assert(kb); // back on the call page: it opens (the draft is still "qw")
     assert(shows("qw"));
     on_gesture(oui::Gesture::Chord,b);assert(!kb&&!capturing);
+    on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0|1~~|",b);
+
+    // ---- the tabs, Chat and Mentions ----
+    const char* kCall="3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~t";
+    std::uint64_t frame=20000;
+    on_tick(frame,b);on_text(kCall,b); // (a quiet stretch: the core's beat is stale after the long jump)
+    auto step=[&](int n){frame+=std::uint64_t(n);on_tick(frame,b);on_text(kCall,b);};
+    auto padx=[&](std::uint32_t d){on_pad(d,0,0,b);};
+    char feedbuf[9000];
+    auto chat_feed=[&](const char* head,const char* body){std::snprintf(feedbuf,sizeof feedbuf,"%s%s",head,body);on_chat(feedbuf,b);};
+    const char* kHead="H\tc\t555\t#raid-night\tNight Shift\t\t0\t\n";
+    const char* kConvo="M\t1\t11_ab\tMira\t6:14 PM\t0\tboss at 9, bring fire res\n"
+                       "M\t2\t\tTheo\t6:15 PM\t0\twho has the key?\n"
+                       "M\t3\t13_cd\tAna\t6:16 PM\t0\tme, omw\n"
+                       "M\t4\t14_ef\tKenji\t6:17 PM\t1\tyou coming?\n"
+                       "M\t5\t14_ef\tKenji\t6:18 PM\t0\twhere are you\n"
+                       "M\t6\t\tMira\t6:19 PM\t0\tlast one\n";
+    const char* kMentions="N\t901\t555\tNight Shift \xc2\xb7 #raid-night\t14_ef\tKenji\t2m\tyou coming?\n"
+                          "N\t902\t777\tDirect message\t\tTheo\t14m\tcan you stream it later?\n"
+                          "N\t903\t557\tSpeedrun Lab \xc2\xb7 #routes\t11_ab\tSam\t1h\tcheck this skip\n"
+                          "N\t904\t558\tCo-op Club \xc2\xb7 #general\t\tNova\t3h\tgg last night\n"
+                          "N\t905\t559\tCo-op Club \xc2\xb7 #general\t\tMiro\t5h\tolder one\n";
+    auto strip_on=[&]{return w(tabs_bg)->visible&&w(page_word[0])->visible&&w(page_word[1])->visible&&w(page_word[2])->visible;};
+    chat_feed(kHead,kConvo);
+    // The tab strip is on the panel (not on the settings); the card and a closed panel show none of it.
+    assert(!strip_on()&&!w(head_title)->visible);
+    on_gesture(oui::Gesture::Chord,b);
+    assert(strip_on()&&page==0&&shows("Call")&&shows("Chat")&&shows("Mentions")&&w(tab_on)->r.x==1347+3);
+    assert(!w(head_title)->visible&&!w(mrow[0].bg)->visible&&w(tile[0])->visible&&shows("Raid Night"));
+    // L1/R1 switch (wrapping); a held button's repeats do not.
+    padx(0x800);assert(page==1&&w(tab_on)->r.x==1347+3+173&&w(head_title)->visible&&!w(tile[0])->visible&&!w(row_bg[0])->visible);
+    step(40);padx(0x800);assert(page==2&&w(tab_on)->r.x==1347+3+346);
+    step(40);padx(0x800);assert(page==0&&w(tile[0])->visible);
+    step(40);padx(0x400);assert(page==2); // L1 from Call wraps to Mentions
+    step(40);padx(0x400);assert(page==1);
+    step(40);padx(0x400);step(0);assert(page==0);
+    // Held R1: the press at frame 0, the repeat after 350 ms (21 frames), then every 4 frames: one switch.
+    step(40);padx(0x800);assert(page==1);
+    for(int i=0;i<8;i++){step(i?4:22);padx(0x800);}
+    assert(page==1);
+    step(10);padx(0x800);assert(page==1); // still inside the gate: the repeats extend it
+    step(30);padx(0x800);assert(page==2); // a new press after a pause
+    step(30);padx(0x800);assert(page==0);
+    // Not while the settings are open: L1/R1 are the settings' tabs there.
+    step(40);padx(0x100);assert(settings&&!strip_on());
+    padx(0x800);assert(page==0&&tab==1);padx(0x40);assert(!settings&&page==0&&strip_on()&&tab==1);
+    // Options on another page opens the settings too, and Circle comes back to it.
+    step(40);padx(0x800);assert(page==1);padx(0x100);assert(settings&&!w(head_title)->visible&&!w(mrow[0].bg)->visible);
+    padx(0x40);assert(!settings&&page==1&&w(head_title)->visible);
+    step(40);padx(0x400);assert(page==0);
+
+    // Chat: header, four messages (the newest at the bottom), @you on the one that mentions us.
+    step(40);padx(0x800);assert(page==1);
+    assert(!std::strcmp(w(head_title)->text,"#raid-night")&&!std::strcmp(w(head_sub)->text,"Night Shift"));
+    assert(ends(w(head_icon)->path,"hash_icon.png")&&w(head_icon)->visible);
+    assert(chat.n==6&&scroll==0);
+    assert(!std::strcmp(w(mrow[0].name)->text,"Ana")&&!std::strcmp(w(mrow[3].name)->text,"Mira"));
+    assert(!std::strcmp(w(mrow[2].name)->text,"Kenji")&&!std::strcmp(w(mrow[2].time)->text,"6:18 PM")&&!std::strcmp(w(mrow[2].text)->text,"where are you"));
+    for(int i=0;i<kMsgRows;i++)assert(w(mrow[i].bg)->visible&&w(mrow[i].avatar)->visible&&w(mrow[i].name)->visible&&!w(mrow[i].loc)->visible&&w(mrow[i].chip)->visible==(i==1));
+    assert(ends(w(mrow[0].avatar)->path,"/av/13_cd.png")&&ends(w(mrow[1].avatar)->path,"/av/14_ef.png")&&ends(w(mrow[3].avatar)->path,"avatar_none.png"));
+    assert(!w(men_focus)->visible&&!w(men_open)->visible&&!w(empty_text)->visible);
+    assert(w(in_field)->visible&&!std::strcmp(w(in_text)->text,"Message #raid-night")&&w(in_kb)->visible);
+    assert(!std::strcmp(w(hint_text[0])->text,"Type")&&!std::strcmp(w(hint_text[2])->text,"Tabs")&&!std::strcmp(w(hint_text[1])->text,"Close"));
+    assert(ends(w(hint_icon[0])->path,"glyph_triangle.png")&&ends(w(hint_icon[2])->path,"chip_l1r1.png")&&!w(hint_icon[3])->visible);
+    assert(w(dock_end)->r.y+40==kInputY+kInputH+32+28+70&&w(rule)->r.y==kInputY+kInputH+32);
+    // Scrolling: up shows older, down newer, never past the fetched ones.
+    padx(0x2);assert(scroll==1&&!std::strcmp(w(mrow[3].name)->text,"Kenji")&&!std::strcmp(w(mrow[0].name)->text,"Theo"));
+    padx(0x2);assert(scroll==2&&!std::strcmp(w(mrow[0].name)->text,"Mira")&&!std::strcmp(w(mrow[0].text)->text,"boss at 9, bring fire res"));
+    padx(0x2);assert(scroll==2);
+    assert(!w(mrow[0].chip)->visible&&w(mrow[3].chip)->visible&&ends(w(mrow[3].bg)->path,"msg_row_me.png")&&ends(w(mrow[0].bg)->path,"msg_row.png"));
+    assert(w(mrow[3].text)->r.x==1347+112+72&&w(mrow[1].text)->r.x==1347+112); // the chip's room
+    // A new message arriving while scrolled keeps the view where it was; at the end it follows.
+    chat_feed(kHead,(std::string(kConvo)+"M\t7\t\tTheo\t6:20 PM\t0\tnew one\n").c_str());
+    assert(scroll==3&&!std::strcmp(w(mrow[0].name)->text,"Mira")&&chat.n==7);
+    padx(0x8);padx(0x8);padx(0x8);assert(scroll==0&&!std::strcmp(w(mrow[3].text)->text,"new one"));
+    padx(0x8);assert(scroll==0);
+    // Only the Chat page reacts to the D-pad that way: the call page's tiles did not move.
+    assert(focus==0);
+
+    // A DM: the header is the person (their avatar), "Direct message" under it.
+    chat_feed("H\td\t777\tTheo\tDirect message\t14_ef\t0\t\n","M\t1\t\tTheo\t6:15 PM\t0\thi\n");
+    assert(!std::strcmp(w(head_title)->text,"Theo")&&!std::strcmp(w(head_sub)->text,"Direct message")&&ends(w(head_icon)->path,"/av/14_ef.png"));
+    assert(!std::strcmp(w(in_text)->text,"Message Theo")&&scroll==0); // another chat: the view starts at its end
+    chat_feed("H\td\t777\tTheo\tDirect message\t\t0\t\n","M\t1\t\tTheo\t6:15 PM\t0\thi\n");
+    assert(ends(w(head_icon)->path,"hash_icon.png")); // no picture yet
+
+    // Empty states, short.
+    chat_feed(kHead,"");
+    assert(w(empty_text)->visible&&!std::strcmp(w(empty_text)->text,"No messages yet")&&!w(mrow[0].bg)->visible&&w(in_field)->visible);
+    chat_feed("H\t-\t\t\t\t\t0\t\n","");
+    assert(!std::strcmp(w(head_title)->text,"No chat")&&!std::strcmp(w(head_sub)->text,"Open one in Discord")&&!w(in_field)->visible&&!w(empty_text)->visible);
+    assert(!w(hint_icon[0])->visible&&w(hint_icon[1])->visible&&w(hint_icon[2])->visible); // nothing to type in
+    sent_texts=0;padx(0x20);assert(!kb);
+    assert(w(dock_end)->r.y<400); // a short panel
+    chat_feed(kHead,kConvo);
+
+    // Triangle opens the keyboard for THIS chat; R2 sends to its channel.
+    kb_text[0]=0;kb_len=kb_chars=kb_caret=0; // (the draft of the tests before)
+    padx(0x20);assert(kb&&w(kb_field)->visible&&!std::strcmp(w(kb_input)->text,"Message #raid-night")&&!std::strcmp(kb_channel,"555"));
+    key(1,0);key(1,1);assert(!std::strcmp(kb_text,"qw"));
+    sent_texts=0;kb_text[0]=0;kb_len=kb_chars=kb_caret=0;
+    key(1,2);key(1,3);
+    pad(0x2000);assert(sent_texts==1&&!std::strcmp(sent_text,"er")&&!std::strcmp(sent_channel,"555")&&!kb);
+    // From the call page again: the call's own chat (no channel).
+    step(40);padx(0x400);assert(page==0);
+    step(40);padx(0x20);assert(kb&&!std::strcmp(kb_channel,""));
+    key(1,0);pad(0x2000);assert(sent_texts==2&&!std::strcmp(sent_channel,""));
+    // A channel's chat while not in a call: the chat is sent to its channel, the call page cannot type.
+    on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0|1~~|",b);
+    assert(page==0);
+    padx(0x20);assert(!kb);
+    frame+=40;on_tick(frame,b);padx(0x800);assert(page==1&&w(in_field)->visible);
+    padx(0x20);assert(kb&&!std::strcmp(kb_channel,"555"));
+    key(1,0);pad(0x2000);assert(sent_texts==3&&!std::strcmp(sent_channel,"555")&&!kb);
+    // The call ending does not close a chat's keyboard; it does close the call chat's.
+    on_text(kCall,b);padx(0x20);assert(kb);on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0|1~~|",b);assert(kb);pad(0x40);
+    on_text(kCall,b);
+    step(40);padx(0x400);assert(page==0);step(40);padx(0x20);assert(kb&&!kb_channel[0]);
+    on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0|1~~|",b);assert(!kb);
+    on_text(kCall,b);
+    pad(0x40); // (the panel is on the call page; Circle closes it: it opens again below)
+    assert(!open);on_gesture(oui::Gesture::Chord,b);
+
+    // Mentions: rows (place, person, text, age), the first selected; the badge counts them.
+    chat_feed("H\tc\t555\t#raid-night\tNight Shift\t\t3\t\n",std::string(kMentions).c_str());
+    assert(chat.unseen==3&&page==0&&w(tab_badge)->visible&&!std::strcmp(w(tab_count)->text,"3")); // on Call: the badge shows
+    step(40);padx(0x800);assert(page==1&&w(tab_badge)->visible); // and on Chat
+    sent[0]=0;step(40);padx(0x800);step(0);
+    assert(page==2&&!std::strcmp(sent,"seen")&&chat.unseen==0&&!w(tab_badge)->visible&&!w(tab_count)->visible);
+    assert(w(mrow[0].loc)->visible&&!std::strcmp(w(mrow[0].loc)->text,"Night Shift \xc2\xb7 #raid-night")&&!std::strcmp(w(mrow[0].name)->text,"Kenji"));
+    assert(!std::strcmp(w(mrow[0].time)->text,"2m")&&!std::strcmp(w(mrow[0].text)->text,"you coming?"));
+    assert(!std::strcmp(w(mrow[1].loc)->text,"Direct message")&&!std::strcmp(w(mrow[1].name)->text,"Theo")&&!std::strcmp(w(mrow[3].time)->text,"3h"));
+    assert(!w(mrow[0].chip)->visible&&!w(head_title)->visible&&!w(in_field)->visible&&!w(empty_text)->visible);
+    assert(ends(w(mrow[0].bg)->path,"men_row.png")&&w(mrow[0].bg)->r.h==172&&w(mrow[1].bg)->r.y==124+182);
+    assert(w(men_focus)->visible&&w(men_open)->visible&&w(men_focus)->r.y==124&&w(men_open)->r.y==124+62);
+    assert(!std::strcmp(w(hint_text[0])->text,"Open")&&ends(w(hint_icon[0])->path,"glyph_cross.png")&&!std::strcmp(w(hint_text[2])->text,"Tabs"));
+    assert(w(rule)->r.y==124+182*3+172+32);
+    // Up and down select (no wrap); only four rows show, the list follows the selection.
+    padx(0x2);assert(men_sel==0);
+    padx(0x8);assert(men_sel==1&&w(men_focus)->r.y==124+182&&w(men_open)->r.y==124+182+62);
+    padx(0x8);padx(0x8);assert(men_sel==3&&w(men_focus)->r.y==124+182*3);
+    padx(0x8);assert(men_sel==4&&men_top==1&&!std::strcmp(w(mrow[0].name)->text,"Theo")&&!std::strcmp(w(mrow[3].name)->text,"Miro")&&w(men_focus)->r.y==124+182*3);
+    padx(0x8);assert(men_sel==4);
+    padx(0x2);padx(0x2);padx(0x2);padx(0x2);assert(men_sel==0&&men_top==0);
+    // A new feed keeps the selection on the same mention, even when it moved.
+    padx(0x8);padx(0x8);assert(men_sel==2);
+    chat_feed(kHead,(std::string("")+"N\t950\t560\tNew Server \xc2\xb7 #new\t\tZed\tnow\tfresh\n"+kMentions).c_str());
+    assert(men_sel==3&&!std::strcmp(men_id,"903")&&!std::strcmp(w(mrow[0].name)->text,"Zed")&&!std::strcmp(w(mrow[0].time)->text,"now"));
+    // A new mention while the tab is open is read at once (the core is told).
+    sent[0]=0;
+    chat_feed("H\tc\t555\t#raid-night\tNight Shift\t1\t1\t\n",(std::string("")+"N\t950\t560\tNew Server \xc2\xb7 #new\t\tZed\tnow\tfresh\n"+kMentions).c_str());
+    assert(!std::strcmp(sent,"seen")&&chat.unseen==0);
+    // Cross: Open chat. The command names the channel and the message; the Chat tab waits for it.
+    padx(0x2);padx(0x2);padx(0x2);assert(men_sel==0);
+    padx(0x8);padx(0x8);assert(men_sel==2);
+    sent[0]=0;padx(0x80);
+    assert(!std::strcmp(sent,"chat 777 902")&&page==1);
+    assert(pend_chan[0]&&!std::strcmp(w(head_title)->text,"Theo")&&!std::strcmp(w(head_sub)->text,"Direct message")); // a DM: the person
+    assert(w(empty_text)->visible&&!std::strcmp(w(empty_text)->text,"Loading\xe2\x80\xa6")&&!w(in_field)->visible&&!w(mrow[0].bg)->visible);
+    sent_texts=0;padx(0x20);assert(!kb); // not while it loads
+    const std::string men2=std::string("N\t950\t560\tNew Server \xc2\xb7 #new\t\tZed\tnow\tfresh\n")+kMentions; // (every feed carries the mentions)
+    // It arrives: the chat is that channel's, the mentioned message in view (and marked).
+    chat_feed("H\td\t777\tTheo\tDirect message\t14_ef\t0\t902\n",("M\t900\t\tTheo\t5:00 PM\t0\tfirst\nM\t901\t\tYou\t5:01 PM\t0\tmine\nM\t902\t\tTheo\t5:02 PM\t1\tcan you stream it later?\nM\t903\t\tTheo\t5:03 PM\t0\tafter\n"+men2).c_str());
+    assert(!pend_chan[0]&&!w(empty_text)->visible&&w(in_field)->visible&&!std::strcmp(w(head_title)->text,"Theo"));
+    assert(w(mrow[2].chip)->visible&&!std::strcmp(w(mrow[2].text)->text,"can you stream it later?"));
+    // The choice holds: another feed of the same chat keeps it; the same focus does not scroll again.
+    padx(0x2);assert(scroll==0); // four messages: nothing to scroll
+    chat_feed("H\td\t777\tTheo\tDirect message\t14_ef\t0\t902\n",("M\t900\t\tTheo\t5:00 PM\t0\tfirst\nM\t901\t\tYou\t5:01 PM\t0\tmine\nM\t902\t\tTheo\t5:02 PM\t1\tcan you stream it later?\nM\t903\t\tTheo\t5:03 PM\t0\tafter\n"+men2).c_str());
+    assert(scroll==0);
+    // Back to Mentions and open a channel one whose messages are many: the mentioned one is third of four.
+    step(40);padx(0x400);assert(page==0);step(40);padx(0x400);assert(page==2);
+    assert(men_sel==2);
+    {std::string many="";for(int i=1;i<=20;i++){char one[96];std::snprintf(one,sizeof one,"M\t%d\t\tP%d\t5:%02d PM\t0\tmessage %d\n",100+i,i,i,i);many+=one;}
+     sent[0]=0;padx(0x2);assert(men_sel==1);padx(0x80);assert(!std::strcmp(sent,"chat 555 901")&&pend_chan[0]);
+     chat_feed("H\tc\t555\t#raid-night\tNight Shift\t\t0\t110\n",(many+men2).c_str());
+     // the focus message (110, index 9) with one after it below: the last row is index 10
+     assert(scroll==9&&!std::strcmp(w(mrow[3].text)->text,"message 11")&&!std::strcmp(w(mrow[2].text)->text,"message 10"));
+     padx(0x2);assert(scroll==10);
+     chat_feed("H\tc\t555\t#raid-night\tNight Shift\t\t0\t110\n",(many+men2).c_str());assert(scroll==10);} // the same focus does not pull it back
+    // Open chat with the Chat tab not answering: after a few seconds it shows what the core has.
+    step(40);padx(0x400);step(40);padx(0x400);assert(page==2);padx(0x80);assert(pend_chan[0]&&page==1);
+    chat_feed("H\tc\t556\t#other\tSomewhere\t\t0\t\n",men2.c_str()); // the core still has another chat
+    assert(!std::strcmp(w(empty_text)->text,"Loading\xe2\x80\xa6")&&!std::strcmp(w(head_title)->text,"#raid-night"));
+    step(60*4+1);assert(!pend_chan[0]&&!std::strcmp(w(empty_text)->text,"No messages yet")&&!std::strcmp(w(head_title)->text,"#other"));
+    // An oversized command is not sent (cmd.bin holds 47 bytes).
+    padx(0x400);step(40);padx(0x400);
+    chat_feed("H\tc\t555\t#raid-night\tNight Shift\t\t0\t\n","N\t12345678901234567890123\t12345678901234567890123\tX\t\tA\t1m\tt\n");
+    sent[0]=0;padx(0x80);assert(!sent[0]&&page==2);
+    // No mentions.
+    chat_feed(kHead,"");
+    assert(w(empty_text)->visible&&!std::strcmp(w(empty_text)->text,"No mentions")&&!w(mrow[0].bg)->visible&&!w(men_focus)->visible&&!w(men_open)->visible);
+    assert(!w(hint_icon[0])->visible&&w(hint_icon[1])->visible);
+    sent[0]=0;padx(0x80);padx(0x8);assert(!sent[0]);
+    // The badge's top: 9+.
+    chat_feed("H\tc\t555\t#raid-night\tNight Shift\t\t12\t\n","");
+    assert(!w(tab_badge)->visible); // read as it comes in, on the tab
+    step(40);padx(0x400);assert(page==1);chat.unseen=12;render(b);assert(w(tab_badge)->visible&&!std::strcmp(w(tab_count)->text,"9+"));
+
+    // A feed that is not one, or is damaged, changes nothing and breaks nothing.
+    step(40);padx(0x800);step(40);padx(0x400);
+    chat_feed(kHead,kConvo);
+    const int was=chat.n;
+    on_chat(nullptr,b);on_chat("",b);on_chat("M\t1\ta\tb\tc\t0\ttext\n",b);on_chat("3|c|o|1||0|Raid Night",b);on_chat("H",b);on_chat("Hx\t1",b);
+    assert(chat.n==was&&!std::strcmp(chat.title,"#raid-night"));
+    on_chat("H\tz\t\n",b);assert(chat.kind=='-'&&chat.n==0); // a header alone: an unknown kind is no chat
+    on_chat("H\tc\t5\tT\tS\ti\tnot a number\tf\nM\n\n\tM\t\nM\tonly id\nX\t1\t2\nN\n",b);assert(chat.kind=='c'&&chat.unseen==0&&chat.n==1&&!std::strcmp(chat.msgs[0].id,"only id"));
+    {std::string many="H\tc\t5\tT\tS\ti\t0\t\n";for(int i=0;i<40;i++)many+="M\t"+std::to_string(i)+"\ta\tb\tc\t0\ttext\n";
+     for(int i=0;i<30;i++)many+="N\t"+std::to_string(i)+"\t5\tp\ta\tn\t1m\ttext\n";
+     std::vector<char> big(many.begin(),many.end());big.push_back(0);on_chat(big.data(),b);
+     assert(chat.n==kMsgMax&&chat.nmen==kMenMax);}
+    {std::string wide="H\tc\t"+std::string(100,'7')+"\t"+std::string(200,'T')+"\t"+std::string(100,'S')+"\t"+std::string(100,'I')+"\t5\t"+std::string(50,'F')+"\nM\t"+std::string(100,'1')+"\t\t"+std::string(150,'n')+"\t"+std::string(150,'t')+"\t1\t"+std::string(2000,'x')+"\n";
+     on_chat(wide.c_str(),b);
+     assert(std::strlen(chat.chan)<24&&std::strlen(chat.title)<72&&chat.unseen==5&&chat.n==1&&std::strlen(chat.msgs[0].text)<140);
+     assert(std::strlen(chat.msgs[0].id)<24&&std::strlen(chat.msgs[0].name)<40&&std::strlen(chat.msgs[0].time)<12);}
+    {std::string wide="H\tc\t"+std::string(3000,'7')+"\t5\n";on_chat(wide.c_str(),b); // a header longer than a line: cut, kept
+     assert(chat.kind=='c'&&std::strlen(chat.chan)<24&&chat.unseen==0);}
+    {std::string wide="H\tc\t1\tT\tS\ti\t0\t\n";for(int i=0;i<30;i++)wide+="M\t"+std::to_string(i)+"\ta\tb\tc\t0\t"+std::string(300,'y')+"\n";
+     on_chat(wide.c_str(),b);assert(chat.n==kMsgMax&&std::strlen(chat.msgs[0].text)<140);}
+    {std::string wide="H\tc\t1\tT\tS\ti\t0\t\n";for(int i=0;i<10;i++)wide+="M\t"+std::to_string(i)+"\ta\tb\tc\t0\t\xf0\x9f\x98\x80 \xe2\x82\xac\xc3\xa9\n";
+     on_chat(wide.c_str(),b);step(40);padx(0x800);assert(page==2);step(40);padx(0x400);}
+    on_chat("H\t-\t\t\t\t\t0\t\n",b);
+
+    // The core quits: everything closes, the keyboard too, wherever it was.
+    on_text(kCall,b);
+    chat_feed(kHead,kConvo);
+    padx(0x20);assert(page==1&&kb&&capturing);
+    on_text("3|x|o|0||0||||||",b);
+    assert(!kb&&!capturing&&!w(dock)->visible&&!w(kb_field)->visible&&!strip_on()&&!w(head_title)->visible&&!w(mrow[0].bg)->visible&&
+           !w(men_focus)->visible&&!w(in_field)->visible&&!w(tab_badge)->visible);
+    on_gesture(oui::Gesture::Chord,b);assert(!capturing&&!w(dock)->visible);
+    // Not beating for ten seconds: inert too, from the Mentions tab.
+    on_text(kCall,b);
+    chat_feed(kHead,kMentions);
+    on_gesture(oui::Gesture::Chord,b);assert(page==0);step(40);padx(0x400);assert(page==2&&w(men_focus)->visible);
+    on_tick(frame+1000,b);
+    assert(!capturing&&!w(dock)->visible&&!strip_on()&&!w(men_focus)->visible&&!w(men_open)->visible&&!w(mrow[0].bg)->visible);
+    on_text(kCall,b);
     on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0|1~~|",b);
     // Not ours: ignored.
     on_text("1|c|o|1||Raid Night|",b);on_text("",b);on_text(nullptr,b);

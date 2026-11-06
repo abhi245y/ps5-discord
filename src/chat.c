@@ -675,6 +675,17 @@ static int mentions_me(cJSON *d, const char *me)
     return 0;
 }
 
+// A new message from someone else that counts as a mention: it mentions us, or it is a DM (the
+// rule message_created counts mentions by). Lock held.
+static int msg_counts_as_mention(cJSON *d)
+{
+    const char *me = str(cJSON_GetObjectItem(tree, "me"), "id"), *author = str(cJSON_GetObjectItem(d, "author"), "id");
+    const int t = (int)json_int(d, "type", 0);
+    if (!me || !author || strcmp(me, author) == 0 || (t != 0 && t != 19))
+        return 0;
+    return !str(d, "guild_id") || mentions_me(d, me);
+}
+
 // What a new message is worth: 0 nothing, 1 a server message, 2 a mention, 3 a DM.
 // ponytail: a thread's parent channel is not looked up, so a muted channel's threads still alert.
 static int notify_kind(cJSON *d, const char *me)
@@ -837,9 +848,17 @@ static int dm_listed(const char *id)
     return 0;
 }
 
+static void (*msg_sink)(const char *type, cJSON *d, int mention);
+
+void chat_set_message_sink(void (*sink)(const char *type, cJSON *d, int mention))
+{
+    msg_sink = sink;
+}
+
 void chat_dispatch(const char *type, cJSON *d)
 {
     int changed = 1; // the tree changed (tree_version): not for typing, edits, reactions and the rest
+    int mention = 0; // a new message that counts as a mention (see message_created)
     pthread_mutex_lock(&lock);
     if (strcmp(type, "READY") == 0)
     {
@@ -905,8 +924,10 @@ void chat_dispatch(const char *type, cJSON *d)
               strcmp(type + 8, "REACTION_ADD") == 0 || strcmp(type + 8, "REACTION_REMOVE") == 0))
     {
         changed = strcmp(type, "MESSAGE_CREATE") == 0; // a new last message, unread counts
-        if (changed)
+        if (changed) {
             message_created(d);
+            mention = msg_counts_as_mention(d);
+        }
         push_event(type, d);
     }
     else if (strcmp(type, "USER_GUILD_SETTINGS_UPDATE") == 0)
@@ -924,6 +945,9 @@ void chat_dispatch(const char *type, cJSON *d)
         alert_title[0] = 0;
         alert_urgent = 0;
     }
+    if (msg_sink && strncmp(type, "MESSAGE_", 8) == 0 &&
+        (strcmp(type + 8, "CREATE") == 0 || strcmp(type + 8, "UPDATE") == 0 || strcmp(type + 8, "DELETE") == 0))
+        msg_sink(type, d, mention);
 }
 
 int chat_me_id(char *out, size_t cap)
@@ -1111,4 +1135,104 @@ char *chat_message_json(const char *channel_id, const char *content, const char 
     char *json = cJSON_PrintUnformatted(out);
     cJSON_Delete(out);
     return json;
+}
+
+int chat_place_of(const char *channel_id, chat_place *out)
+{
+    memset(out, 0, sizeof *out);
+    int found = 0;
+    pthread_mutex_lock(&lock);
+    if (tree && channel_id) {
+        cJSON *g, *c;
+        cJSON_ArrayForEach(g, cJSON_GetObjectItem(tree, "guilds"))
+            for (int pass = 0; pass < 2 && !found; pass++)
+                cJSON_ArrayForEach(c, cJSON_GetObjectItem(g, pass ? "rooms" : "channels"))
+                    if (str(c, "id") && strcmp(str(c, "id"), channel_id) == 0 && !found) {
+                        snprintf(out->server, sizeof out->server, "%s", str(g, "name") ? str(g, "name") : "");
+                        snprintf(out->name, sizeof out->name, "%s", str(c, "name") ? str(c, "name") : "");
+                        out->voice = pass;
+                        found = 1;
+                    }
+        cJSON_ArrayForEach(c, cJSON_GetObjectItem(tree, "dms"))
+            if (!found && str(c, "id") && strcmp(str(c, "id"), channel_id) == 0) {
+                cJSON *ids = cJSON_GetObjectItem(c, "recipient_ids");
+                const char *first = cJSON_GetStringValue(cJSON_GetArrayItem(ids, 0));
+                snprintf(out->name, sizeof out->name, "%s", str(c, "name") && *str(c, "name") ? str(c, "name") : display_name(first));
+                out->dm = 1;
+                if (cJSON_GetArraySize(ids) == 1 && first) {
+                    cJSON *u = cJSON_GetObjectItem(cJSON_GetObjectItem(tree, "users"), first);
+                    snprintf(out->user, sizeof out->user, "%s", first);
+                    snprintf(out->avatar, sizeof out->avatar, "%s", str(u, "avatar") ? str(u, "avatar") : "");
+                }
+                found = 1;
+            }
+    }
+    pthread_mutex_unlock(&lock);
+    return found;
+}
+
+// "2026-11-06T18:14:03.123000+00:00" as seconds since the epoch; 0 when it is not one.
+static time_t iso_time(const char *s)
+{
+    struct tm tm;
+    memset(&tm, 0, sizeof tm);
+    if (!s || sscanf(s, "%d-%d-%dT%d:%d:%d", &tm.tm_year, &tm.tm_mon, &tm.tm_mday, &tm.tm_hour, &tm.tm_min, &tm.tm_sec) != 6)
+        return 0;
+    tm.tm_year -= 1900;
+    tm.tm_mon -= 1;
+    return timegm(&tm); // Discord's timestamps are UTC (an offset of +00:00)
+}
+
+int chat_msg_read(cJSON *m, chat_msg *out)
+{
+    memset(out, 0, sizeof *out);
+    const char *id = str(m, "id"), *channel = str(m, "channel_id"), *at = str(m, "timestamp");
+    cJSON *author = cJSON_GetObjectItem(m, "author");
+    const int type = (int)json_int(m, "type", 0);
+    if (!id || !channel || !str(author, "id") || (type != 0 && type != 19) || strlen(id) >= sizeof out->id ||
+        strlen(channel) >= sizeof out->channel || strlen(str(author, "id")) >= sizeof out->author)
+        return 0;
+    snprintf(out->id, sizeof out->id, "%s", id);
+    snprintf(out->channel, sizeof out->channel, "%s", channel);
+    snprintf(out->author, sizeof out->author, "%s", str(author, "id"));
+    const char *name = str(cJSON_GetObjectItem(m, "member"), "nick");
+    if (!name)
+        name = str(author, "global_name") ? str(author, "global_name") : str(author, "username");
+    snprintf(out->name, sizeof out->name, "%s", name ? name : "Someone");
+    snprintf(out->avatar, sizeof out->avatar, "%s", str(author, "avatar") ? str(author, "avatar") : "");
+    out->at = iso_time(at);
+    pthread_mutex_lock(&lock);
+    if (tree) {
+        const char *guild = str(m, "guild_id");
+        char own[24] = "";
+        if (!guild) { // REST messages carry no server: the channel's tells
+            cJSON *g, *c;
+            cJSON_ArrayForEach(g, cJSON_GetObjectItem(tree, "guilds"))
+                cJSON_ArrayForEach(c, cJSON_GetObjectItem(g, "channels"))
+                    if (str(c, "id") && strcmp(str(c, "id"), channel) == 0 && str(g, "id"))
+                        snprintf(own, sizeof own, "%s", str(g, "id"));
+            guild = own[0] ? own : NULL;
+        }
+        const char *me = str(cJSON_GetObjectItem(tree, "me"), "id");
+        out->mine = me && strcmp(me, str(author, "id")) != 0 && mentions_me(m, me);
+        // Our own mention is the "@you" chip, not part of the text.
+        char *content = strdup(str(m, "content") ? str(m, "content") : "");
+        char tag[40];
+        for (int form = 0; content && out->mine && form < 2; form++) {
+            snprintf(tag, sizeof tag, form ? "<@!%s>" : "<@%s>", me);
+            for (char *at; (at = strstr(content, tag));) {
+                const size_t cut = strlen(tag) + (at[strlen(tag)] == ' '); // and the space after it
+                memmove(at, at + cut, strlen(at + cut) + 1);
+            }
+        }
+        plain_text(content, guild_of(guild), out->text, sizeof out->text);
+        free(content);
+    } else
+        snprintf(out->text, sizeof out->text, "%s", str(m, "content") ? str(m, "content") : "");
+    pthread_mutex_unlock(&lock);
+    if (!out->text[0])
+        snprintf(out->text, sizeof out->text, "%s",
+                 cJSON_GetArraySize(cJSON_GetObjectItem(m, "sticker_items")) > 0 ? "Sticker"
+                 : cJSON_GetArraySize(cJSON_GetObjectItem(m, "attachments")) > 0 ? "Attachment" : "Embed");
+    return 1;
 }

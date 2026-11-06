@@ -64,10 +64,15 @@ constexpr std::uint64_t hold_idle_ms=30000;  // no button reaches us this long: 
 std::uint32_t app_handle=0,root_scene_handle=0,scene_handle=0,scene_root_handle=0;
 bool removal_requested=false,cleanup_retry_used=false;
 constexpr std::size_t text_limit=2048;      // text.bin, bytes
+constexpr std::size_t chat_limit=16384;     // chat.bin, bytes
 char last_text[text_limit]{};                // UI thread only
+char last_chat[chat_limit]{};                // UI thread only
 float ui_screen_w=1920,ui_screen_h=1080;     // UI thread only
 struct WidgetSlot{std::uint32_t handle=0,asset=0;bool label=false;char path[160]{};};
-constexpr std::uint32_t widget_limit=160;
+// 192: the Chat and Mentions tabs add 44 widgets (the Discord UI builds 170). A slot is a
+// 172-byte record, a pinned GC handle for the widget and one more for a picture's asset: 192 slots
+// are 33 KB and at most 384 handles, the same kind of cost as the 160 before.
+constexpr std::uint32_t widget_limit=192;
 WidgetSlot widget_slots[widget_limit];       // UI thread only, app-facing ids
 static_assert(std::atomic<Update>::is_always_lock_free&&std::atomic<PadCall>::is_always_lock_free&&
     std::atomic<ShareCall>::is_always_lock_free&&std::atomic<std::uint64_t>::is_always_lock_free);
@@ -208,10 +213,12 @@ void observe_scene(){
 bool append_child(void* parent,void* child){
     void* args[1];args[0]=child;bool ok=false;invoke(method_append,parent,args,ok);return ok;
 }
-bool load_text(char* out,std::size_t n){
-    char p[256];if(!path(p,sizeof p,worker_dir,"text.bin"))return false;
+// A feed file into out (NUL-terminated): false when it is missing, too long for limit, or holds a NUL.
+template<std::size_t Limit>bool load_feed(const char* name,char* out,std::size_t n){
+    char p[256];if(!path(p,sizeof p,worker_dir,name))return false;
     FILE* f=std::fopen(p,"rb");if(!f)return false;
-    char raw[text_limit];std::size_t got=std::fread(raw,1,sizeof raw,f);
+    static char raw[Limit]; // UI thread only; the chat feed is too big for the stack
+    std::size_t got=std::fread(raw,1,sizeof raw,f);
     // A full buffer means the file is too long: never display a silent prefix.
     bool ok=!std::ferror(f)&&got<sizeof raw&&!std::memchr(raw,0,got);
     std::fclose(f);if(!ok||!got)return false;
@@ -400,11 +407,12 @@ float engine_text_width(void*,void* widget){
     float w=-1;if(v)std::memcpy(&w,v,4);
     static int logged=0;if(logged<8){logged++;note("TEXT width=%.1f",w);}
     return w;}
-bool engine_send_text(void*,const char* text){
+bool engine_send_text(void*,const char* text,const char* channel){
     static Outbox box; // UI thread only; 8 KB stays off the stack
-    const std::size_t n=text?std::strlen(text):0;
-    if(!n||n>=sizeof box.text)return false;
+    const std::size_t n=text?std::strlen(text):0,c=channel?std::strlen(channel):0;
+    if(!n||n>=sizeof box.text||c>=sizeof box.channel)return false;
     box.seq=now_ms()*64+(++command_seq%64);box.len=std::uint32_t(n);
+    std::memset(box.channel,0,sizeof box.channel);if(c)std::memcpy(box.channel,channel,c);
     std::memset(box.text,0,sizeof box.text);std::memcpy(box.text,text,n);
     note("SEND %u bytes",box.len);
     return write_file(worker_dir,"send.bin",box);}
@@ -481,11 +489,17 @@ constexpr oui::Builder::Vt engine_vt{
 oui::Builder ui_builder(){return oui::Builder{&engine_vt,nullptr};}
 void refresh_text(){
     char text[text_limit];
-    if(load_text(text,sizeof text)&&std::strcmp(text,last_text)){
+    if(load_feed<text_limit>("text.bin",text,sizeof text)&&std::strcmp(text,last_text)){
         std::snprintf(last_text,sizeof last_text,"%s",text);
         oui::Builder b=ui_builder();
         oui::app::on_text(text,b);
         text_updates.fetch_add(1,std::memory_order_relaxed);}
+    // The chat feed, on the same beat, handed over only when it changed.
+    static char chat[chat_limit];
+    if(load_feed<chat_limit>("chat.bin",chat,sizeof chat)&&std::strcmp(chat,last_chat)){
+        std::memcpy(last_chat,chat,std::strlen(chat)+1);
+        oui::Builder b=ui_builder();
+        oui::app::on_chat(chat,b);}
 }
 bool try_create(){
     if(create_attempts.fetch_add(1,std::memory_order_relaxed)>=create_attempt_limit)return false;

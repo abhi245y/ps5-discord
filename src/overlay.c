@@ -42,6 +42,7 @@ typedef struct {
 typedef struct {
     uint64_t signature, seq;
     uint32_t len, reserved;
+    char channel[24];
     char text[OVERLAY_TEXT_MAX];
 } overlay_outbox;
 #define MAX_PEOPLE 8
@@ -132,8 +133,9 @@ int overlay_line(char *out, int cap, char state, char me, int glance, const char
 }
 
 // The typed message in the outbox file: its seq (0 when there is none, or it is not valid) and
-// the text, NUL-terminated, into text (cap at least OVERLAY_TEXT_MAX + 1).
-uint64_t overlay_read_outbox(const char *path, char *text, size_t cap)
+// the text, NUL-terminated, into text (cap at least OVERLAY_TEXT_MAX + 1), and the chat's channel id
+// into channel (digits, "" for the call's chat).
+uint64_t overlay_read_outbox(const char *path, char *text, size_t cap, char *channel, size_t channel_cap)
 {
     static overlay_outbox box; // the feed and tests only; 8 KB stays off the small thread stacks
     FILE *f = fopen(path, "rb");
@@ -143,9 +145,202 @@ uint64_t overlay_read_outbox(const char *path, char *text, size_t cap)
     fclose(f);
     if (!ok || box.signature != OVERLAY_MAGIC || box.len == 0 || box.len > sizeof box.text || cap <= box.len)
         return 0;
+    const size_t n = strnlen(box.channel, sizeof box.channel);
+    if (n >= sizeof box.channel || n >= channel_cap || strspn(box.channel, "0123456789") != n)
+        return 0; // an id is digits only: it goes into a URL
+    memcpy(channel, box.channel, n + 1);
     memcpy(text, box.text, box.len);
     text[box.len] = 0;
     return box.seq;
+}
+
+// ---- the chat feed ----------------------------------------------------------------------------
+// Whole characters, at most n bytes of src (and cap-1 in all) at out[at]; control characters (tab and
+// newline separate the feed's fields and records) become spaces.
+static int put_text(char *out, int cap, int at, const char *src, int n)
+{
+    int len = (int)strlen(src);
+    if (len > n)
+        len = n;
+    if (at + len >= cap)
+        len = cap - 1 - at;
+    if (len < 0)
+        return at;
+    while (len > 0 && ((unsigned char)src[len] & 0xc0) == 0x80 && src[len] != 0)
+        len--;
+    for (int i = 0; i < len; i++)
+        out[at++] = (unsigned char)src[i] < 0x20 || src[i] == 0x7f ? ' ' : src[i];
+    out[at] = 0;
+    return at;
+}
+
+// A tab, then put_text.
+static int tab_put(char *out, int cap, int at, const char *src, int n)
+{
+    if (at + 1 >= cap)
+        return at;
+    out[at++] = '\t';
+    return put_text(out, cap, at, src, n);
+}
+
+// The feed with the messages from skip on and the first nmen mentions; -1 when it does not fit in cap.
+static int chat_build(char *out, int cap, const overlay_chat *c, int skip, int nmen, time_t now)
+{
+    char one[1024];
+    int at = 0, n;
+#define APPEND_LINE()                                                                                                  \
+    do {                                                                                                               \
+        if (at + n + 1 >= cap)                                                                                         \
+            return -1;                                                                                                 \
+        memcpy(out + at, one, (size_t)n);                                                                              \
+        out[at += n] = '\n';                                                                                           \
+        out[++at] = 0;                                                                                                 \
+    } while (0)
+    n = snprintf(one, sizeof one, "H\t%c\t", c->kind == 'c' || c->kind == 'd' ? c->kind : '-');
+    n = put_text(one, sizeof one, n, c->chan, 23);
+    n = tab_put(one, sizeof one, n, c->title, 64);
+    n = tab_put(one, sizeof one, n, c->sub, 64);
+    n = tab_put(one, sizeof one, n, c->icon, 63);
+    n += snprintf(one + n, sizeof one - (size_t)n, "\t%d\t", c->unseen < 0 ? 0 : c->unseen);
+    n = put_text(one, sizeof one, n, c->focus, 23);
+    n += snprintf(one + n, sizeof one - (size_t)n, "\t%d", c->rev < 0 ? 0 : c->rev);
+    APPEND_LINE();
+    for (int i = skip; i < c->nmsg; i++) {
+        const overlay_msg *m = c->msgs + i;
+        n = snprintf(one, sizeof one, "M\t");
+        n = put_text(one, sizeof one, n, m->id, 23);
+        n = tab_put(one, sizeof one, n, m->avatar, 63);
+        n = tab_put(one, sizeof one, n, m->name, 32);
+        n = tab_put(one, sizeof one, n, m->time, 11);
+        n += snprintf(one + n, sizeof one - (size_t)n, "\t%d\t", m->mine ? 1 : 0);
+        n = put_text(one, sizeof one, n, m->text, 120);
+        APPEND_LINE();
+    }
+    for (int i = 0; i < nmen; i++) {
+        const overlay_mention *m = c->men + i;
+        char age[12];
+        overlay_age(age, sizeof age, (long)(now - m->at));
+        n = snprintf(one, sizeof one, "N\t");
+        n = put_text(one, sizeof one, n, m->id, 23);
+        n = tab_put(one, sizeof one, n, m->chan, 23);
+        n = tab_put(one, sizeof one, n, m->place, 76);
+        n = tab_put(one, sizeof one, n, m->avatar, 63);
+        n = tab_put(one, sizeof one, n, m->name, 32);
+        n = tab_put(one, sizeof one, n, age, 7);
+        n = tab_put(one, sizeof one, n, m->text, 120);
+        APPEND_LINE();
+    }
+#undef APPEND_LINE
+    return at;
+}
+
+int overlay_chat_feed(char *out, int cap, const overlay_chat *c, time_t now)
+{
+    if (cap > OVERLAY_FEED_MAX)
+        cap = OVERLAY_FEED_MAX;
+    const int nmsg = c->nmsg < OVERLAY_MSGS ? c->nmsg : OVERLAY_MSGS;
+    const int nmen = c->nmen < OVERLAY_MENTIONS ? c->nmen : OVERLAY_MENTIONS;
+    int n = -1;
+    for (int skip = 0; n < 0 && skip <= nmsg; skip++) // the oldest messages go first
+        n = chat_build(out, cap, c, skip, nmen, now);
+    for (int m = nmen - 1; n < 0 && m >= 0; m--) // then the oldest mentions
+        n = chat_build(out, cap, c, nmsg, m, now);
+    if (n < 0) { // not even the header fits
+        if (cap > 0)
+            out[0] = 0;
+        n = 0;
+    }
+    return n;
+}
+
+void overlay_age(char *out, size_t cap, long s)
+{
+    if (s < 60)
+        snprintf(out, cap, "now");
+    else if (s < 3600)
+        snprintf(out, cap, "%ldm", s / 60);
+    else if (s < 86400)
+        snprintf(out, cap, "%ldh", s / 3600);
+    else
+        snprintf(out, cap, "%ldd", s / 86400);
+}
+
+void overlay_clock(char *out, size_t cap, const struct tm *tm)
+{
+    snprintf(out, cap, "%d:%02d %s", tm->tm_hour % 12 ? tm->tm_hour % 12 : 12, tm->tm_min, tm->tm_hour < 12 ? "AM" : "PM");
+}
+
+int overlay_mention_add(overlay_chat *c, const overlay_mention *m)
+{
+    for (int i = 0; i < c->nmen; i++)
+        if (strcmp(c->men[i].id, m->id) == 0)
+            return 0;
+    for (int i = 0; m->dm && i < c->nmen; i++) // a DM is one entry: its latest message
+        if (c->men[i].dm && strcmp(c->men[i].chan, m->chan) == 0) {
+            memmove(c->men + i, c->men + i + 1, (size_t)(c->nmen - i - 1) * sizeof *c->men);
+            c->nmen--;
+            break;
+        }
+    int pos = 0;
+    while (pos < c->nmen && c->men[pos].at >= m->at)
+        pos++;
+    if (pos >= OVERLAY_MENTIONS)
+        return 0; // older than the ten kept
+    if (c->nmen < OVERLAY_MENTIONS)
+        c->nmen++;
+    memmove(c->men + pos + 1, c->men + pos, (size_t)(c->nmen - 1 - pos) * sizeof *c->men);
+    c->men[pos] = *m;
+    return 1;
+}
+
+int overlay_msg_add(overlay_chat *c, const overlay_msg *m)
+{
+    for (int i = 0; i < c->nmsg; i++)
+        if (strcmp(c->msgs[i].id, m->id) == 0)
+            return 0;
+    if (c->nmsg == OVERLAY_MSGS) {
+        memmove(c->msgs, c->msgs + 1, (size_t)(OVERLAY_MSGS - 1) * sizeof *c->msgs);
+        c->nmsg--;
+    }
+    c->msgs[c->nmsg++] = *m;
+    return 1;
+}
+
+int overlay_msg_edit(overlay_chat *c, const char *id, const char *text)
+{
+    for (int i = 0; i < c->nmsg; i++)
+        if (strcmp(c->msgs[i].id, id) == 0) {
+            snprintf(c->msgs[i].text, sizeof c->msgs[i].text, "%s", text);
+            return 1;
+        }
+    return 0;
+}
+
+int overlay_msg_remove(overlay_chat *c, const char *id)
+{
+    for (int i = 0; i < c->nmsg; i++)
+        if (strcmp(c->msgs[i].id, id) == 0) {
+            memmove(c->msgs + i, c->msgs + i + 1, (size_t)(c->nmsg - i - 1) * sizeof *c->msgs);
+            c->nmsg--;
+            return 1;
+        }
+    return 0;
+}
+
+int overlay_write_file(const char *path, const char *data)
+{
+    char tmp[256];
+    if (snprintf(tmp, sizeof tmp, "%s.tmp", path) >= (int)sizeof tmp)
+        return -1;
+    FILE *f = fopen(tmp, "wb");
+    if (!f)
+        return -1;
+    const int ok = fputs(data, f) >= 0;
+    if (fclose(f) != 0 || !ok || rename(tmp, path) != 0) {
+        remove(tmp);
+        return -1;
+    }
+    return 0;
 }
 
 #ifdef __PROSPERO__
@@ -247,23 +442,31 @@ static void fetch_avatars(const chat_person *people, int count)
 static pthread_mutex_t avatar_mu = PTHREAD_MUTEX_INITIALIZER;
 static chat_person avatar_want[MAX_PEOPLE];
 static int avatar_count;
+// The chat's and the mentions' authors, and a DM's person (chat_tick).
+#define EXTRA_PEOPLE (OVERLAY_MSGS + OVERLAY_MENTIONS + 2)
+static chat_person extra_want[EXTRA_PEOPLE];
+static int extra_count;
 
 static void *avatar_thread(void *arg)
 {
     (void)arg;
-    static chat_person people[MAX_PEOPLE];
+    static chat_person people[MAX_PEOPLE], extra[EXTRA_PEOPLE];
     for (;;) {
         pthread_mutex_lock(&avatar_mu);
-        const int count = avatar_count;
+        const int count = avatar_count, more = extra_count;
         memcpy(people, avatar_want, sizeof people);
+        memcpy(extra, extra_want, sizeof extra);
         pthread_mutex_unlock(&avatar_mu);
         fetch_avatars(people, count);
+        fetch_avatars(extra, more);
         usleep(200000);
     }
     return NULL;
 }
 
 static uint64_t mono_ms(void);
+
+static char cur_call[24]; // the call's channel while in one (the feed thread's)
 
 static void compose(char *line, int cap, time_t *live_since)
 {
@@ -295,6 +498,7 @@ static void compose(char *line, int cap, time_t *live_since)
                   : people[i].deaf ? 'd' : people[i].muted ? 'm' : '-';
         talking |= p->flag == 't';
     }
+    snprintf(cur_call, sizeof cur_call, "%s", state != '-' && channel && strlen(channel) < sizeof cur_call ? channel : "");
     cJSON_Delete(v);
     pthread_mutex_lock(&avatar_mu);
     memcpy(avatar_want, people, sizeof(chat_person) * (size_t)count);
@@ -364,6 +568,309 @@ static int write_line(const char *line)
     return fclose(f) == 0 && ok && rename(OVERLAY_DIR "/text.tmp", OVERLAY_DIR "/text.bin") == 0 ? 0 : -1;
 }
 
+static volatile int quitting; // overlay_shutdown: the feed writes no more lines (the beat would undo IDLE_LINE)
+
+// ---- the Chat and Mentions tabs ------------------------------------------------------------
+// One chat is shown: an Open chat's (until the call changes), else the call's own, else the channel the
+// app showed last. Its latest messages are fetched on a thread when it changes, live ones come from the
+// gateway (on_message); the mentions come from Discord's inbox once, then live. chat.bin has both.
+static pthread_mutex_t chat_mu = PTHREAD_MUTEX_INITIALIZER;
+static overlay_chat chat_state;              // chat_mu: msgs of chat_chan, and the mentions
+static char chat_chan[24], loaded_focus[24]; // the channel the messages are of, the message they were fetched around
+static char app_chan[24];                    // the channel the app showed last
+static char open_chan[24], open_focus[24];   // Open chat's channel and message
+static char last_call[24];
+static int open_rev; // Open chat commands so far (in the feed: a repeat of the same one still changes it)
+static int fetch_busy;
+static char fail_chan[24];
+static time_t fail_at;
+
+void overlay_note_channel(const char *channel_id)
+{
+    if (!channel_id || strlen(channel_id) >= sizeof app_chan)
+        return;
+    pthread_mutex_lock(&chat_mu);
+    if (strcmp(app_chan, channel_id) != 0) {
+        snprintf(app_chan, sizeof app_chan, "%s", channel_id);
+        open_chan[0] = open_focus[0] = 0; // the user opened another: that one holds now
+    }
+    pthread_mutex_unlock(&chat_mu);
+}
+
+// A message as the feed lists it. Not under chat_mu: it takes the chat's own lock.
+static void to_msg(const chat_msg *m, overlay_msg *out)
+{
+    memset(out, 0, sizeof *out);
+    snprintf(out->id, sizeof out->id, "%s", m->id);
+    snprintf(out->author, sizeof out->author, "%s", m->author);
+    snprintf(out->ahash, sizeof out->ahash, "%s", m->avatar);
+    snprintf(out->name, sizeof out->name, "%s", m->name);
+    snprintf(out->text, sizeof out->text, "%s", m->text);
+    struct tm tm;
+    time_t at = m->at;
+    localtime_r(&at, &tm);
+    overlay_clock(out->time, sizeof out->time, &tm);
+    out->mine = m->mine;
+}
+
+static void to_mention(const chat_msg *m, overlay_mention *out)
+{
+    memset(out, 0, sizeof *out);
+    chat_place p;
+    snprintf(out->id, sizeof out->id, "%s", m->id);
+    snprintf(out->chan, sizeof out->chan, "%s", m->channel);
+    snprintf(out->author, sizeof out->author, "%s", m->author);
+    snprintf(out->ahash, sizeof out->ahash, "%s", m->avatar);
+    snprintf(out->name, sizeof out->name, "%s", m->name);
+    snprintf(out->text, sizeof out->text, "%s", m->text);
+    out->at = m->at ? m->at : time(NULL);
+    if (!chat_place_of(m->channel, &p))
+        snprintf(out->place, sizeof out->place, "Mention");
+    else if (p.dm) {
+        snprintf(out->place, sizeof out->place, "Direct message");
+        out->dm = 1;
+    } else
+        snprintf(out->place, sizeof out->place, "%s \xc2\xb7 %s%s", p.server, p.voice ? "" : "#", p.name);
+}
+
+// A message event from the gateway (gateway thread).
+static void on_message(const char *type, cJSON *d, int mention)
+{
+    const char *chan = cJSON_GetStringValue(cJSON_GetObjectItem(d, "channel_id")),
+               *id = cJSON_GetStringValue(cJSON_GetObjectItem(d, "id"));
+    if (!chan || !id || strlen(id) >= sizeof(((overlay_msg *)0)->id))
+        return;
+    if (strcmp(type, "MESSAGE_DELETE") == 0) {
+        pthread_mutex_lock(&chat_mu);
+        if (strcmp(chan, chat_chan) == 0)
+            overlay_msg_remove(&chat_state, id);
+        pthread_mutex_unlock(&chat_mu);
+        return;
+    }
+    chat_msg m;
+    if (!cJSON_GetObjectItem(d, "content") || !chat_msg_read(d, &m))
+        return; // an update without text (an embed arriving) changes nothing here
+    overlay_msg om;
+    overlay_mention men;
+    to_msg(&m, &om);
+    const int edit = strcmp(type, "MESSAGE_UPDATE") == 0;
+    if (!edit && mention)
+        to_mention(&m, &men);
+    pthread_mutex_lock(&chat_mu);
+    if (strcmp(m.channel, chat_chan) == 0) {
+        if (edit)
+            overlay_msg_edit(&chat_state, om.id, om.text);
+        else
+            overlay_msg_add(&chat_state, &om);
+    }
+    if (!edit && mention && overlay_mention_add(&chat_state, &men))
+        chat_state.unseen++;
+    pthread_mutex_unlock(&chat_mu);
+}
+
+typedef struct {
+    char chan[24], around[24];
+} fetch_job;
+
+// The latest messages of a channel (around a message, for Open chat), off the feed loop.
+static void *fetch_thread(void *arg)
+{
+    fetch_job job = *(fetch_job *)arg;
+    free(arg);
+    char token[256], path[160];
+    chat_token(token, sizeof token);
+    if (job.around[0])
+        snprintf(path, sizeof path, "/channels/%s/messages?limit=%d&around=%s", job.chan, OVERLAY_MSGS, job.around);
+    else
+        snprintf(path, sizeof path, "/channels/%s/messages?limit=%d", job.chan, OVERLAY_MSGS);
+    http_response r = http_request("GET", path, NULL, token);
+    cJSON *list = r.status == 200 && r.body ? cJSON_Parse(r.body) : NULL;
+    free(r.body);
+    static overlay_msg got[OVERLAY_MSGS]; // one fetch at a time (fetch_busy)
+    int n = 0;
+    cJSON *one;
+    cJSON_ArrayForEach(one, list) // newest first
+    {
+        chat_msg m;
+        if (n < OVERLAY_MSGS && chat_msg_read(one, &m))
+            to_msg(&m, &got[n++]);
+    }
+    const int ok = cJSON_IsArray(list);
+    cJSON_Delete(list);
+    pthread_mutex_lock(&chat_mu);
+    if (ok) {
+        chat_state.nmsg = 0;
+        for (int i = n - 1; i >= 0; i--) // oldest first, the ids that came live meanwhile kept once
+            overlay_msg_add(&chat_state, &got[i]);
+        snprintf(chat_chan, sizeof chat_chan, "%s", job.chan);
+        snprintf(loaded_focus, sizeof loaded_focus, "%s", job.around);
+    } else {
+        snprintf(fail_chan, sizeof fail_chan, "%s", job.chan);
+        fail_at = time(NULL);
+        LOG("overlay: chat %s not fetched (%d)", job.chan, r.status);
+    }
+    fetch_busy = 0;
+    pthread_mutex_unlock(&chat_mu);
+    return NULL;
+}
+
+// The inbox, once (retried every 30 s until it comes): the mentions from before the core ran.
+static void *mentions_thread(void *arg)
+{
+    (void)arg;
+    char token[256], me[24];
+    for (;;) {
+        sleep(5);
+        if (!chat_me_id(me, sizeof me))
+            continue;
+        chat_token(token, sizeof token);
+        http_response r = http_request("GET", "/users/@me/mentions?limit=25&roles=true&everyone=true", NULL, token);
+        cJSON *list = r.status == 200 && r.body ? cJSON_Parse(r.body) : NULL;
+        free(r.body);
+        if (cJSON_IsArray(list)) {
+            cJSON *one;
+            cJSON_ArrayForEach(one, list)
+            {
+                chat_msg m;
+                overlay_mention men;
+                if (!chat_msg_read(one, &m))
+                    continue;
+                to_mention(&m, &men);
+                pthread_mutex_lock(&chat_mu);
+                overlay_mention_add(&chat_state, &men); // not unseen: they were there before
+                pthread_mutex_unlock(&chat_mu);
+            }
+            cJSON_Delete(list);
+            return NULL;
+        }
+        cJSON_Delete(list);
+        LOG("overlay: mentions not fetched (%d)", r.status);
+        sleep(25);
+    }
+}
+
+// Open chat (cmd.bin "chat <channel> <message>"): digits only, both.
+static void open_chat(const char *what)
+{
+    char chan[32], msg[32];
+    if (sscanf(what, "%31s %31s", chan, msg) != 2 || strspn(chan, "0123456789") != strlen(chan) ||
+        strspn(msg, "0123456789") != strlen(msg) || strlen(chan) >= sizeof open_chan || strlen(msg) >= sizeof open_focus) {
+        LOG("overlay: chat command not valid");
+        return;
+    }
+    pthread_mutex_lock(&chat_mu);
+    snprintf(open_chan, sizeof open_chan, "%s", chan);
+    snprintf(open_focus, sizeof open_focus, "%s", msg);
+    open_rev++;
+    fail_chan[0] = 0;
+    pthread_mutex_unlock(&chat_mu);
+}
+
+static void mentions_seen(void)
+{
+    pthread_mutex_lock(&chat_mu);
+    chat_state.unseen = 0;
+    pthread_mutex_unlock(&chat_mu);
+}
+
+// One pass of the Chat and Mentions feed (the feed thread): picks the chat, starts a fetch when it changed,
+// and writes chat.bin when it did.
+static void chat_tick(void)
+{
+    static overlay_chat snap; // 11 KB: off the stack
+    static char feed[OVERLAY_FEED_MAX], last[OVERLAY_FEED_MAX];
+    static chat_person extra[EXTRA_PEOPLE];
+    const time_t now = time(NULL);
+    fetch_job *job = NULL;
+    pthread_mutex_lock(&chat_mu);
+    if (strcmp(cur_call, last_call) != 0) { // the call changed: Open chat's choice is over
+        snprintf(last_call, sizeof last_call, "%s", cur_call);
+        open_chan[0] = open_focus[0] = 0;
+    }
+    const char *target = open_chan[0] ? open_chan : cur_call[0] ? cur_call : app_chan;
+    const char *around = open_chan[0] ? open_focus : "";
+    if (!target[0]) {
+        chat_chan[0] = loaded_focus[0] = 0;
+        chat_state.nmsg = 0;
+    } else if (!fetch_busy && (strcmp(target, chat_chan) != 0 || strcmp(around, loaded_focus) != 0) &&
+               !(strcmp(target, fail_chan) == 0 && now - fail_at < 10) && (job = malloc(sizeof *job))) {
+        snprintf(job->chan, sizeof job->chan, "%s", target);
+        snprintf(job->around, sizeof job->around, "%s", around);
+        fetch_busy = 1;
+    }
+    memcpy(&snap, &chat_state, sizeof snap);
+    const int focused = open_chan[0] && strcmp(open_chan, chat_chan) == 0;
+    snprintf(snap.chan, sizeof snap.chan, "%s", chat_chan);
+    snprintf(snap.focus, sizeof snap.focus, "%s", focused ? loaded_focus : "");
+    snap.rev = open_rev;
+    pthread_mutex_unlock(&chat_mu);
+    if (job) {
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setstacksize(&attr, 256 * 1024);
+        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+        pthread_t t;
+        if (pthread_create(&t, &attr, fetch_thread, job) != 0) {
+            free(job);
+            pthread_mutex_lock(&chat_mu);
+            fetch_busy = 0;
+            pthread_mutex_unlock(&chat_mu);
+        }
+        pthread_attr_destroy(&attr);
+    }
+    // The header: where this chat is. Avatars as far as the core has fetched them; the rest are wanted.
+    chat_place p;
+    int more = 0;
+    snap.kind = '-';
+    if (snap.chan[0]) {
+        const int known = chat_place_of(snap.chan, &p);
+        snap.kind = known && p.dm ? 'd' : 'c';
+        if (!known)
+            snprintf(snap.title, sizeof snap.title, "Chat");
+        else if (p.dm) {
+            snprintf(snap.title, sizeof snap.title, "%s", p.name);
+            snprintf(snap.sub, sizeof snap.sub, "Direct message");
+        } else {
+            snprintf(snap.title, sizeof snap.title, "%s%s", p.voice ? "" : "#", p.name);
+            snprintf(snap.sub, sizeof snap.sub, "%s", p.server);
+        }
+        if (known && p.dm && p.user[0]) {
+            chat_person who = {0};
+            snprintf(who.id, sizeof who.id, "%s", p.user);
+            snprintf(who.avatar, sizeof who.avatar, "%s", p.avatar);
+            extra[more++] = who;
+            char key[64], path[160];
+            struct stat sb;
+            avatar_key(&who, key, sizeof key);
+            snprintf(path, sizeof path, OVERLAY_DIR "/av/%s.png", key);
+            snprintf(snap.icon, sizeof snap.icon, "%s", stat(path, &sb) == 0 ? key : "");
+        }
+    }
+    for (int i = 0; i < snap.nmsg + snap.nmen; i++) {
+        const int msg = i < snap.nmsg;
+        const char *author = msg ? snap.msgs[i].author : snap.men[i - snap.nmsg].author,
+                   *hash = msg ? snap.msgs[i].ahash : snap.men[i - snap.nmsg].ahash;
+        char *shown = msg ? snap.msgs[i].avatar : snap.men[i - snap.nmsg].avatar;
+        chat_person who = {0};
+        snprintf(who.id, sizeof who.id, "%s", author);
+        snprintf(who.avatar, sizeof who.avatar, "%s", hash);
+        char key[64], path[160];
+        struct stat sb;
+        avatar_key(&who, key, sizeof key);
+        snprintf(path, sizeof path, OVERLAY_DIR "/av/%s.png", key);
+        snprintf(shown, 64, "%s", stat(path, &sb) == 0 ? key : "");
+        if (!shown[0] && more < EXTRA_PEOPLE)
+            extra[more++] = who;
+    }
+    pthread_mutex_lock(&avatar_mu);
+    memcpy(extra_want, extra, sizeof(chat_person) * (size_t)more);
+    extra_count = more;
+    pthread_mutex_unlock(&avatar_mu);
+    overlay_chat_feed(feed, sizeof feed, &snap, now);
+    if (!quitting && strcmp(feed, last) != 0 && overlay_write_file(OVERLAY_DIR "/chat.bin", feed) == 0)
+        memcpy(last, feed, strlen(feed) + 1);
+}
+
 // The newest command from the overlay; 0 when there is none.
 static uint64_t read_command(overlay_command *c)
 {
@@ -396,6 +903,10 @@ static void run_command(const char *what)
         r = stream_golive(strcmp(stream_state(), "off") == 0 || strcmp(stream_state(), "error") == 0, &why);
     else if (strcmp(what, "leave") == 0)
         voice_leave();
+    else if (strcmp(what, "seen") == 0)
+        mentions_seen(); // the Mentions tab was opened
+    else if (strncmp(what, "chat ", 5) == 0)
+        open_chat(what + 5); // a mention's Open chat
     else if (strncmp(what, "set ", 4) == 0) {
         // The mini settings: only these keys (cmd.bin is written by the overlay).
         static const char *const allowed[] = {"golive_quality", "mic_gain",     "call_volume",   "overlay_glance",
@@ -473,17 +984,19 @@ static void *post_thread(void *arg)
     return NULL;
 }
 
-// The overlay's keyboard sent text: to the call's own text chat; dropped outside a call.
-static void send_text(const char *text)
+// The overlay's keyboard sent text: to the text chat channel it names (digits, checked when the outbox is
+// read), or, with none, to the call's own chat (dropped outside a call).
+static void send_text(const char *text, const char *target)
 {
     char *state = voice_state_json();
     cJSON *v = state ? cJSON_Parse(state) : NULL;
     free(state);
     const char *st = cJSON_GetStringValue(cJSON_GetObjectItem(v, "state"));
-    const char *channel = cJSON_GetStringValue(cJSON_GetObjectItem(v, "channel"));
+    const char *channel = target[0] ? target : cJSON_GetStringValue(cJSON_GetObjectItem(v, "channel"));
     outgoing *m = NULL;
-    if (!st || !strcmp(st, "idle") || !strcmp(st, "error") || !channel || !channel[0] || strlen(channel) >= sizeof m->channel)
-        LOG("overlay: message dropped, not in a call");
+    if (!channel || !channel[0] || strlen(channel) >= sizeof m->channel ||
+        (!target[0] && (!st || !strcmp(st, "idle") || !strcmp(st, "error"))))
+        LOG("overlay: message dropped, no chat to send it to");
     else if ((m = malloc(sizeof *m + strlen(text) + 1))) {
         snprintf(m->channel, sizeof m->channel, "%s", channel);
         strcpy(m->text, text);
@@ -505,8 +1018,6 @@ static void send_text(const char *text)
 
 static uint64_t launched_at;
 static volatile int reloading;
-static volatile int quitting; // overlay_shutdown: the feed writes no more lines (the beat would undo IDLE_LINE)
-
 // A payload from the app's assets to elfldr.
 static void send_elf(const char *path)
 {
@@ -628,7 +1139,8 @@ static void *feed(void *arg)
     overlay_command c;
     uint64_t seen = read_command(&c); // one left from before this core ran is not new
     static char typed[OVERLAY_TEXT_MAX + 1];
-    uint64_t seen_typed = overlay_read_outbox(OVERLAY_DIR "/send.bin", typed, sizeof typed);
+    char typed_channel[24];
+    uint64_t seen_typed = overlay_read_outbox(OVERLAY_DIR "/send.bin", typed, sizeof typed, typed_channel, sizeof typed_channel);
     int auto_reloaded = 0;
     // Nothing is decided on the defaults: overlay reads 0 until the user's settings load, and a
     // running overlay (from the core before) was stopped as if switched off (2026-11-05).
@@ -672,6 +1184,7 @@ static void *feed(void *arg)
                 overlay_reload();
         }
         compose(line, sizeof line, &live_since);
+        chat_tick();
         if (!quitting && strcmp(line, last) != 0 && write_line(line) == 0)
             snprintf(last, sizeof last, "%s", line);
         // Any other seq is a new command: the overlay's come from the console's uptime clock,
@@ -681,10 +1194,11 @@ static void *feed(void *arg)
             seen = seq;
             run_command(c.text);
         }
-        const uint64_t typed_seq = overlay_read_outbox(OVERLAY_DIR "/send.bin", typed, sizeof typed);
+        const uint64_t typed_seq =
+            overlay_read_outbox(OVERLAY_DIR "/send.bin", typed, sizeof typed, typed_channel, sizeof typed_channel);
         if (typed_seq && typed_seq != seen_typed) {
             seen_typed = typed_seq;
-            send_text(typed);
+            send_text(typed, typed_channel);
         }
         usleep(200000); // the overlay reads every 12 frames (200 ms)
     }
@@ -707,6 +1221,8 @@ void overlay_init(void)
     pthread_t t;
     pthread_create(&t, &attr, feed, NULL);
     pthread_create(&t, &attr, avatar_thread, NULL);
+    chat_set_message_sink(on_message);
+    pthread_create(&t, &attr, mentions_thread, NULL);
     pthread_attr_destroy(&attr);
 }
 #else
@@ -721,6 +1237,11 @@ void overlay_shutdown(void)
 int overlay_reload(void)
 {
     return -1;
+}
+
+void overlay_note_channel(const char *channel_id)
+{
+    (void)channel_id;
 }
 
 const char *overlay_state(void)

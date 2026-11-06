@@ -257,6 +257,49 @@ def keyboard_art():
     rounded("kb_field", KB_W, 72, 18, (24, 26, 31, 250), (70, 74, 82, 255), 2)
 
 
+def kb_glyph(d, k):
+    """A small keyboard: a rounded body and three rows of keys, for the chat's input row."""
+    d.rounded_rectangle((4 * k, 14 * k, 60 * k, 50 * k), 6 * k, outline=WHITE, width=int(4 * k))
+    for row, (n, y) in enumerate(((6, 23), (6, 31), (0, 0))):
+        for i in range(n):
+            x = 11 + i * 8.4
+            d.rounded_rectangle((x * k, y * k, (x + 4.6) * k, (y + 4.6) * k), 1 * k, fill=WHITE)
+    d.rounded_rectangle((20 * k, 40 * k, 44 * k, 44 * k), 2 * k, fill=WHITE)
+
+
+def x_glyph(d, k, cx, cy, r, colour):
+    d.line((cx - r, cy - r, cx + r, cy + r), fill=colour, width=int(2.4 * k))
+    d.line((cx + r, cy - r, cx - r, cy + r), fill=colour, width=int(2.4 * k))
+
+
+def chat_art():
+    """The Chat and Mentions tabs (discord_app.inc kStripY and friends)."""
+    rounded("tabs_bg", 519, 64, 20, (22, 24, 29, 255))
+    img, d = canvas(167, 56)
+    d.rounded_rectangle((0, 0, 167 * S - 1, 56 * S - 1), 16 * S, fill=CARD)
+    d.rounded_rectangle((52 * S, 51 * S, 115 * S, 54 * S), 1.5 * S, fill=CORAL)  # the open tab's underline
+    save(img, "tab_on", 167, 56)
+    ring_dot("badge_dot", 30, CORAL)
+    img, d = canvas(64, 64)
+    d.rounded_rectangle((0, 0, 64 * S - 1, 64 * S - 1), 16 * S, fill=(52, 55, 63, 255))
+    d.text((32 * S, 33 * S), "#", font=ImageFont.truetype(FONT, 38 * S), fill=(178, 183, 194, 255), anchor="mm")
+    save(img, "hash_icon", 64, 64)
+    OUTLINE = (255, 255, 255, 14)
+    rounded("msg_row", 519, 126, 16, CARD, OUTLINE, 1)
+    rounded("msg_row_me", 519, 126, 16, (58, 40, 40, 255), (255, 122, 89, 70), 1)  # a message that mentions you
+    rounded("men_row", 519, 172, 16, CARD, OUTLINE, 1)
+    rounded("men_focus", 519, 172, 16, None, CORAL, 3)
+    img, d = canvas(150, 48)
+    d.rounded_rectangle((0, 0, 150 * S - 1, 48 * S - 1), 24 * S, fill=CORAL)
+    d.ellipse((12 * S, 12 * S, 36 * S, 36 * S), outline=WHITE, width=2 * S)
+    x_glyph(d, S, 24 * S, 24 * S, 4.5 * S, WHITE)
+    d.text((46 * S, 25 * S), "Open chat", font=ImageFont.truetype(FONT, 20 * S), fill=WHITE, anchor="lm")
+    save(img, "btn_open", 150, 48)
+    text_pill("chip_you", 62, 30, CORAL, "@you", 17)
+    rounded("chat_field", 519, 72, 18, (24, 26, 31, 250), (70, 74, 82, 255), 2)
+    icon("kb_glyph", kb_glyph, 40)
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     # A: the call panel.
@@ -299,6 +342,7 @@ def main():
     glyph("glyph_circle", 37, (255, 92, 110, 255), "circle")
     glyph("glyph_triangle", 37, (110, 210, 160, 255), "triangle")
     keyboard_art()
+    chat_art()
     text_pill("chip_options", 78, 28, None, "OPTIONS", 12, outline=True)
     # C: the glance card, one per number of talking rows (0-3).
     for n in range(4):

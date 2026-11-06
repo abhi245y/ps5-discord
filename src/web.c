@@ -128,6 +128,7 @@ static void api_messages(int c, const char *query)
     }
     if (query_get(query, "guild", guild, sizeof guild) == 0 && is_id(guild))
         gateway_subscribe(guild);
+    overlay_note_channel(channel); // the in-game overlay's Chat tab follows the app
     if (query_get(query, "before", before, sizeof before) == 0 && is_id(before))
         snprintf(path, sizeof path, "/channels/%s/messages?limit=50&before=%s", channel, before);
     else

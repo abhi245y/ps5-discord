@@ -17,6 +17,14 @@
 //    call's text chat. D-pad or stick moves, Cross types, Square erases, Triangle is a space,
 //    L1/R1 move the caret, L2 is Shift (twice: caps lock), R2 sends (send.bin, the core posts
 //    it), Circle closes it and keeps the draft. Three pages (lower/upper, symbols).
+// - the tabs (mockups d-chat, e-mentions): Call, Chat and Mentions on the panel's top; L1/R1 switch
+//   them (not in the settings). Chat is ONE chat the core picks (the call's text chat, the channel
+//   last opened in the app, or a mention's); Triangle types in it, D-pad up/down scrolls. Mentions
+//   lists the recent ones (up/down, Cross opens that chat). Both come from chat.bin:
+//   H<TAB>kind<TAB>channel<TAB>title<TAB>sub<TAB>icon<TAB>unseen<TAB>focus<TAB>rev  (one per feed)
+//   M<TAB>id<TAB>avatar<TAB>name<TAB>time<TAB>mine<TAB>text                       (the chat, oldest first)
+//   N<TAB>id<TAB>channel<TAB>place<TAB>avatar<TAB>name<TAB>age<TAB>text          (mentions, newest first)
+//   kind c a channel, d a DM, - no chat; records end in a newline, at most 16 KB.
 // Art: app/assets/overlay (overlay/tools/overlay_art.py, sizes shared with this file).
 // Avatars: round PNGs the core keeps in the overlay's av/ folder.
 //
@@ -110,6 +118,16 @@ Kind kind_of(int s){
 }
 
 struct Person { char id[24]; char avatar[64]; char name[64]; char flag; };
+// The chat feed (chat.bin).
+constexpr int kMsgMax=20,kMenMax=10;
+struct Msg { char id[24],avatar[64],name[40],time[12],text[140]; bool mine; };
+struct Men { char id[24],chan[24],place[80],avatar[64],name[40],age[8],text[140]; };
+struct Chat {
+    char kind='-',chan[24]="",title[72]="",sub[72]="",icon[64]="",focus[24]="";
+    int unseen=0;
+    Msg msgs[kMsgMax]; int n=0;
+    Men men[kMenMax]; int nmen=0;
+};
 struct State {
     char state='-', me='o';
     bool glance=false;
@@ -125,6 +143,7 @@ struct State {
 };
 
 State st;
+Chat chat;
 // A change the core has not confirmed yet wins over its lines for a moment (fast slider
 // presses otherwise step back to a value from a line already on its way).
 struct Pending { int value=0; std::uint64_t until=0; };
@@ -141,6 +160,16 @@ int tab=0,row=0;  // the settings' open tab and focused row
 bool expanded=false; // the focused row's choices are open
 int option=0;     // the focused choice
 int stick=0;      // the stick's last direction: -1 left, 1 right, 0 at rest
+int page=0;       // the tab: 0 Call, 1 Chat, 2 Mentions
+constexpr int kPages=3,kMsgRows=4;
+constexpr std::int64_t kTabGate=26; // frames: a held L1/R1 repeats (after 350 ms, then every 60): not a new press
+std::int64_t tab_at=-1000;          // the frame of the last L1/R1 press, repeats included
+int scroll=0;     // Chat: how many messages newer than the last row shown
+int men_sel=0,men_top=0; char men_id[24]=""; // Mentions: the selected one (kept by id) and the first row shown
+char last_focus[24]="";
+char pend_chan[24]="",pend_title[72]="",pend_sub[72]=""; // Open chat asked for: the Chat tab waits for it
+std::uint64_t pend_until=0;
+constexpr std::uint64_t kPendFrames=60*4;
 
 // The panel.
 void* dock=nullptr; void* dock_mid=nullptr; void* dock_end=nullptr; void* title=nullptr; void* clock=nullptr; void* timer=nullptr;
@@ -149,6 +178,13 @@ void* row_icon[kRows]={};
 void* tile[kTiles]={}; void* tile_icon[kTiles]={}; void* tile_label[kTiles]={}; void* tile_sub=nullptr;
 void* tile_focus=nullptr; void* rule=nullptr;
 void* hint_icon[4]={}; void* hint_text[4]={};
+// The tabs, and Chat/Mentions: the four rows are shared (never both at once).
+void* tabs_bg=nullptr; void* tab_on=nullptr; void* page_word[kPages]={}; void* tab_badge=nullptr; void* tab_count=nullptr;
+void* head_icon=nullptr; void* head_title=nullptr; void* head_sub=nullptr;
+struct MsgRow { void *bg,*avatar,*name,*time,*text,*chip,*loc; } mrow[kMsgRows]={};
+void* men_focus=nullptr; void* men_open=nullptr; void* in_field=nullptr; void* in_text=nullptr; void* in_kb=nullptr;
+void* empty_text=nullptr;
+int rows_layout=0; bool row_mine[kMsgRows]={}; int strip_page=-1,title_mode=1;
 // The talking card.
 void* card=nullptr; void* pill=nullptr; void* card_head=nullptr; void* card_call=nullptr;
 void* talk_avatar[kTalkRows]={}; void* talk_ring[kTalkRows]={}; void* talk_name[kTalkRows]={};
@@ -234,6 +270,50 @@ bool parse(const char* line,State& s){
     return true;
 }
 
+// Reads a chat feed into c; false (c untouched) when it is not one. Too-long fields are cut,
+// records past the limits and unknown ones are skipped.
+bool parse_chat(const char* feed,Chat& c){
+    if(!feed||std::strncmp(feed,"H\t",2))return false;
+    static Chat next; // 10 KB: off the stack
+    next.n=next.nmen=0;next.kind='-';next.chan[0]=next.title[0]=next.sub[0]=next.icon[0]=next.focus[0]=0;next.unseen=0;
+    bool header=false;
+    const char* p=feed;
+    while(*p){
+        const char* nl=std::strchr(p,'\n');
+        std::size_t len=nl?std::size_t(nl-p):std::strlen(p);
+        char one[700];
+        std::snprintf(one,sizeof one,"%.*s",int(len<sizeof one-1?len:sizeof one-1),p);
+        p+=nl?len+1:len;
+        if(len<2||one[1]!='\t')continue;
+        const char* q=one+2;
+        char f[32];
+        if(one[0]=='H'&&!header){
+            header=true;
+            field(&q,f,sizeof f,'\t');next.kind=f[0]=='c'||f[0]=='d'?f[0]:'-';
+            field(&q,next.chan,sizeof next.chan,'\t');
+            field(&q,next.title,sizeof next.title,'\t');
+            field(&q,next.sub,sizeof next.sub,'\t');
+            field(&q,next.icon,sizeof next.icon,'\t');
+            field(&q,f,sizeof f,'\t');if(std::sscanf(f,"%d",&next.unseen)!=1||next.unseen<0)next.unseen=0;
+            field(&q,next.focus,sizeof next.focus,'\t');
+        }else if(one[0]=='M'&&next.n<kMsgMax){
+            Msg& m=next.msgs[next.n++];
+            field(&q,m.id,sizeof m.id,'\t');field(&q,m.avatar,sizeof m.avatar,'\t');
+            field(&q,m.name,sizeof m.name,'\t');field(&q,m.time,sizeof m.time,'\t');
+            field(&q,f,sizeof f,'\t');m.mine=f[0]=='1';
+            field(&q,m.text,sizeof m.text,'\t');
+        }else if(one[0]=='N'&&next.nmen<kMenMax){
+            Men& m=next.men[next.nmen++];
+            field(&q,m.id,sizeof m.id,'\t');field(&q,m.chan,sizeof m.chan,'\t');
+            field(&q,m.place,sizeof m.place,'\t');field(&q,m.avatar,sizeof m.avatar,'\t');
+            field(&q,m.name,sizeof m.name,'\t');field(&q,m.age,sizeof m.age,'\t');
+            field(&q,m.text,sizeof m.text,'\t');
+        }
+    }
+    c=next;
+    return true;
+}
+
 namespace {
 
 // The panel is three slices (rounded top, a middle that stretches, rounded bottom), so it
@@ -253,9 +333,13 @@ void place(Builder& b,float tiles_top,float content_end){
         b.set_rect(tile_focus,{kRowX+kTileStep*focus-6,tiles_top-6,134,152});}
     b.set_rect(rule,{kRowX,ry,kRowW,2});
     // A label's text sits high in its box: 5 px lower lines it up with the 37 px glyphs.
-    const Rect glyph_at[4]={{1347,hy+1,37,37},{1472,hy+1,37,37},{1696,hy+5,78,28},{1587,hy+1,37,37}};
-    const Rect word_at[4]={{1392,hy+5,76,40},{1517,hy+5,66,40},{1782,hy+5,86,40},{1632,hy+5,60,40}};
-    for(int i=0;i<4;i++){b.set_rect(hint_icon[i],glyph_at[i]);b.set_rect(hint_text[i],word_at[i]);}
+    const Rect call_g[4]={{1347,hy+1,37,37},{1472,hy+1,37,37},{1696,hy+5,78,28},{1587,hy+1,37,37}};
+    const Rect call_w[4]={{1392,hy+5,76,40},{1517,hy+5,66,40},{1782,hy+5,86,40},{1632,hy+5,60,40}};
+    // Chat and Mentions (d-chat, e-mentions): the action, the tabs, then Close at the right.
+    const Rect list_g[4]={{1347,hy+1,37,37},{1722,hy+1,37,37},{1528,hy+5,82,28},{0,0,1,1}};
+    const Rect list_w[4]={{1392,hy+5,90,40},{1767,hy+5,100,40},{1618,hy+5,70,40},{0,0,1,1}};
+    const bool lists=!settings&&page>0;
+    for(int i=0;i<4;i++){b.set_rect(hint_icon[i],lists?list_g[i]:call_g[i]);b.set_rect(hint_text[i],lists?list_w[i]:call_w[i]);}
 }
 
 void set_avatar(Builder& b,void* w,const Person& who){
@@ -412,6 +496,7 @@ int kb_blink=0;           // frames since the last key: the caret blinks once it
 int kb_hold=0;            // frames the stick has stayed in one direction (it repeats)
 char kb_shown[kKbMax*4+16]=""; int kb_style=-1; // what the field's label has now (skip unchanged)
 bool kb=false;
+char kb_channel[24]=""; // where the text goes: "" the call's chat, else Chat's channel (set when it opens)
 char kb_text[kKbMax*4+1]="";
 int kb_len=0,kb_chars=0,kb_caret=0; // bytes, characters, the caret's byte offset
 int kb_shift=0;  // 0 off, 1 the next letter, 2 caps lock
@@ -490,6 +575,7 @@ void render_kb(Builder& b){
     static char text[kKbMax*4+16]; // off the stack
     int caret_at=0;
     if(kb_len)field_text(text,sizeof text,&caret_at);
+    else if(kb_channel[0])std::snprintf(text,sizeof text,"Message %s",chat.title);
     else if(st.call[0])std::snprintf(text,sizeof text,"Message #%s",st.call);
     else std::snprintf(text,sizeof text,"Message");
     if(kb_style!=(kb_len?1:0)){kb_style=kb_len?1:0;b.set_text_style(kb_input,kKbTextSize,3,kb_len?kWhite:kDim,0);}
@@ -504,6 +590,159 @@ void render_kb(Builder& b){
     b.set_rect(kb_bar,{kKbTextX+x,kKbFieldY+16,3,40});
     art(b,kb_pages,kb_page?"kb_symbols":kb_shift==2?"kb_caps":kb_shift?"kb_upper":"kb_lower");
     place_hl(b);
+}
+
+// The tabs, Chat and Mentions. The panel's top: the tab strip; under it Chat's header and four
+// messages and the input row, or Mentions' four rows (the same row widgets).
+constexpr float kStripY=46,kSegW=173,kStripH=64;
+constexpr float kHeadY=124,kChatY=208,kChatH=126,kChatStep=136,kInputY=kChatY+kChatStep*kMsgRows+2,kInputH=72;
+constexpr float kMenY=124,kMenH=172,kMenStep=182;
+const char* const kPageNames[kPages]={"Call","Chat","Mentions"};
+
+// "Night Shift \xc2\xb7 #raid-night" splits into the server and the channel; a DM has no
+// separator.
+void split_place(const char* place,char* server,std::size_t scap,char* chan,std::size_t ccap){
+    const char* dot=std::strstr(place," \xc2\xb7 ");
+    if(!dot){server[0]=chan[0]=0;return;}
+    std::snprintf(server,scap,"%.*s",int(dot-place),place);
+    std::snprintf(chan,ccap,"%s",dot+4);
+}
+
+bool loading(){return pend_chan[0]&&std::strcmp(chat.chan,pend_chan)!=0&&frame_now<pend_until;}
+bool chat_ready(){return chat.kind!='-'&&!loading();}
+int max_scroll(){return chat.n>kMsgRows?chat.n-kMsgRows:0;}
+int men_shown(){return chat.nmen<kMsgRows?chat.nmen:kMsgRows;}
+
+void set_key_avatar(Builder& b,void* w,const char* key){
+    char p[160];
+    if(key[0])path(p,sizeof p,kAvatars,key);
+    else path(p,sizeof p,kArt,"avatar_none"); // until the core has fetched it
+    b.set_image(w,p);
+}
+
+void render_tabs(Builder& b,bool on){
+    show(b,tabs_bg,on);show(b,tab_on,on);
+    for(void* w:page_word)show(b,w,on);
+    const bool badge=on&&chat.unseen>0&&page!=2;
+    show(b,tab_badge,badge);show(b,tab_count,badge);
+    if(!on)return;
+    b.set_rect(tabs_bg,{kRowX,kStripY,kRowW,kStripH});
+    b.set_rect(tab_on,{kRowX+3+kSegW*page,kStripY+4,167,56});
+    for(int i=0;i<kPages;i++)
+        b.set_rect(page_word[i],{kRowX+kSegW*i-(i==2&&badge?22:0),kStripY+14,kSegW,36});
+    if(strip_page!=page){
+        strip_page=page;
+        for(int i=0;i<kPages;i++)b.set_text_style(page_word[i],24,3,i==page?kWhite:kDim,1);}
+    if(badge){
+        const Rect r{kRowX+474,kStripY+17,30,30};
+        char n[8];std::snprintf(n,sizeof n,chat.unseen>9?"9+":"%d",chat.unseen);
+        b.set_rect(tab_badge,r);b.set_rect(tab_count,r);b.set_text(tab_count,n);}
+}
+
+void layout_rows(Builder& b,int layout){
+    if(rows_layout==layout)return;
+    rows_layout=layout;
+    for(int i=0;i<kMsgRows;i++){
+        MsgRow& r=mrow[i];row_mine[i]=false;
+        if(layout==1){
+            const float y=kChatY+kChatStep*i;
+            b.set_rect(r.bg,{kRowX,y,kRowW,kChatH});
+            b.set_rect(r.avatar,{kRowX+16,y+23,80,80});
+            b.set_rect(r.name,{kRowX+112,y+14,240,40});
+            b.set_rect(r.time,{kRowX+kRowW-20-130,y+14,130,40});
+            b.set_rect(r.text,{kRowX+112,y+66,kRowW-112-20,44});
+            b.set_rect(r.chip,{kRowX+112,y+73,62,30});
+        }else{
+            const float y=kMenY+kMenStep*i;
+            b.set_rect(r.bg,{kRowX,y,kRowW,kMenH});
+            b.set_rect(r.loc,{kRowX+24,y+14,kRowW-24-110-20,30});
+            b.set_rect(r.time,{kRowX+kRowW-20-90,y+14,90,30});
+            b.set_rect(r.avatar,{kRowX+24,y+58,56,56});
+            b.set_rect(r.name,{kRowX+96,y+58,250,56});
+            b.set_rect(r.text,{kRowX+24,y+122,kRowW-48,38});
+        }}
+}
+
+// The rows' texts and pictures for the open tab; returns where the panel's content ends (0: neither tab).
+float render_pages(Builder& b){
+    const bool shown=open&&!settings;
+    render_tabs(b,shown);
+    const bool chat_on=shown&&page==1,men_on=shown&&page==2,wait=chat_on&&loading();
+    const bool rows_chat=chat_on&&!wait&&chat.kind!='-'&&chat.n>0;
+    const bool rows_men=men_on&&chat.nmen>0;
+    float end=0;
+    // Chat's header and input row.
+    show(b,head_icon,chat_on);show(b,head_title,chat_on);show(b,head_sub,chat_on);
+    const bool input=chat_on&&chat_ready();
+    show(b,in_field,input);show(b,in_text,input);show(b,in_kb,input);
+    if(chat_on){
+        if(wait){ // the mention's own place until the chat arrives
+            b.set_text(head_title,pend_title);b.set_text(head_sub,pend_sub);
+            art(b,head_icon,"hash_icon");
+        }else if(chat.kind=='-'){
+            b.set_text(head_title,"No chat");b.set_text(head_sub,"Open one in Discord");
+            art(b,head_icon,"hash_icon");
+        }else{
+            b.set_text(head_title,chat.title);b.set_text(head_sub,chat.sub);
+            if(chat.kind=='d'&&chat.icon[0])set_key_avatar(b,head_icon,chat.icon);
+            else art(b,head_icon,"hash_icon");
+        }
+        b.set_rect(head_icon,{kRowX+6,kHeadY,64,64});
+        b.set_rect(head_title,{kRowX+88,kHeadY-2,kRowW-88,38});
+        b.set_rect(head_sub,{kRowX+88,kHeadY+36,kRowW-88,28});
+        b.set_rect(in_field,{kRowX,kInputY,kRowW,kInputH});
+        b.set_rect(in_text,{kRowX+24,kInputY+12,kRowW-24-76,48});
+        b.set_rect(in_kb,{kRowX+kRowW-24-40,kInputY+21,40,30});
+        char hint[100];std::snprintf(hint,sizeof hint,"Message %s",chat.title);
+        b.set_text(in_text,hint);
+        end=chat.kind=='-'&&!wait?kHeadY+64+40:kInputY+kInputH;
+    }
+    // The shared rows.
+    int shown_rows=0;
+    if(rows_chat||rows_men)layout_rows(b,rows_chat?1:2);
+    if(rows_chat){
+        const int first=chat.n-kMsgRows-scroll>0?chat.n-kMsgRows-scroll:0;
+        shown_rows=chat.n-first<kMsgRows?chat.n-first:kMsgRows;
+        for(int i=0;i<shown_rows;i++){
+            const Msg& m=chat.msgs[first+i];MsgRow& r=mrow[i];
+            art(b,r.bg,m.mine?"msg_row_me":"msg_row");
+            set_key_avatar(b,r.avatar,m.avatar);
+            b.set_text(r.name,m.name);b.set_text(r.time,m.time);b.set_text(r.text,m.text);
+            if(row_mine[i]!=m.mine){row_mine[i]=m.mine;
+                b.set_rect(r.text,{kRowX+112+(m.mine?72:0),kChatY+kChatStep*i+66,kRowW-112-20-(m.mine?72:0),44});}
+        }
+    }else if(rows_men){
+        if(men_sel>=chat.nmen)men_sel=chat.nmen-1;
+        if(men_sel<men_top)men_top=men_sel;
+        if(men_sel>=men_top+kMsgRows)men_top=men_sel-kMsgRows+1;
+        shown_rows=men_shown();
+        for(int i=0;i<shown_rows;i++){
+            const Men& m=chat.men[men_top+i];MsgRow& r=mrow[i];
+            art(b,r.bg,"men_row");
+            set_key_avatar(b,r.avatar,m.avatar);
+            b.set_text(r.loc,m.place);b.set_text(r.time,m.age);b.set_text(r.name,m.name);b.set_text(r.text,m.text);
+        }
+        const int at=men_sel-men_top;
+        b.set_rect(men_focus,{kRowX,kMenY+kMenStep*at,kRowW,kMenH});
+        b.set_rect(men_open,{kRowX+kRowW-20-150,kMenY+kMenStep*at+62,150,48});
+        end=kMenY+kMenStep*(shown_rows-1)+kMenH;
+    }
+    for(int i=0;i<kMsgRows;i++){
+        MsgRow& r=mrow[i];
+        const bool on=i<shown_rows&&(rows_chat||rows_men);
+        show(b,r.bg,on);show(b,r.avatar,on);show(b,r.name,on);show(b,r.time,on);show(b,r.text,on);
+        show(b,r.chip,on&&rows_chat&&row_mine[i]);show(b,r.loc,on&&rows_men);
+    }
+    show(b,men_focus,rows_men);show(b,men_open,rows_men);
+    // The empty states.
+    const char* none=wait?"Loading\xe2\x80\xa6":(chat_on&&chat.kind!='-'&&!chat.n)?"No messages yet":(men_on&&!chat.nmen)?"No mentions":nullptr;
+    show(b,empty_text,none!=nullptr);
+    if(none){
+        b.set_text(empty_text,none);
+        const float y=chat_on?kChatY+kChatStep*1:kMenY+20;
+        b.set_rect(empty_text,{kRowX,y,kRowW,44});}
+    if(men_on&&!chat.nmen)end=kMenY+110;
+    return end;
 }
 
 void render(Builder& b){
@@ -555,8 +794,12 @@ void render(Builder& b){
     show(b,you_ring,card_on);show(b,you_mic,card_on);show(b,you_text,card_on);
     show(b,card_rule,card_on);show(b,card_hint,card_on);
 
-    // A: the panel (call page, or the mini settings).
-    const bool call_page=open&&!settings;
+    // A: the panel (call page, Chat, Mentions, or the mini settings).
+    const bool call_page=open&&!settings&&page==0;
+    if(title_mode!=(settings?0:1)){ // the call page's title shares its line with the timer, under the tabs
+        title_mode=settings?0:1;
+        b.set_rect(title,settings?Rect{kDockX+37,kDockY+40,kDockW-74,54}:Rect{kDockX+37,118,kDockW-74-170,44});
+        b.set_text_style(title,settings?40:32,1,kWhite);}
     b.set_text(title,settings?"Settings":in_call?st.call:"Not in a call");
     b.set_text(timer,st.timer);
     for(int i=0;i<kRows;i++){
@@ -581,24 +824,31 @@ void render(Builder& b){
     b.set_text(tile_sub,st.live[0]?st.live:st.quality);
     const int n=in_call?(st.count<kRows?st.count:kRows):0;
     const float tiles_top=kRowY+kRowStep*n+(n?10:0);
+    const float pages_end=render_pages(b);
     if(settings)place(b,0,settings_end());
+    else if(page>0)place(b,0,pages_end);
     else if(in_call)place(b,tiles_top,tiles_top+kTileH);
-    else place(b,0,kDockY+100);
+    else place(b,0,kDockY+130);
     const bool tiles_on=call_page&&in_call;
     for(int i=0;i<kTiles;i++){show(b,tile[i],tiles_on);show(b,tile_icon[i],tiles_on);show(b,tile_label[i],tiles_on);}
     show(b,tile_sub,tiles_on);show(b,tile_focus,tiles_on);
-    show(b,dock,open);show(b,dock_mid,open);show(b,dock_end,open);show(b,title,open);show(b,clock,call_page&&in_call&&st.timer[0]);show(b,timer,call_page&&in_call);
+    show(b,dock,open);show(b,dock_mid,open);show(b,dock_end,open);show(b,title,open&&(settings||page==0));show(b,clock,call_page&&in_call&&st.timer[0]);show(b,timer,call_page&&in_call);
     show(b,rule,open);
 
     render_settings(b);
 
-    // Hints: Cross, Circle and Options (L1/R1 on the settings); their words follow the page.
-    b.set_text(hint_text[0],"Select");
+    // Hints: Cross, Circle and Options (Chat and Mentions: the action, L1/R1, Close); their words follow the page.
+    const bool lists=!settings&&page>0;
+    b.set_text(hint_text[0],page==2?"Open":page==1?"Type":"Select");
+    art(b,hint_icon[0],page==1?"glyph_triangle":"glyph_cross");
     b.set_text(hint_text[1],settings&&!expanded?"Back":"Close");
-    b.set_text(hint_text[2],"Settings");
+    b.set_text(hint_text[2],lists?"Tabs":"Settings");
+    art(b,hint_icon[2],lists?"chip_l1r1":"chip_options");
     b.set_text(hint_text[3],"Chat");
+    const bool act=settings||page==0||(page==1?chat_ready():chat.nmen>0);
+    const bool hints[4]={act,true,!settings,call_page&&in_call};
     for(int i=0;i<4;i++){
-        const bool on=open&&(i<2||(!settings&&(i==2||in_call)));
+        const bool on=open&&hints[i];
         show(b,hint_icon[i],on);show(b,hint_text[i],on);}
     render_kb(b);
 }
@@ -606,7 +856,14 @@ void render(Builder& b){
 }  // namespace
 
 void reset(){
-    st=State{};open=false;focus=0;stick=0;settings=false;tab=row=option=0;expanded=false;frame_now=0;alive_at=0;seen[0]=0;
+    st=State{};chat.n=chat.nmen=chat.unseen=0;chat.kind='-';chat.chan[0]=chat.title[0]=chat.sub[0]=chat.icon[0]=chat.focus[0]=0;
+    page=scroll=men_sel=men_top=0;men_id[0]=last_focus[0]=pend_chan[0]=0;pend_until=0;tab_at=-1000;
+    tabs_bg=tab_on=tab_badge=tab_count=head_icon=head_title=head_sub=men_focus=men_open=in_field=in_text=in_kb=empty_text=nullptr;
+    for(void*& w:page_word)w=nullptr;
+    for(MsgRow& r:mrow)r=MsgRow{};
+    rows_layout=0;strip_page=-1;title_mode=1;for(bool& m:row_mine)m=false;
+    kb_channel[0]=0;
+    open=false;focus=0;stick=0;settings=false;tab=row=option=0;expanded=false;frame_now=0;alive_at=0;seen[0]=0;
     for(Pending& p:pending)p=Pending{};
     chip_l1=chip_r1=set_focus=drop_bg=drop_on=drop_check=nullptr;
     for(int i=0;i<kTabCount;i++)tab_pill[i]=tab_word[i]=nullptr;
@@ -629,10 +886,10 @@ bool build(Builder& b){
     dock=image(b,{kDockX,kDockY,kDockW,40},"dock_top");
     dock_mid=image(b,{kDockX,kDockY+40,kDockW,kDockH-80},"dock_mid");
     dock_end=image(b,{kDockX,kDockY+kDockH-40,kDockW,40},"dock_bottom");
-    title=label(b,{kDockX+37,kDockY+40,kDockW-74,54},40,1,kWhite);
-    clock=image(b,{kDockX+38,kDockY+94,26,26},"clock");
+    title=label(b,{kDockX+37,118,kDockW-74-170,44},32,1,kWhite); // the call page's: under the tabs, with the timer at its right
+    clock=image(b,{kDockX+kDockW-37-34-110,124,26,26},"clock");
     if(clock)b.set_tint(clock,kDim);
-    timer=label(b,{kDockX+74,kDockY+88,200,36},25,3,kDim);
+    timer=label(b,{kDockX+kDockW-37-110,119,110,36},25,3,kDim);
     for(int i=0;i<kRows;i++){
         const float y=kRowY+kRowStep*i;
         row_bg[i]=image(b,{kRowX,y,kRowW,kRowH},"row");
@@ -703,6 +960,31 @@ bool build(Builder& b){
     card_rule=image(b,{kCardX+20,kCardY+267,275,2},"glance_line");
     card_hint=label(b,{kCardX+20,kCardY+279,275,32},17,0,kDim,0,"Hold Options for controls");
 
+    // The tabs, Chat and Mentions (placed in render_pages).
+    tabs_bg=image(b,{kRowX,kStripY,kRowW,kStripH},"tabs_bg");
+    tab_on=image(b,at,"tab_on");
+    for(int i=0;i<kPages;i++)page_word[i]=label(b,at,24,3,kDim,1,kPageNames[i]);
+    tab_badge=image(b,at,"badge_dot");
+    tab_count=label(b,at,18,1,kWhite,1);
+    head_icon=image(b,at,"hash_icon");
+    head_title=label(b,at,32,1,kWhite);
+    head_sub=label(b,at,20,0,kDim);
+    for(MsgRow& r:mrow){
+        r.bg=image(b,at,"msg_row");
+        r.avatar=b.add_image(at,"");
+        r.name=label(b,at,25,3,kWhite);
+        r.time=label(b,at,19,0,kDim,2);
+        r.text=label(b,at,24,0,kText);
+        r.chip=image(b,at,"chip_you");
+        r.loc=label(b,at,19,0,kDim);}
+    men_focus=image(b,at,"men_focus");
+    men_open=image(b,at,"btn_open");
+    in_field=image(b,at,"chat_field");
+    in_text=label(b,at,24,0,kDim);
+    in_kb=image(b,at,"kb_glyph");
+    if(in_kb)b.set_tint(in_kb,kDim);
+    empty_text=label(b,at,26,3,kDim,1);
+
     // The keyboard, on top of everything (placed in render_kb).
     kb_field=image(b,{kKbX,kKbFieldY,kKbW,kKbFieldH},"kb_field");
     kb_input=label(b,{kKbX+28,kKbFieldY+14,kKbW-56,46},30,3,kWhite);
@@ -716,7 +998,9 @@ bool build(Builder& b){
     for(void* w:row_name)if(!w)return false;
     for(void* w:tile_label)if(!w)return false;
     for(void* w:talk_name)if(!w)return false;
-    if(!kb_input)return false;
+    if(!kb_input||!head_title||!in_text||!empty_text||!tab_count)return false;
+    for(const MsgRow& r:mrow)if(!r.name||!r.time||!r.text||!r.loc)return false;
+    for(void* w:page_word)if(!w)return false;
     render(b);
     return true;
 }
@@ -756,7 +1040,7 @@ void kb_shift_key(){if(!kb_page)kb_shift=kb_shift==0?1:kb_shift==1?2:0;} // twic
 
 void kb_send(Builder& b){
     if(!kb_len)return;
-    b.send_text(kb_text);
+    b.send_text(kb_text,kb_channel);
     kb_text[0]=0;kb_len=kb_chars=kb_caret=0;kb_shift=0;kb_page=0;
     kb=false;
 }
@@ -850,9 +1134,50 @@ void settings_pad(std::uint32_t down,Builder& b){
 void on_gesture(Gesture,Builder& b){
     if(!open&&st.state=='x')return; // the core is gone: nothing to show or do
     open=!open;
-    focus=0;stick=0;settings=false;expanded=false;kb=false; // the draft stays
+    focus=0;stick=0;settings=false;expanded=false;kb=false;page=0; // the draft stays
     b.set_capture(open);
     render(b);
+}
+
+// Switches the tab. Mentions seen: the badge goes and the core is told.
+void set_page(int to,Builder& b){
+    page=to;
+    if(page==2&&chat.unseen>0){chat.unseen=0;b.send("seen");}
+    render(b);
+}
+
+void open_kb(const char* channel,Builder& b){
+    kb=true;std::snprintf(kb_channel,sizeof kb_channel,"%s",channel);
+    kb_x=key_center(kb_row,kb_col);render(b);
+}
+
+// Chat: up/down scroll through the fetched messages; Triangle types in this chat.
+void chat_pad(std::uint32_t down,Builder& b){
+    const int move=((down&kDown)?-1:0)+((down&kUp)?1:0); // up: older
+    if(move){
+        const int to=scroll+move<0?0:scroll+move>max_scroll()?max_scroll():scroll+move;
+        if(to!=scroll){scroll=to;render(b);}}
+    if((down&kTriangle)&&chat_ready())open_kb(chat.chan,b);
+}
+
+// Mentions: up/down select; Cross opens that chat (the core fetches it; the Chat tab waits for it).
+void men_pad(std::uint32_t down,Builder& b){
+    const int move=((down&kDown)?1:0)-((down&kUp)?1:0);
+    if(move&&chat.nmen){
+        const int to=men_sel+move<0?0:men_sel+move>=chat.nmen?chat.nmen-1:men_sel+move;
+        if(to!=men_sel){men_sel=to;std::snprintf(men_id,sizeof men_id,"%s",chat.men[to].id);render(b);}}
+    if((down&kCross)&&chat.nmen&&men_sel<chat.nmen){
+        const Men& m=chat.men[men_sel];
+        char command[64];
+        if(std::snprintf(command,sizeof command,"chat %s %s",m.chan,m.id)>=48)return; // cmd.bin holds 47
+        b.send(command);
+        std::snprintf(pend_chan,sizeof pend_chan,"%s",m.chan);
+        char server[72],chan[72];split_place(m.place,server,sizeof server,chan,sizeof chan);
+        std::snprintf(pend_title,sizeof pend_title,"%s",chan[0]?chan:m.name);
+        std::snprintf(pend_sub,sizeof pend_sub,"%s",server[0]?server:"Direct message");
+        pend_until=frame_now+kPendFrames;
+        scroll=0;last_focus[0]=0;
+        set_page(1,b);}
 }
 
 void on_pad(std::uint32_t down,float lx,float ly,Builder& b){
@@ -861,12 +1186,19 @@ void on_pad(std::uint32_t down,float lx,float ly,Builder& b){
     if(down&kOptionsButton){settings=!settings;tab=row=0;expanded=false;render(b);return;}
     if(settings){settings_pad(down,b);return;}
     if(down&kCircle){on_gesture(Gesture::Chord,b);return;}
+    if(down&(kL1|kR1)){ // a held button repeats: only the first press counts (any press within the gate extends it)
+        const bool repeat=std::int64_t(frame_now)-tab_at<kTabGate;
+        tab_at=std::int64_t(frame_now);
+        const int by=((down&kR1)?1:0)-((down&kL1)?1:0);
+        if(by&&!repeat){set_page((page+by+kPages)%kPages,b);return;}}
+    if(page==1){chat_pad(down,b);return;}
+    if(page==2){men_pad(down,b);return;}
     const int dir=lx<-kStickMove?-1:lx>kStickMove?1:0;
     const int step=(dir&&dir!=stick?dir:0)+((down&(kRight|kDown))?1:0)-((down&(kLeft|kUp))?1:0);
     if(dir||(lx>-kStickRest&&lx<kStickRest))stick=dir;
     if(step){focus=((focus+step)%kTiles+kTiles)%kTiles;render(b);}
     if((down&kCross)&&(st.state=='c'||st.state=='j'))b.send(kCommands[focus]);
-    if((down&kTriangle)&&(st.state=='c'||st.state=='j')){kb=true;kb_x=key_center(kb_row,kb_col);render(b);}
+    if((down&kTriangle)&&(st.state=='c'||st.state=='j'))open_kb("",b);
 }
 
 // The core is gone (state x): close an open panel so the game gets its pad back.
@@ -896,12 +1228,37 @@ void on_text(const char* line,Builder& b){
     if(row>=rows_in(kTabs[tab])){row=rows_in(kTabs[tab])-1;expanded=false;} // AirPods left: Call mode went
     if(st.set[5]!=hold)b.set_hold((st.set[5]+3)*100);
     if(st.state=='x')go_inert(b);
-    if(st.state!='c'&&st.state!='j')kb=false; // the draft stays
+    if(st.state!='c'&&st.state!='j'&&!kb_channel[0])kb=false; // the draft stays
+    render(b);
+}
+
+// A new chat feed: the chat's messages and the mentions. The view stays on what it showed.
+void on_chat(const char* feed,Builder& b){
+    char anchor[24]="",sel[24]="";
+    if(scroll>0&&chat.n>scroll)std::snprintf(anchor,sizeof anchor,"%s",chat.msgs[chat.n-1-scroll].id);
+    std::snprintf(sel,sizeof sel,"%s",men_id);
+    char was_chan[24];std::snprintf(was_chan,sizeof was_chan,"%s",chat.chan);
+    if(!parse_chat(feed,chat))return;
+    if(std::strcmp(was_chan,chat.chan))scroll=0;
+    else if(anchor[0]){
+        scroll=0;
+        for(int i=0;i<chat.n;i++)if(!std::strcmp(chat.msgs[i].id,anchor)){scroll=chat.n-1-i;break;}}
+    if(chat.focus[0]&&std::strcmp(chat.focus,last_focus)){ // Open chat: the mentioned message shows, with what follows it
+        for(int i=0;i<chat.n;i++)if(!std::strcmp(chat.msgs[i].id,chat.focus)){
+            scroll=chat.n-1-(i+1<chat.n?i+1:i);break;}}
+    std::snprintf(last_focus,sizeof last_focus,"%s",chat.focus);
+    if(scroll>max_scroll())scroll=max_scroll();
+    if(pend_chan[0]&&!std::strcmp(chat.chan,pend_chan))pend_chan[0]=0; // it arrived
+    men_sel=0;
+    for(int i=0;i<chat.nmen;i++)if(!std::strcmp(chat.men[i].id,sel)){men_sel=i;break;}
+    if(chat.nmen)std::snprintf(men_id,sizeof men_id,"%s",chat.men[men_sel].id);else men_id[0]=0;
+    if(open&&page==2&&chat.unseen>0){chat.unseen=0;b.send("seen");} // read as they come in
     render(b);
 }
 
 void on_tick(std::uint64_t frame,Builder& b){
     frame_now=frame;
+    if(pend_chan[0]&&frame_now>=pend_until){pend_chan[0]=0;if(open)render(b);} // the chat never came: what the core shows
     if(kb&&open&&kb_bar){ // the caret blinks (0.5 s on, 0.5 s off) while no key is pressed
         if(++kb_blink>=30&&kb_blink%30==0)show(b,kb_bar,(kb_blink/30)%2==0);}
     if(st.state!='x'&&frame_now-alive_at>kStaleFrames){ // no beat: as if the core quit

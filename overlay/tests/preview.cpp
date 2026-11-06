@@ -39,7 +39,7 @@ bool set_style(void*,void* w,float size,int weight,const oui::Color* c,int align
 bool set_rect(void*,void* w,const oui::Rect* r){static_cast<Widget*>(w)->r=*r;return true;}
 bool set_capture(void*,bool){return true;}
 bool send(void*,const char*){return true;}
-bool send_text(void*,const char*){return true;}
+bool send_text(void*,const char*,const char*){return true;}
 bool set_hold(void*,int){return true;}
 float sw(void*){return 1920;}
 float sh(void*){return 1080;}
@@ -105,6 +105,39 @@ int main(int argc,char** argv){
     for(int i=0;i<150;i++){const char* w="wide words Mmm and narrow illi ";char one[2]={w[i%31],0};kb_type(one);}
     for(int i=0;i<60;i++)kb_move_caret(-1);
     render_kb(b);dump(dir,"kb-long");
+    // The tabs, Chat and Mentions.
+    const char* mentions="N\t901\t555\tNight Shift \xc2\xb7 #raid-night\t14_ef\tKenji\t2m\tyou coming?\n"
+        "N\t902\t556\tDirect message\t\tTheo\t14m\tcan you stream it later?\n"
+        "N\t903\t557\tSpeedrun Lab \xc2\xb7 #routes\t11_ab\tSam\t1h\tcheck this skip, it saves a whole lot of time on the second floor\n"
+        "N\t904\t558\tCo-op Club \xc2\xb7 #general\t\tNova\t3h\tgg last night\n"
+        "N\t905\t559\tCo-op Club \xc2\xb7 #general\t\tMiro\t5h\tolder one\n";
+    const char* convo="M\t1\t11_ab\tMira\t6:14 PM\t0\tboss at 9, bring fire res\n"
+        "M\t2\t\tTheo\t6:15 PM\t0\twho has the key?\n"
+        "M\t3\t13_cd\tAna\t6:16 PM\t0\tme, omw\n"
+        "M\t4\t14_ef\tKenji\t6:17 PM\t1\tyou coming?\n";
+    auto chat_feed=[&](const char* head,const char* body){
+        static char text[8000];std::snprintf(text,sizeof text,"%s%s",head,body);on_chat(text,b);};
+    feed(four);if(open)on_gesture(oui::Gesture::Chord,b);
+    chat_feed("H\tc\t555\t#raid-night\tNight Shift\t\t2\t\n",convo);
+    on_gesture(oui::Gesture::Chord,b);dump(dir,"call-four-badge");
+    on_tick(100,b);on_pad(0x800,0,0,b);dump(dir,"chat-mention");
+    on_pad(0x20,0,0,b);dump(dir,"chat-kb");on_pad(0x40,0,0,b);
+    chat_feed("H\td\t777\tTheo\tDirect message\t14_ef\t2\t\n","M\t1\t\tTheo\t6:15 PM\t0\tlong message with plenty of words that goes on and on past the end of the line\n");
+    dump(dir,"chat-dm");
+    chat_feed("H\tc\t555\t#raid-night\tNight Shift\t\t2\t\n","");dump(dir,"chat-empty");
+    chat_feed("H\t-\t\t\t\t\t0\t\n","");dump(dir,"chat-none");
+    {static char many[4000];many[0]=0;
+     for(int i=1;i<=9;i++){char one[200];std::snprintf(one,sizeof one,"M\t%d\t1%d_ab\tPerson %d\t6:%02d PM\t%d\tmessage number %d\n",i,i,i,10+i,i==3,i);std::strcat(many,one);}
+     chat_feed("H\tc\t555\t#raid-night\tNight Shift\t\t0\t\n",many);}
+    on_pad(0x2,0,0,b);on_pad(0x2,0,0,b);dump(dir,"chat-scrolled");
+    chat_feed("H\tc\t555\t#raid-night\tNight Shift\t\t0\t\n","");
+    chat_feed("H\tc\t555\t#raid-night\tNight Shift\t\t3\t\n",mentions);
+    on_tick(200,b);on_pad(0x400,0,0,b);on_tick(300,b);on_pad(0x400,0,0,b);dump(dir,"mentions");
+    on_pad(0x8,0,0,b);dump(dir,"mentions-second");
+    on_pad(0x8,0,0,b);on_pad(0x8,0,0,b);on_pad(0x8,0,0,b);dump(dir,"mentions-scrolled");
+    chat_feed("H\tc\t555\t#raid-night\tNight Shift\t\t0\t\n","");dump(dir,"mentions-empty");
+    chat_feed("H\tc\t555\t#raid-night\tNight Shift\t\t0\t\n",mentions);
+    on_pad(0x80,0,0,b);dump(dir,"chat-loading");
     std::printf("preview: %d widgets\n",used);
     return 0;
 }
