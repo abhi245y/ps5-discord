@@ -58,6 +58,8 @@ public:
     // Hands a typed message (UTF-8, up to 2000 characters) to the console side (send.bin); the
     // core posts it to the call's text chat.
     bool send_text(const char* utf8){return vt&&vt->send_text_fn&&vt->send_text_fn(ctx,utf8);}
+    // A label's laid-out text width in px; -1 when the engine cannot measure it.
+    float text_width(void* label){return vt&&vt->text_width_fn?vt->text_width_fn(ctx,label):-1.f;}
     float screen_width() const{return vt&&vt->screen_w_fn?vt->screen_w_fn(ctx):1920.f;}
     float screen_height() const{return vt&&vt->screen_h_fn?vt->screen_h_fn(ctx):1080.f;}
 
@@ -79,6 +81,7 @@ public:
         bool(*set_rect_fn)(void*,void*,const Rect*);
         bool(*set_hold_fn)(void*,int);
         bool(*send_text_fn)(void*,const char*);
+        float(*text_width_fn)(void*,void*);
     };
     const Vt* vt=nullptr;
     void* ctx=nullptr;

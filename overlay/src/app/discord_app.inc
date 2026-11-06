@@ -406,6 +406,11 @@ constexpr const char* kSymbols[3][kKbCols]={
     {"-","/",":",";","<","=",">","[","]","\\","^"},
     {"_","`","{","|","}","~",",",".","?","\xe2\x82\xac","\xc2\xa3"}};
 void* kb_field=nullptr; void* kb_input=nullptr; void* kb_pages=nullptr; void* kb_hl=nullptr;
+void* kb_measure=nullptr; // an inkless copy of the text before the caret: its width places the caret
+void* kb_bar=nullptr;     // the caret: a thin coral bar over the text (a "|" in it moved the letters)
+int kb_blink=0;           // frames since the last key: the caret blinks once it rests
+int kb_hold=0;            // frames the stick has stayed in one direction (it repeats)
+char kb_shown[kKbMax*4+16]=""; int kb_style=-1; // what the field's label has now (skip unchanged)
 bool kb=false;
 char kb_text[kKbMax*4+1]="";
 int kb_len=0,kb_chars=0,kb_caret=0; // bytes, characters, the caret's byte offset
@@ -435,6 +440,7 @@ const char* key_text(int row,int col,char* one){
     return one;
 }
 
+constexpr float kKbTextX=kKbX+28,kKbTextSize=30;
 // The text as the field shows it: the part around the caret (an estimate of the text's width
 // stands in for measuring; PUI cuts what is too long at its end, which would hide the caret).
 float char_em(unsigned cp){
@@ -452,7 +458,7 @@ unsigned cp_at(const char* s,int at,int* len){
     *len=n;return cp;
 }
 int cp_before(const char* s,int at){int p=at-1;while(p>0&&(static_cast<unsigned char>(s[p])&0xc0)==0x80)p--;return p;}
-void field_text(char* out,std::size_t cap){
+void field_text(char* out,std::size_t cap,int* caret_at){
     constexpr float kSize=30,kBudget=1020; // px of text the box holds (less the caret and the ellipses)
     float used=0;
     int a=kb_caret,z=kb_caret;
@@ -465,25 +471,38 @@ void field_text(char* out,std::size_t cap){
     int at=0;
     auto put=[&](const char* s,int n){if(at+n<int(cap)){std::memcpy(out+at,s,std::size_t(n));at+=n;}};
     if(a>0)put("\xe2\x80\xa6",3);
-    put(kb_text+a,kb_caret-a);put("|",1);put(kb_text+kb_caret,z-kb_caret);
+    put(kb_text+a,kb_caret-a);*caret_at=at;put(kb_text+kb_caret,z-kb_caret);
     if(z<kb_len)put("\xe2\x80\xa6",3);
     out[at]=0;
 }
 
-void render_kb(Builder& b){
-    const bool on=kb&&open;
-    show(b,kb_field,on);show(b,kb_input,on);show(b,kb_pages,on);show(b,kb_hl,on);
-    if(!on)return;
-    static char text[kKbMax*4+16]; // off the stack
-    if(kb_len){field_text(text,sizeof text);b.set_text_style(kb_input,30,3,kWhite,0);}
-    else{
-        if(st.call[0])std::snprintf(text,sizeof text,"Message #%s",st.call);else std::snprintf(text,sizeof text,"Message");
-        b.set_text_style(kb_input,30,3,kDim,0);}
-    b.set_text(kb_input,text);
-    art(b,kb_pages,kb_page?"kb_symbols":kb_shift==2?"kb_caps":kb_shift?"kb_upper":"kb_lower");
+// Only the highlight (a move): the cheap path, every repeat of a held button.
+void place_hl(Builder& b){
     const float w=key_width(kb_row,kb_col);
     art(b,kb_hl,w>2?"kb_hl_3":w>1?"kb_hl_15":"kb_hl_1");
     b.set_rect(kb_hl,{kKbX+kKbPad+kKbCol*key_left(kb_row,kb_col),kKbY+kKbPad+kKbRow*kb_row,kKbCol*w-8,kKbKey});
+}
+void render_kb(Builder& b){
+    const bool on=kb&&open;
+    show(b,kb_field,on);show(b,kb_input,on);show(b,kb_pages,on);show(b,kb_hl,on);show(b,kb_bar,on);
+    show(b,kb_measure,on); // inkless; drawn only so PUI lays it out
+    if(!on)return;
+    static char text[kKbMax*4+16]; // off the stack
+    int caret_at=0;
+    if(kb_len)field_text(text,sizeof text,&caret_at);
+    else if(st.call[0])std::snprintf(text,sizeof text,"Message #%s",st.call);
+    else std::snprintf(text,sizeof text,"Message");
+    if(kb_style!=(kb_len?1:0)){kb_style=kb_len?1:0;b.set_text_style(kb_input,kKbTextSize,3,kb_len?kWhite:kDim,0);}
+    if(std::strcmp(text,kb_shown)){std::snprintf(kb_shown,sizeof kb_shown,"%s",text);b.set_text(kb_input,text);}
+    // The caret: after the text before it, as PUI measures it (an estimate when it cannot).
+    char before[kKbMax*4+16];std::snprintf(before,sizeof before,"%.*s",caret_at,text);
+    float x=0;
+    if(caret_at){
+        b.set_text(kb_measure,before);x=b.text_width(kb_measure);
+        if(x<0){x=0;for(int i=0;i<caret_at;){int n;x+=char_em(cp_at(before,i,&n))*kKbTextSize;i+=n;}}}
+    b.set_rect(kb_bar,{kKbTextX+x,kKbFieldY+16,3,40});
+    art(b,kb_pages,kb_page?"kb_symbols":kb_shift==2?"kb_caps":kb_shift?"kb_upper":"kb_lower");
+    place_hl(b);
 }
 
 void render(Builder& b){
@@ -595,7 +614,7 @@ void reset(){
     for(int j=0;j<kOptions;j++)drop_word[j]=nullptr;
     nitro_note[0]=nitro_note[1]=nullptr;armed=-1;
     kb=false;kb_text[0]=0;kb_len=kb_chars=kb_caret=0;kb_shift=kb_page=0;kb_row=1;kb_col=0;kb_x=0.5f;kb_sx=kb_sy=0;
-    kb_field=kb_input=kb_pages=kb_hl=nullptr;
+    kb_field=kb_input=kb_pages=kb_hl=kb_measure=kb_bar=nullptr;kb_blink=kb_hold=0;kb_shown[0]=0;kb_style=-1;
     dock=dock_mid=dock_end=title=clock=timer=tile_sub=tile_focus=rule=nullptr;
     card=pill=card_head=card_call=you_ring=you_mic=you_text=card_rule=card_hint=nullptr;
     for(int i=0;i<kRows;i++)row_bg[i]=row_avatar[i]=row_ring[i]=row_name[i]=row_icon[i]=nullptr;
@@ -688,6 +707,8 @@ bool build(Builder& b){
     kb_input=label(b,{kKbX+28,kKbFieldY+14,kKbW-56,46},30,3,kWhite);
     kb_pages=image(b,{kKbX,kKbY,kKbW,kKbH},"kb_lower");
     kb_hl=image(b,at,"kb_hl_1");
+    kb_measure=label(b,{kKbTextX,kKbFieldY+14,kKbW-56,46},kKbTextSize,3,Color{1,1,1,0});
+    kb_bar=image(b,at,"kb_caret");if(kb_bar)b.set_tint(kb_bar,kCoral);
 
     // Text is the overlay's job; pictures may be missing on a firmware without ImageBox.
     if(!title||!timer||!tile_sub||!card_head||!card_call||!you_text||!card_hint)return false;
@@ -754,14 +775,19 @@ void kb_press(Builder& b){
 // The keyboard's buttons (the panel stays captured; Options taps do nothing here).
 void kb_pad(std::uint32_t down,float lx,float ly,Builder& b){
     if(down&kCircle){kb=false;render(b);return;}
-    const int sx=lx<-kStickMove?-1:lx>kStickMove?1:0,sy=ly<-kStickMove?-1:ly>kStickMove?1:0; // up is negative
     int dx=((down&kRight)?1:0)-((down&kLeft)?1:0),dy=((down&kDown)?1:0)-((down&kUp)?1:0);
-    if(sx&&sx!=kb_sx)dx+=sx;
-    if(sy&&sy!=kb_sy)dy+=sy;
-    if(sx||(lx>-kStickRest&&lx<kStickRest))kb_sx=sx;
-    if(sy||(ly>-kStickRest&&ly<kStickRest))kb_sy=sy;
+    // The stick: a step at once, then steps while held (after 300 ms; faster the further it
+    // is pushed), along its stronger axis. Up is negative. The D-pad repeats in the engine.
+    const float ax=lx<0?-lx:lx,ay=ly<0?-ly:ly,big=ax>ay?ax:ay;
+    int sx=0,sy=0;
+    if(big>kStickMove){if(ax>=ay)sx=lx<0?-1:1;else sy=ly<0?-1:1;}
+    if(sx||sy){
+        if(sx!=kb_sx||sy!=kb_sy){kb_sx=sx;kb_sy=sy;kb_hold=0;dx+=sx;dy+=sy;}
+        else{const int every=big>0.95f?4:big>0.8f?6:9;if(++kb_hold>=18&&(kb_hold-18)%every==0){dx+=sx;dy+=sy;}}}
+    else if(big<kStickRest){kb_sx=kb_sy=0;kb_hold=0;}
     dx=dx<0?-1:dx>0?1:0;dy=dy<0?-1:dy>0?1:0;
     if(!down&&!dx&&!dy)return;
+    kb_blink=0;
     if(dx){const int n=key_count(kb_row);kb_col=((kb_col+dx)%n+n)%n;kb_x=key_center(kb_row,kb_col);}
     if(dy){const int r=kb_row+dy;if(r>=0&&r<5){kb_row=r;kb_col=key_near(r,kb_x);}}
     if(down&kSquare)kb_erase();
@@ -772,6 +798,7 @@ void kb_pad(std::uint32_t down,float lx,float ly,Builder& b){
     if(down&kCross)kb_press(b);
     if(down&kR2)kb_send(b);
     if(!kb){render(b);return;} // sent
+    if(!(down&~(kLeft|kUp|kRight|kDown))){place_hl(b);show(b,kb_bar,true);return;} // a move only
     render_kb(b);
 }
 
@@ -874,6 +901,8 @@ void on_text(const char* line,Builder& b){
 
 void on_tick(std::uint64_t frame,Builder& b){
     frame_now=frame;
+    if(kb&&open&&kb_bar){ // the caret blinks (0.5 s on, 0.5 s off) while no key is pressed
+        if(++kb_blink>=30&&kb_blink%30==0)show(b,kb_bar,(kb_blink/30)%2==0);}
     if(st.state!='x'&&frame_now-alive_at>kStaleFrames){ // no beat: as if the core quit
         st.state='x';
         go_inert(b);

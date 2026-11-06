@@ -274,6 +274,7 @@ def main():
     rounded("tile_leave", 122, 140, 16, LEAVE)
     rounded("tile_focus", 134, 152, 21, None, WHITE, 3)
     rounded("line", 519, 2, 0, LINE)
+    rounded("kb_caret", 4, 40, 2, WHITE)  # the keyboard's caret (tinted coral)
     # The mini settings (tabs, rows, inline dropdown): discord_app.inc kTabW and friends.
     for w in (92, 76, 66, 76, 96):
         rounded("pill_%d" % w, w, 40, 20, WHITE)  # tinted: coral when its tab is open

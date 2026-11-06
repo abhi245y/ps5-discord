@@ -41,10 +41,11 @@ bool set_capture(void*,bool on){capturing=on;return true;}
 bool send(void*,const char* t){std::snprintf(sent,sizeof sent,"%s",t);return true;}
 char sent_text[9000]="";int sent_texts=0;
 bool send_text(void*,const char* t){std::snprintf(sent_text,sizeof sent_text,"%s",t);++sent_texts;return true;}
+float text_width(void*,void* l){return 15.f*float(std::strlen(static_cast<Widget*>(l)->text));} // 15 px a byte
 float sw(void*){return 1920;}
 float sh(void*){return 1080;}
 const oui::Builder::Vt vt{add_panel,add_label,set_text,set_visible,set_color,sw,sh,set_capture,send,
-                          add_image,set_image,set_tint,set_style,set_rect,set_hold,send_text};
+                          add_image,set_image,set_tint,set_style,set_rect,set_hold,send_text,text_width};
 
 Widget* w(void* p){return static_cast<Widget*>(p);}
 bool shows(const char* text){
@@ -59,7 +60,7 @@ int main(){
     oui::Builder b{&vt,nullptr};
     reset();
     assert(build(b));
-    assert(used==124);
+    assert(used==126);
     for(int i=0;i<used;i++)assert(!widgets[i].visible); // nothing before the core says anything
 
     // In a call, two talking, the card on: their avatars and names, "You" under them.
@@ -216,11 +217,17 @@ int main(){
     assert(w(kb_hl)->r.x==86&&w(kb_hl)->r.y==726&&w(kb_hl)->r.w==100&&w(kb_hl)->r.h==62&&ends(w(kb_hl)->path,"kb_hl_1.png"));
     assert(capturing&&w(dock)->visible&&!sent[0]); // the panel stays; the pad is the keyboard's now
     // Moving: D-pad right (+Cross types), left wraps, up/down change rows, stick one step per push.
-    pad(0x80);assert(!std::strcmp(kb_text,"q")&&shows("q|"));
+    pad(0x80);assert(!std::strcmp(kb_text,"q")&&shows("q"));
     pad(0x4);assert(w(kb_hl)->r.x==86+108);pad(0x80);assert(!std::strcmp(kb_text,"qw"));
     pad(0x1);pad(0x1);assert(kb_col==10&&w(kb_hl)->r.x==86+1080); // wrapped to '#'
     pad(0x4);assert(kb_col==0);pad(0x1);assert(kb_col==10);
-    pad(0,0.9f);pad(0,0.9f);assert(kb_col==0); // the stick: one step while held
+    pad(0,0.9f);pad(0,0.9f);assert(kb_col==0); // the stick: one step at once
+    {const int c=kb_col;for(int i=0;i<23;i++)pad(0,0.9f); // held: a step at 300 ms, then every 6 frames
+     assert(kb_col==(c+2)%11);pad(0,0);pad(0,0.9f);assert(kb_col==(c+3)%11);
+     for(int i=0;i<19;i++)pad(0,0.97f);assert(kb_col==(c+4)%11); // pushed all the way: every 4
+     for(int i=0;i<4;i++)pad(0,0.97f);assert(kb_col==(c+5)%11);pad(0,0);
+     for(int i=0;i<6;i++)pad(0,-0.9f);pad(0,0);pad(0,0.9f);pad(0,0); // back where it was
+     while(kb_col)pad(0x4);}
     pad(0,0);pad(0,-0.9f);assert(kb_col==10);pad(0,0);
     pad(0x2);assert(kb_row==0);pad(0x2);assert(kb_row==0); // no wrap up
     pad(0,0,0.9f);pad(0,0,0.9f);assert(kb_row==1);pad(0,0,0);pad(0,0,-0.9f);assert(kb_row==0);pad(0,0,0); // stick down is positive
@@ -237,7 +244,7 @@ int main(){
     pad(0x8);assert(kb_row==4&&kb_col==0);pad(0x8);assert(kb_row==4);
     // Typing letters and numbers; Shift is one-shot, twice is caps lock, a third time off.
     kb_text[0]=0;kb_len=kb_chars=kb_caret=0;
-    key(1,0);key(0,0);key(0,10);assert(!std::strcmp(kb_text,"q1@")&&shows("q1@|"));
+    key(1,0);key(0,0);key(0,10);assert(!std::strcmp(kb_text,"q1@")&&shows("q1@"));
     pad(0x1000);assert(kb_shift==1&&ends(w(kb_pages)->path,"kb_upper.png"));
     key(1,1);key(1,2);assert(!std::strcmp(kb_text,"q1@We")&&kb_shift==0&&ends(w(kb_pages)->path,"kb_lower.png"));
     pad(0x1000);pad(0x1000);assert(kb_shift==2&&ends(w(kb_pages)->path,"kb_caps.png"));
@@ -272,11 +279,15 @@ int main(){
     kb_page=0;
     assert(kb_chars==2000&&kb_len==6000);
     // A long text: the field shows the part around the caret, with an ellipsis at the cut end.
-    assert(ends(w(kb_input)->text,"|")&&!std::strncmp(w(kb_input)->text,"\xe2\x80\xa6",3)&&std::strlen(w(kb_input)->text)<400);
+    // No caret character in the text: a bar over it, after the measured text before the caret.
+    assert(!std::strstr(w(kb_input)->text,"|")&&!std::strncmp(w(kb_input)->text,"\xe2\x80\xa6",3)&&std::strlen(w(kb_input)->text)<400);
+    assert(w(kb_bar)->r.x==kKbTextX+15.f*float(std::strlen(w(kb_input)->text))); // at the end
     for(int i=0;i<2000;i++)pad(0x400);
-    assert(kb_caret==0&&!std::strncmp(w(kb_input)->text,"|",1)&&ends(w(kb_input)->text,"\xe2\x80\xa6"));
+    assert(kb_caret==0&&std::strncmp(w(kb_input)->text,"\xe2\x80\xa6",3)&&ends(w(kb_input)->text,"\xe2\x80\xa6")&&w(kb_bar)->r.x==kKbTextX);
     for(int i=0;i<1000;i++)pad(0x800);
-    assert(!std::strncmp(w(kb_input)->text,"\xe2\x80\xa6",3)&&ends(w(kb_input)->text,"\xe2\x80\xa6")&&std::strstr(w(kb_input)->text,"|"));
+    assert(!std::strncmp(w(kb_input)->text,"\xe2\x80\xa6",3)&&ends(w(kb_input)->text,"\xe2\x80\xa6"));
+    assert(w(kb_bar)->r.x>kKbTextX&&w(kb_bar)->r.x<kKbTextX+15.f*float(std::strlen(w(kb_input)->text)));
+    assert(!std::strcmp(w(kb_measure)->text,"")||std::strlen(w(kb_measure)->text)<std::strlen(w(kb_input)->text));
     for(int i=0;i<2005;i++)pad(0x800);for(int i=0;i<2005;i++)pad(0x10);assert(kb_len==0);
     // Send with R2: the exact text goes to send_text; the keyboard closes and the draft is gone.
     const char* long_text="Hello w\xc3\xb6rld \xe2\x82\xac 5! This one is longer than the 48 bytes of a command, with \"quotes\" and \\ in it.";
@@ -293,13 +304,13 @@ int main(){
     // Circle closes the keyboard and keeps the draft; reopening shows it.
     open_kb();key(1,0);key(1,1);pad(0x40);
     assert(!kb&&!w(kb_field)->visible&&capturing&&w(dock)->visible&&kb_len==2);
-    open_kb();assert(shows("qw|"));
+    open_kb();assert(shows("qw"));
     // Options taps do nothing while typing; Cross with no key moves nothing else.
     pad(0x100);assert(kb&&!settings&&w(kb_field)->visible);
     // The gesture (holding Options) closes the keyboard with the panel; the draft stays.
     on_gesture(oui::Gesture::Chord,b);
     assert(!kb&&!capturing&&!w(kb_field)->visible&&!w(dock)->visible&&kb_len==2);
-    on_gesture(oui::Gesture::Chord,b);open_kb();assert(shows("qw|"));
+    on_gesture(oui::Gesture::Chord,b);open_kb();assert(shows("qw"));
     // The core quits: the keyboard goes with the panel.
     on_text("3|x|o|0||0||||||",b);
     assert(!kb&&!capturing&&!w(kb_field)->visible&&!w(kb_hl)->visible);
@@ -321,7 +332,7 @@ int main(){
     on_gesture(oui::Gesture::Chord,b);pad(0x100);assert(settings);
     pad(0x20);assert(!kb&&!w(kb_field)->visible&&!w(hint_icon[3])->visible);
     pad(0x40);pad(0x20);assert(kb); // back on the call page: it opens (the draft is still "qw")
-    assert(shows("qw|"));
+    assert(shows("qw"));
     on_gesture(oui::Gesture::Chord,b);assert(!kb&&!capturing);
     on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0|1~~|",b);
     // Not ours: ignored.

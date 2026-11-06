@@ -34,6 +34,7 @@ void* class_application=nullptr,*class_scene=nullptr;
 Method* method_append=nullptr,*method_find=nullptr,*method_font_ctor=nullptr;
 // Pictures (optional: without them the overlay has panels and text only).
 void* class_image=nullptr,*class_asset=nullptr;Method* method_asset_ctor=nullptr;
+Method* method_text_width=nullptr; // Label.GetTextWidth(): where the keyboard's caret goes
 std::atomic<Update> original{nullptr};
 std::atomic<PadCall> pad_original{nullptr};
 std::atomic<ShareCall> share_original{nullptr};
@@ -387,6 +388,16 @@ bool engine_send(void*,const char* text){
     std::snprintf(c.text,sizeof c.text,"%s",text);
     note("COMMAND %s",c.text);
     return write_file(worker_dir,"cmd.bin",c);}
+// A label's text width in px (PUI lays it out from the font), or -1 when it cannot say.
+float engine_text_width(void*,void* widget){
+    void* label=slot_object(static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(widget)));
+    if(!label||!method_text_width)return -1;
+    bool ok=false;void* exception=nullptr;void* boxed=invoke_ex(method_text_width,label,nullptr,ok,&exception);
+    if(!ok){describe_exception("GetTextWidth",exception);return -1;}
+    void* v=boxed?fn<void*(*)(void*)>(ObjectUnbox)(boxed):nullptr;
+    float w=-1;if(v)std::memcpy(&w,v,4);
+    static int logged=0;if(logged<8){logged++;note("TEXT width=%.1f",w);}
+    return w;}
 bool engine_send_text(void*,const char* text){
     static Outbox box; // UI thread only; 8 KB stays off the stack
     const std::size_t n=text?std::strlen(text):0;
@@ -464,7 +475,7 @@ bool engine_set_hold(void*,int ms){
 constexpr oui::Builder::Vt engine_vt{
     engine_add_panel,engine_add_label,engine_set_text,engine_set_visible,engine_set_color,
     engine_screen_w,engine_screen_h,engine_set_capture,engine_send,
-    engine_add_image,engine_set_image,engine_set_tint,engine_set_text_style,engine_set_rect,engine_set_hold,engine_send_text};
+    engine_add_image,engine_set_image,engine_set_tint,engine_set_text_style,engine_set_rect,engine_set_hold,engine_send_text,engine_text_width};
 oui::Builder ui_builder(){return oui::Builder{&engine_vt,nullptr};}
 void refresh_text(){
     char text[text_limit];
@@ -634,6 +645,15 @@ PadData pad_hook(int device){
     else{options_since.store(0,std::memory_order_relaxed);options_fired.store(false,std::memory_order_relaxed);}
     if(capture.load(std::memory_order_acquire)){
         std::uint32_t down=data.down&~(bit_l3|bit_r3);
+        // Held D-pad, Square, L1 and R1 repeat, as in the system's own menus and keyboard:
+        // after 350 ms, every 60 ms. Per controller (the hook is called per device).
+        {constexpr std::uint32_t repeat=0x1|0x2|0x4|0x8|0x10|0x400|0x800;
+         static std::uint64_t held[8][12],last[8][12];
+         const int d=device<0?0:device&7;const std::uint64_t now=now_ms();
+         for(int i=0;i<12;i++){const std::uint32_t bit=1u<<i;if(!(repeat&bit))continue;
+             if(!(buttons&bit)){held[d][i]=0;continue;}
+             if(!held[d][i]){held[d][i]=last[d][i]=now;continue;}
+             if(now-held[d][i]>=350&&now-last[d][i]>=60){last[d][i]=now;down|=bit;}}}
         if(down){
             last_input_ms.store(now_ms(),std::memory_order_relaxed);
             pending_down.fetch_or(down,std::memory_order_acq_rel);
@@ -668,6 +688,7 @@ bool resolve_update_methods(){
         class_widget=fn<void*(*)(void*,const char*,const char*)>(ClassFromName)(pui,"Sce.PlayStation.PUI.UI2","Widget");
         class_panel=fn<void*(*)(void*,const char*,const char*)>(ClassFromName)(pui,"Sce.PlayStation.PUI.UI2","Panel");
         class_label=fn<void*(*)(void*,const char*,const char*)>(ClassFromName)(pui,"Sce.PlayStation.PUI.UI2","Label");
+        method_text_width=class_label?fn<Method*(*)(void*,const char*,int)>(MethodFromName)(class_label,"GetTextWidth",0):nullptr;
         class_font=fn<void*(*)(void*,const char*,const char*)>(ClassFromName)(pui,"Sce.PlayStation.PUI.UI2","UIFont");
         // Classes are validated before every MethodFromName: a null class is not a
         // safe lookup input in the real runtime, only in our fake.

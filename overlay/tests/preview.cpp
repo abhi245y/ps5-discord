@@ -44,7 +44,7 @@ bool set_hold(void*,int){return true;}
 float sw(void*){return 1920;}
 float sh(void*){return 1080;}
 const oui::Builder::Vt vt{add_panel,add_label,set_text,set_visible,set_color,sw,sh,set_capture,send,
-                          add_image,set_image,set_tint,set_style,set_rect,set_hold,send_text};
+                          add_image,set_image,set_tint,set_style,set_rect,set_hold,send_text,nullptr};
 
 void dump(const char* dir,const char* name){
     char path[300];std::snprintf(path,sizeof path,"%s/%s.txt",dir,name);
