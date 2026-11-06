@@ -1208,10 +1208,13 @@ int chat_msg_read(cJSON *m, chat_msg *out)
         if (!guild) { // REST messages carry no server: the channel's tells
             cJSON *g, *c;
             cJSON_ArrayForEach(g, cJSON_GetObjectItem(tree, "guilds"))
-                cJSON_ArrayForEach(c, cJSON_GetObjectItem(g, "channels"))
-                    if (str(c, "id") && strcmp(str(c, "id"), channel) == 0 && str(g, "id"))
-                        snprintf(own, sizeof own, "%s", str(g, "id"));
+                for (int pass = 0; pass < 2; pass++) // text channels, then voice rooms (their own text chat)
+                    cJSON_ArrayForEach(c, cJSON_GetObjectItem(g, pass ? "rooms" : "channels"))
+                        if (str(c, "id") && strcmp(str(c, "id"), channel) == 0 && str(g, "id"))
+                            snprintf(own, sizeof own, "%s", str(g, "id"));
             guild = own[0] ? own : NULL;
+            if (guild) // the checks below (roles, suppressed mentions) read it from the message
+                cJSON_AddStringToObject(m, "guild_id", guild);
         }
         const char *me = str(cJSON_GetObjectItem(tree, "me"), "id");
         out->mine = me && strcmp(me, str(author, "id")) != 0 && mentions_me(m, me);

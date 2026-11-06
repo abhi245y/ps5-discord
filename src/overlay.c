@@ -762,6 +762,7 @@ static void open_chat(const char *what)
     snprintf(open_chan, sizeof open_chan, "%s", chan);
     snprintf(open_focus, sizeof open_focus, "%s", msg);
     open_rev++;
+    chat_state.unseen = 0; // Open chat is pressed on the Mentions tab: they were seen (a "seen" sent just before is overwritten in cmd.bin)
     fail_chan[0] = 0;
     pthread_mutex_unlock(&chat_mu);
 }

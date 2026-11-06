@@ -1097,9 +1097,9 @@ static void test_overlay_feed(void)
         "\"users\":[{\"id\":\"2\",\"username\":\"bob\",\"global_name\":\"Bob\",\"avatar\":\"abc\"},"
         "{\"id\":\"3\",\"username\":\"cy\"}],"
         "\"guilds\":[{\"id\":\"10\",\"properties\":{\"name\":\"Night Shift\",\"owner_id\":\"9\"},"
-        "\"roles\":[{\"id\":\"10\",\"permissions\":\"3072\"}],"
+        "\"roles\":[{\"id\":\"10\",\"permissions\":\"3072\"},{\"id\":\"77\",\"name\":\"Raiders\",\"permissions\":\"0\"}],"
         "\"channels\":[{\"id\":\"11\",\"name\":\"raid-night\",\"type\":0},{\"id\":\"12\",\"name\":\"Raid Voice\",\"type\":2}]}],"
-        "\"merged_members\":[[{\"user_id\":\"1\",\"roles\":[]}]],"
+        "\"merged_members\":[[{\"user_id\":\"1\",\"roles\":[\"77\"]}]],"
         "\"private_channels\":[{\"id\":\"20\",\"type\":1,\"recipient_ids\":[\"2\"]},"
         "{\"id\":\"21\",\"type\":3,\"name\":\"Crew\",\"recipient_ids\":[\"2\",\"3\"]}]}");
     chat_dispatch("READY", ready);
@@ -1132,6 +1132,10 @@ static void test_overlay_feed(void)
     cJSON_Delete(j);
     j = cJSON_Parse("{\"id\":\"904\",\"channel_id\":\"11\",\"content\":\"no author\"}");
     assert(!chat_msg_read(j, &cm));
+    cJSON_Delete(j);
+    j = cJSON_Parse("{\"id\":\"906\",\"channel_id\":\"12\",\"type\":0,\"content\":\"<@&77> hi\",\"mention_roles\":[\"77\"],"
+                    "\"author\":{\"id\":\"3\",\"username\":\"cy\"}}"); // a voice room's own text chat, REST (no server id)
+    assert(chat_msg_read(j, &cm) && cm.mine && !strcmp(cm.text, "@Raiders hi"));
     cJSON_Delete(j);
     j = cJSON_Parse("{\"id\":\"905\",\"channel_id\":\"11\",\"type\":0,\"content\":\"hey @everyone\",\"mention_everyone\":true,"
                     "\"author\":{\"id\":\"3\",\"username\":\"cy\"}}");
