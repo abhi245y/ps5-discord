@@ -172,6 +172,7 @@ std::uint64_t pend_until=0;
 constexpr std::uint64_t kPendFrames=60*4;
 
 // The panel.
+char timer_shown[16]="\x01"; // the timer's text now (the clock is placed when it changes)
 void* dock=nullptr; void* dock_mid=nullptr; void* dock_end=nullptr; void* title=nullptr; void* clock=nullptr; void* timer=nullptr;
 void* row_bg[kRows]={}; void* row_avatar[kRows]={}; void* row_ring[kRows]={}; void* row_name[kRows]={};
 void* row_icon[kRows]={};
@@ -182,7 +183,7 @@ void* hint_icon[4]={}; void* hint_text[4]={};
 void* tabs_bg=nullptr; void* tab_on=nullptr; void* page_word[kPages]={}; void* tab_badge=nullptr; void* tab_count=nullptr;
 void* head_icon=nullptr; void* head_title=nullptr; void* head_sub=nullptr;
 struct MsgRow { void *bg,*avatar,*name,*time,*text,*chip,*loc; } mrow[kMsgRows]={};
-void* men_focus=nullptr; void* men_open=nullptr; void* in_field=nullptr; void* in_text=nullptr; void* in_kb=nullptr;
+void* men_focus=nullptr; void* in_field=nullptr; void* in_text=nullptr; void* in_kb=nullptr;
 void* empty_text=nullptr;
 int rows_layout=0; bool row_mine[kMsgRows]={}; int strip_page=-1,title_mode=1;
 // The talking card.
@@ -333,11 +334,12 @@ void place(Builder& b,float tiles_top,float content_end){
         b.set_rect(tile_focus,{kRowX+kTileStep*focus-6,tiles_top-6,134,152});}
     b.set_rect(rule,{kRowX,ry,kRowW,2});
     // A label's text sits high in its box: 5 px lower lines it up with the 37 px glyphs.
-    const Rect call_g[4]={{1347,hy+1,37,37},{1472,hy+1,37,37},{1696,hy+5,78,28},{1587,hy+1,37,37}};
-    const Rect call_w[4]={{1392,hy+5,76,40},{1517,hy+5,66,40},{1782,hy+5,86,40},{1632,hy+5,60,40}};
+    const Rect call_g[4]={{1347,hy+1,37,37},{1472,hy+1,37,37},{1600,hy+5,78,28},{0,0,1,1}};
+    const Rect call_w[4]={{1392,hy+5,76,40},{1517,hy+5,66,40},{1686,hy+5,86,40},{0,0,1,1}};
     // Chat and Mentions (d-chat, e-mentions): the action, the tabs, then Close at the right.
-    const Rect list_g[4]={{1347,hy+1,37,37},{1722,hy+1,37,37},{1528,hy+5,82,28},{0,0,1,1}};
-    const Rect list_w[4]={{1392,hy+5,90,40},{1767,hy+5,100,40},{1618,hy+5,70,40},{0,0,1,1}};
+    // Square (back to the default chat) sits at the right of the Chat header, not in the row.
+    const Rect list_g[4]={{1347,hy+1,37,37},{1722,hy+1,37,37},{1528,hy+5,82,28},{kDockX+kDockW-37-150,124+12,37,37}};
+    const Rect list_w[4]={{1392,hy+5,90,40},{1767,hy+5,100,40},{1618,hy+5,70,40},{kDockX+kDockW-37-108,124+16,108,40}}; // 124: kHeadY
     const bool lists=!settings&&page>0;
     for(int i=0;i<4;i++){b.set_rect(hint_icon[i],lists?list_g[i]:call_g[i]);b.set_rect(hint_text[i],lists?list_w[i]:call_w[i]);}
 }
@@ -496,7 +498,8 @@ int kb_blink=0;           // frames since the last key: the caret blinks once it
 int kb_hold=0;            // frames the stick has stayed in one direction (it repeats)
 char kb_shown[kKbMax*4+16]=""; int kb_style=-1; // what the field's label has now (skip unchanged)
 bool kb=false;
-char kb_channel[24]=""; // where the text goes: "" the call's chat, else Chat's channel (set when it opens)
+char kb_channel[24]=""; // where the text goes: Chat's channel (set when it opens)
+char kb_title[72]="";   // its name for the placeholder ("#raid-night", a DM's person)
 char kb_text[kKbMax*4+1]="";
 int kb_len=0,kb_chars=0,kb_caret=0; // bytes, characters, the caret's byte offset
 int kb_shift=0;  // 0 off, 1 the next letter, 2 caps lock
@@ -576,7 +579,7 @@ void render_kb(Builder& b){
     int caret_at=0;
     if(kb_len)field_text(text,sizeof text,&caret_at);
     else if(kb_channel[0])std::snprintf(text,sizeof text,"Message %s",chat.title);
-    else if(st.call[0])std::snprintf(text,sizeof text,"Message #%s",st.call);
+    else if(kb_title[0])std::snprintf(text,sizeof text,"Message %s",kb_title);
     else std::snprintf(text,sizeof text,"Message");
     if(kb_style!=(kb_len?1:0)){kb_style=kb_len?1:0;b.set_text_style(kb_input,kKbTextSize,3,kb_len?kWhite:kDim,0);}
     if(std::strcmp(text,kb_shown)){std::snprintf(kb_shown,sizeof kb_shown,"%s",text);b.set_text(kb_input,text);}
@@ -688,10 +691,11 @@ float render_pages(Builder& b){
             else art(b,head_icon,"hash_icon");
         }
         b.set_rect(head_icon,{kRowX+6,kHeadY,64,64});
-        b.set_rect(head_title,{kRowX+88,kHeadY-2,kRowW-88,38});
-        b.set_rect(head_sub,{kRowX+88,kHeadY+36,kRowW-88,28});
+        const float room=kRowW-88-(chat.focus[0]?160:0); // the way back takes the header's right
+        b.set_rect(head_title,{kRowX+88,kHeadY-2,room,38});
+        b.set_rect(head_sub,{kRowX+88,kHeadY+36,room,28});
         b.set_rect(in_field,{kRowX,kInputY,kRowW,kInputH});
-        b.set_rect(in_text,{kRowX+24,kInputY+12,kRowW-24-76,48});
+        b.set_rect(in_text,{kRowX+24,kInputY+19,kRowW-24-76,48}); // PUI sets text high in its box
         b.set_rect(in_kb,{kRowX+kRowW-24-40,kInputY+21,40,30});
         char hint[100];std::snprintf(hint,sizeof hint,"Message %s",chat.title);
         b.set_text(in_text,hint);
@@ -724,7 +728,6 @@ float render_pages(Builder& b){
         }
         const int at=men_sel-men_top;
         b.set_rect(men_focus,{kRowX,kMenY+kMenStep*at,kRowW,kMenH});
-        b.set_rect(men_open,{kRowX+kRowW-20-150,kMenY+kMenStep*at+62,150,48});
         end=kMenY+kMenStep*(shown_rows-1)+kMenH;
     }
     for(int i=0;i<kMsgRows;i++){
@@ -733,7 +736,7 @@ float render_pages(Builder& b){
         show(b,r.bg,on);show(b,r.avatar,on);show(b,r.name,on);show(b,r.time,on);show(b,r.text,on);
         show(b,r.chip,on&&rows_chat&&row_mine[i]);show(b,r.loc,on&&rows_men);
     }
-    show(b,men_focus,rows_men);show(b,men_open,rows_men);
+    show(b,men_focus,rows_men);
     // The empty states.
     const char* none=wait?"Loading\xe2\x80\xa6":(chat_on&&chat.kind!='-'&&!chat.n)?"No messages yet":(men_on&&!chat.nmen)?"No mentions":nullptr;
     show(b,empty_text,none!=nullptr);
@@ -801,7 +804,10 @@ void render(Builder& b){
         b.set_rect(title,settings?Rect{kDockX+37,kDockY+40,kDockW-74,54}:Rect{kDockX+37,118,kDockW-74-170,44});
         b.set_text_style(title,settings?40:32,1,kWhite);}
     b.set_text(title,settings?"Settings":in_call?st.call:"Not in a call");
-    b.set_text(timer,st.timer);
+    if(std::strcmp(st.timer,timer_shown)){ // the clock goes right before the text (measured; estimated if not)
+        std::snprintf(timer_shown,sizeof timer_shown,"%s",st.timer);b.set_text(timer,st.timer);
+        float w=b.text_width(timer);if(w<=0)w=14.5f*float(std::strlen(st.timer));
+        b.set_rect(clock,{kDockX+kDockW-37-w-34,127,26,26});}
     for(int i=0;i<kRows;i++){
         const bool used=in_call&&i<st.count;
         if(used){
@@ -844,9 +850,9 @@ void render(Builder& b){
     b.set_text(hint_text[1],settings&&!expanded?"Back":"Close");
     b.set_text(hint_text[2],lists?"Tabs":"Settings");
     art(b,hint_icon[2],lists?"chip_l1r1":"chip_options");
-    b.set_text(hint_text[3],"Chat");
+    b.set_text(hint_text[3],in_call?"Call chat":"Back");
     const bool act=settings||page==0||(page==1?chat_ready():chat.nmen>0);
-    const bool hints[4]={act,true,!settings,call_page&&in_call};
+    const bool hints[4]={act,true,!settings,!settings&&page==1&&chat.focus[0]&&!kb}; // another chat than the default
     for(int i=0;i<4;i++){
         const bool on=open&&hints[i];
         show(b,hint_icon[i],on);show(b,hint_text[i],on);}
@@ -858,7 +864,7 @@ void render(Builder& b){
 void reset(){
     st=State{};chat.n=chat.nmen=chat.unseen=0;chat.kind='-';chat.chan[0]=chat.title[0]=chat.sub[0]=chat.icon[0]=chat.focus[0]=0;
     page=scroll=men_sel=men_top=0;men_id[0]=last_focus[0]=pend_chan[0]=0;pend_until=0;tab_at=-1000;
-    tabs_bg=tab_on=tab_badge=tab_count=head_icon=head_title=head_sub=men_focus=men_open=in_field=in_text=in_kb=empty_text=nullptr;
+    tabs_bg=tab_on=tab_badge=tab_count=head_icon=head_title=head_sub=men_focus=in_field=in_text=in_kb=empty_text=nullptr;
     for(void*& w:page_word)w=nullptr;
     for(MsgRow& r:mrow)r=MsgRow{};
     rows_layout=0;strip_page=-1;title_mode=1;for(bool& m:row_mine)m=false;
@@ -873,7 +879,7 @@ void reset(){
     nitro_note[0]=nitro_note[1]=nullptr;armed=-1;
     kb=false;kb_text[0]=0;kb_len=kb_chars=kb_caret=0;kb_shift=kb_page=0;kb_row=1;kb_col=0;kb_x=0.5f;kb_sx=kb_sy=0;
     kb_field=kb_input=kb_pages=kb_hl=kb_measure=kb_bar=nullptr;kb_blink=kb_hold=0;kb_shown[0]=0;kb_style=-1;
-    dock=dock_mid=dock_end=title=clock=timer=tile_sub=tile_focus=rule=nullptr;
+    dock=dock_mid=dock_end=title=clock=timer=tile_sub=tile_focus=rule=nullptr;std::snprintf(timer_shown,sizeof timer_shown,"\x01");
     card=pill=card_head=card_call=you_ring=you_mic=you_text=card_rule=card_hint=nullptr;
     for(int i=0;i<kRows;i++)row_bg[i]=row_avatar[i]=row_ring[i]=row_name[i]=row_icon[i]=nullptr;
     for(int i=0;i<kTiles;i++)tile[i]=tile_icon[i]=tile_label[i]=nullptr;
@@ -887,9 +893,9 @@ bool build(Builder& b){
     dock_mid=image(b,{kDockX,kDockY+40,kDockW,kDockH-80},"dock_mid");
     dock_end=image(b,{kDockX,kDockY+kDockH-40,kDockW,40},"dock_bottom");
     title=label(b,{kDockX+37,118,kDockW-74-170,44},32,1,kWhite); // the call page's: under the tabs, with the timer at its right
-    clock=image(b,{kDockX+kDockW-37-34-110,124,26,26},"clock");
+    clock=image(b,{kDockX+kDockW-37-34-110,127,26,26},"clock");
     if(clock)b.set_tint(clock,kDim);
-    timer=label(b,{kDockX+kDockW-37-110,119,110,36},25,3,kDim);
+    timer=label(b,{kDockX+kDockW-37-130,118,130,44},25,3,kDim,2); // right-aligned on the title's line
     for(int i=0;i<kRows;i++){
         const float y=kRowY+kRowStep*i;
         row_bg[i]=image(b,{kRowX,y,kRowW,kRowH},"row");
@@ -910,7 +916,7 @@ bool build(Builder& b){
     tile_sub=label(b,at,14,0,kWhite,1);
     tile_focus=image(b,at,"tile_focus");
     rule=image(b,at,"line");
-    const char* glyphs[4]={"glyph_cross","glyph_circle","chip_options","glyph_triangle"};
+    const char* glyphs[4]={"glyph_cross","glyph_circle","chip_options","glyph_square"};
     const char* words[4]={"Select","Close","Settings","Chat"};
     for(int i=0;i<4;i++){
         hint_icon[i]=image(b,at,glyphs[i]);
@@ -978,7 +984,6 @@ bool build(Builder& b){
         r.chip=image(b,at,"chip_you");
         r.loc=label(b,at,19,0,kDim);}
     men_focus=image(b,at,"men_focus");
-    men_open=image(b,at,"btn_open");
     in_field=image(b,at,"chat_field");
     in_text=label(b,at,24,0,kDim);
     in_kb=image(b,at,"kb_glyph");
@@ -1146,8 +1151,8 @@ void set_page(int to,Builder& b){
     render(b);
 }
 
-void open_kb(const char* channel,Builder& b){
-    kb=true;std::snprintf(kb_channel,sizeof kb_channel,"%s",channel);
+void open_kb(const char* channel,const char* name,Builder& b){
+    kb=true;std::snprintf(kb_channel,sizeof kb_channel,"%s",channel);std::snprintf(kb_title,sizeof kb_title,"%s",name);
     kb_x=key_center(kb_row,kb_col);render(b);
 }
 
@@ -1157,7 +1162,8 @@ void chat_pad(std::uint32_t down,Builder& b){
     if(move){
         const int to=scroll+move<0?0:scroll+move>max_scroll()?max_scroll():scroll+move;
         if(to!=scroll){scroll=to;render(b);}}
-    if((down&kTriangle)&&chat_ready())open_kb(chat.chan,b);
+    if((down&kTriangle)&&chat_ready())open_kb(chat.chan,chat.title,b);
+    if((down&kSquare)&&chat.focus[0]){b.send("chat back");chat.focus[0]=0;render(b);} // back to the call's chat (or the app's)
 }
 
 // Mentions: up/down select; Cross opens that chat (the core fetches it; the Chat tab waits for it).
@@ -1198,7 +1204,6 @@ void on_pad(std::uint32_t down,float lx,float ly,Builder& b){
     if(dir||(lx>-kStickRest&&lx<kStickRest))stick=dir;
     if(step){focus=((focus+step)%kTiles+kTiles)%kTiles;render(b);}
     if((down&kCross)&&(st.state=='c'||st.state=='j'))b.send(kCommands[focus]);
-    if((down&kTriangle)&&(st.state=='c'||st.state=='j'))open_kb("",b);
 }
 
 // The core is gone (state x): close an open panel so the game gets its pad back.

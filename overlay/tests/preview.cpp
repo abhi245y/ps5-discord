@@ -138,6 +138,7 @@ int main(int argc,char** argv){
     chat_feed("H\tc\t555\t#raid-night\tNight Shift\t\t0\t\n","");dump(dir,"mentions-empty");
     chat_feed("H\tc\t555\t#raid-night\tNight Shift\t\t0\t\n",mentions);
     on_pad(0x80,0,0,b);dump(dir,"chat-loading");
+    pend_until=0;chat_feed("H\tc\t556\t#gta-online\tRockstar Games\t\t0\t2\t1\n",convo);dump(dir,"chat-other"); // from a mention: Square goes back
     std::printf("preview: %d widgets\n",used);
     return 0;
 }

@@ -113,6 +113,8 @@ def glyph(name, size, colour, shape):
     elif shape == "triangle":
         d.polygon([(32 * k, 17 * k), (46 * k, 42 * k), (18 * k, 42 * k)], outline=colour, width=int(4 * k))
         d.line([(32 * k, 17 * k), (46 * k, 42 * k), (18 * k, 42 * k), (32 * k, 17 * k)], fill=colour, width=int(5 * k), joint="curve")
+    elif shape == "square":
+        d.rectangle((21 * k, 21 * k, 43 * k, 43 * k), outline=colour, width=int(5 * k))
     else:
         d.ellipse((19 * k, 19 * k, 45 * k, 45 * k), outline=colour, width=int(5 * k))
     save(img, name, size, size)
@@ -341,6 +343,7 @@ def main():
     glyph("glyph_cross", 37, (122, 160, 255, 255), "cross")
     glyph("glyph_circle", 37, (255, 92, 110, 255), "circle")
     glyph("glyph_triangle", 37, (110, 210, 160, 255), "triangle")
+    glyph("glyph_square", 37, (236, 140, 200, 255), "square")
     keyboard_art()
     chat_art()
     text_pill("chip_options", 78, 28, None, "OPTIONS", 12, outline=True)

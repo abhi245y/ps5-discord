@@ -767,6 +767,16 @@ static void open_chat(const char *what)
     pthread_mutex_unlock(&chat_mu);
 }
 
+// Square on the Chat tab: Open chat's choice ends; the call's chat, or the app's, shows again.
+static void chat_back(void)
+{
+    pthread_mutex_lock(&chat_mu);
+    open_chan[0] = open_focus[0] = 0;
+    open_rev++;
+    fail_chan[0] = 0;
+    pthread_mutex_unlock(&chat_mu);
+}
+
 static void mentions_seen(void)
 {
     pthread_mutex_lock(&chat_mu);
@@ -906,6 +916,8 @@ static void run_command(const char *what)
         voice_leave();
     else if (strcmp(what, "seen") == 0)
         mentions_seen(); // the Mentions tab was opened
+    else if (strcmp(what, "chat back") == 0)
+        chat_back(); // Square on the Chat tab: the call's chat (or the app's) again
     else if (strncmp(what, "chat ", 5) == 0)
         open_chat(what + 5); // a mention's Open chat
     else if (strncmp(what, "set ", 4) == 0) {
