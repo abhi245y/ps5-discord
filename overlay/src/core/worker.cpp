@@ -55,6 +55,7 @@ std::uint64_t command_seq=0;                 // UI thread only
 // Holding the game while the panel is open (the system menu's way): the impose status set
 // and controller focus with the system. game_app is whose focus to give back.
 std::atomic<bool> holding{false};
+std::atomic<bool> repeat_reset{false}; // capture went on: no button counts as held from before
 std::atomic<int> game_app{-1};
 std::atomic<std::uint64_t> last_input_ms{0};
 constexpr std::uint64_t hold_idle_ms=30000;  // no button reaches us this long: give it back
@@ -378,6 +379,7 @@ void release_game(const char* why){
     note("RELEASE (%s) game=%x focus=%x impose=%x",why,app,focus,impose);
 }
 bool engine_set_capture(void*,bool on){
+    if(on)repeat_reset.store(true,std::memory_order_release);
     if(on&&!capture.load(std::memory_order_relaxed))pending_down.store(0,std::memory_order_relaxed);
     capture.store(on,std::memory_order_release);
     if(on)hold_game();else release_game("closed");
@@ -650,6 +652,7 @@ PadData pad_hook(int device){
         {constexpr std::uint32_t repeat=0x1|0x2|0x4|0x8|0x10|0x400|0x800;
          static std::uint64_t held[8][12],last[8][12];
          const int d=device<0?0:device&7;const std::uint64_t now=now_ms();
+         if(repeat_reset.exchange(false,std::memory_order_acq_rel)){std::memset(held,0,sizeof held);std::memset(last,0,sizeof last);}
          for(int i=0;i<12;i++){const std::uint32_t bit=1u<<i;if(!(repeat&bit))continue;
              if(!(buttons&bit)){held[d][i]=0;continue;}
              if(!held[d][i]){held[d][i]=last[d][i]=now;continue;}

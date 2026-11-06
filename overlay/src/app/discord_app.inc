@@ -499,7 +499,8 @@ void render_kb(Builder& b){
     float x=0;
     if(caret_at){
         b.set_text(kb_measure,before);x=b.text_width(kb_measure);
-        if(x<0){x=0;for(int i=0;i<caret_at;){int n;x+=char_em(cp_at(before,i,&n))*kKbTextSize;i+=n;}}}
+        if(x<=0){x=0;for(int i=0;i<caret_at;){int n;x+=char_em(cp_at(before,i,&n))*kKbTextSize;i+=n;}}}
+    else b.set_text(kb_measure,""); // nothing stale under the placeholder
     b.set_rect(kb_bar,{kKbTextX+x,kKbFieldY+16,3,40});
     art(b,kb_pages,kb_page?"kb_symbols":kb_shift==2?"kb_caps":kb_shift?"kb_upper":"kb_lower");
     place_hl(b);
