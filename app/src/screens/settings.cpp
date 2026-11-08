@@ -178,7 +178,7 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
             pair,
             choice_row("Go Live quality", "From the next Go Live on. Above 720p · 30 fps may need Nitro.",
                        "golive_quality", kQualities, s.prefs.golive_quality),
-            choice_row("Capture", "Auto: the USB controller if plugged in, else wireless.",
+            choice_row("Capture", "Auto: USB controller if plugged in and paired, else wireless.",
                        "golive_backend", kCaptures, s.prefs.golive_backend),
         };
     }
