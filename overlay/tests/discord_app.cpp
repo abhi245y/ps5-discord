@@ -393,6 +393,9 @@ int main(){
      on_text(kCall,b);for(int i=0;i<3;i++)on_tick(++frame,b);assert(w(timer)->r.x==tx);}
     // A tab switch: the page's rows show a frame later; the highlight slides over 8 frames.
     on_pad(0x800,0,0,b);assert(page==1&&!w(head_title)->visible&&w(tab_on)->r.x==1347+3);
+    {const float ry=w(rule)->r.y,mh=w(dock_mid)->r.h; // the panel is already the new page's size
+     for(int i=0;i<kSlide;i++)on_tick(++frame,b);assert(w(rule)->r.y==ry&&w(dock_mid)->r.h==mh&&w(head_title)->visible);
+     on_pad(0x400,0,0,b);for(int i=0;i<kSlide;i++)on_tick(++frame,b);on_pad(0x800,0,0,b);assert(!w(head_title)->visible);}
     on_tick(++frame,b);assert(!w(head_title)->visible&&w(tab_on)->r.x>1347+3&&w(tab_on)->r.x<1347+3+173);
     on_tick(++frame,b);assert(w(head_title)->visible);
     for(int i=0;i<6;i++)on_tick(++frame,b);assert(w(tab_on)->r.x==1347+3+173);

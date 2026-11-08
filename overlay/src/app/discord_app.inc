@@ -682,9 +682,9 @@ void layout_rows(Builder& b,int layout){
 
 // The rows' texts and pictures for the open tab; returns where the panel's content ends (0: neither tab).
 float render_pages(Builder& b){
-    const bool shown=open&&!settings,content=shown&&!reveal;
+    const bool shown=open&&!settings;
     render_tabs(b,shown);
-    const bool chat_on=content&&page==1,men_on=content&&page==2,wait=chat_on&&loading();
+    const bool chat_on=shown&&page==1,men_on=shown&&page==2,wait=chat_on&&loading();
     const bool rows_chat=chat_on&&!wait&&chat.kind!='-'&&chat.n>0;
     const bool rows_men=men_on&&chat.nmen>0;
     float end=0;
@@ -759,6 +759,10 @@ float render_pages(Builder& b){
         const float y=chat_on?kChatY+kChatStep*1:kMenY+20;
         b.set_rect(empty_text,{kRowX,y,kRowW,44});}
     if(men_on&&!chat.nmen)end=kMenY+110;
+    if(reveal){ // the new page is laid out (and the panel sized for it); it shows next frame
+        void* const heads[]={head_icon,head_title,head_sub,in_field,in_text,in_kb,men_focus,empty_text};
+        for(void* w:heads)show(b,w,false);
+        for(MsgRow& r:mrow){void* const parts[]={r.bg,r.avatar,r.name,r.time,r.text,r.chip,r.loc};for(void* w:parts)show(b,w,false);}}
     return end;
 }
 
@@ -824,7 +828,8 @@ void render(Builder& b){
     if(title_mode!=(settings?0:1)){ // the call page's title shares its line with the timer, under the tabs
         title_mode=settings?0:1;
         b.set_rect(title,settings?Rect{kDockX+37,kDockY+40,kDockW-74,54}:Rect{kDockX+37,kTitleY,kDockW-74-170,kTitleH});
-        b.set_text_style(title,settings?40:32,1,kWhite);}
+        b.set_text_style(title,settings?40:32,1,kWhite);
+        b.set_text_valign(title,settings?0:1);} // bottom-aligned with the timer on the call page only
     b.set_text(title,settings?"Settings":in_call?st.call:"Not in a call");
     if(std::strcmp(st.timer,timer_shown)){
         const bool format=std::strlen(st.timer)!=std::strlen(timer_shown);
@@ -924,7 +929,7 @@ bool build(Builder& b){
     if(clock)b.set_tint(clock,kDim);
     timer=label(b,{kRowX+kRowW-130,kTitleY+2,130,kTitleH},25,3,kDim,2); // right-aligned; placed by place_timer
     timer_probe=label(b,{kRowX,kTitleY,300,kTitleH},25,3,Color{1,1,1,0}); // inkless: measures the widest timer text
-    b.set_text_valign(title,1);b.set_text_valign(timer,1); // on the same baseline (box bottoms 2 px apart)
+    b.set_text_valign(timer,1); // on the title's baseline (the title's is set with its mode; box bottoms 2 px apart)
     for(int i=0;i<kRows;i++){
         const float y=kRowY+kRowStep*i;
         row_bg[i]=image(b,{kRowX,y,kRowW,kRowH},"row");
