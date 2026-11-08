@@ -810,7 +810,7 @@ void render(Builder& b){
         std::snprintf(timer_shown,sizeof timer_shown,"%s",st.timer);b.set_text(timer,st.timer);
         float w=b.text_width(timer);if(w<=0)w=14.5f*float(std::strlen(st.timer));
         b.set_rect(timer,{kRowX+kRowW-w,118,w+8,44}); // a right-aligned label pads its end: left-aligned, placed
-        b.set_rect(clock,{kRowX+kRowW-w-34,127,26,26});}
+        b.set_rect(clock,{kRowX+kRowW-w-34,120,26,26});} // 120: PUI draws the 25 px digits ~7 px above their box's middle (console photo)
     for(int i=0;i<kRows;i++){
         const bool used=in_call&&i<st.count;
         if(used){
@@ -896,7 +896,7 @@ bool build(Builder& b){
     dock_mid=image(b,{kDockX,kDockY+40,kDockW,kDockH-80},"dock_mid");
     dock_end=image(b,{kDockX,kDockY+kDockH-40,kDockW,40},"dock_bottom");
     title=label(b,{kDockX+37,118,kDockW-74-170,44},32,1,kWhite); // the call page's: under the tabs, with the timer at its right
-    clock=image(b,{kDockX+kDockW-37-34-110,127,26,26},"clock");
+    clock=image(b,{kDockX+kDockW-37-34-110,120,26,26},"clock");
     if(clock)b.set_tint(clock,kDim);
     timer=label(b,{kRowX+kRowW-130,118,130,44},25,3,kDim); // placed by its width: ends at the cards' edge
     for(int i=0;i<kRows;i++){
