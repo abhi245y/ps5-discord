@@ -458,13 +458,20 @@ static enum session_end capture_session(const struct start_req *req, int may_rec
     size_t annexb_len = 0;
 
     if (sl_inject_begin("SceRemotePlay", &c.ctx)) {
-        log_line("attach failed: stage=%s errno=%d", c.ctx.stage, c.ctx.last_errno);
+        log_line("attach failed: stage=%s errno=%d rip=0x%llx lwp=%d", c.ctx.stage, c.ctx.last_errno,
+                 (unsigned long long)c.ctx.last_rip, (int)c.ctx.thread_pid);
         why("Capture could not start.");
         goto done;
     }
     if (progress) progress->target = c.ctx.target_pid;
-    if (c.ctx.scratch <= 0 || c.ctx.scratch_len < 0x4000 || bind_functions(&c)) { why("Capture could not start."); goto done; }
-    if (!good(REMOTE(&c, INITIALIZE))) { why("Capture could not start."); goto done; }
+    log_line("attached: pid=%d lwp=%d rip=0x%llx scratch=0x%llx", (int)c.ctx.target_pid, (int)c.ctx.thread_pid,
+             (unsigned long long)c.ctx.last_rip, (unsigned long long)c.ctx.scratch);
+    if (c.ctx.scratch <= 0 || c.ctx.scratch_len < 0x4000 || bind_functions(&c)) {
+        log_line("setup failed: scratch=0x%llx len=0x%zx stage=%s", (unsigned long long)c.ctx.scratch,
+                 (size_t)c.ctx.scratch_len, c.ctx.stage);
+        why("Capture could not start."); goto done;
+    }
+    if (!good(REMOTE(&c, INITIALIZE))) { log_line("Initialize failed: stage=%s", c.ctx.stage); why("Capture could not start."); goto done; }
     c.initialized = 1;
     uint32_t mode = 0;
     intptr_t base = c.ctx.scratch;

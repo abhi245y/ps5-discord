@@ -694,6 +694,14 @@ int main(void)
     assert(!sl_inject_begin("SceRemotePlay", &c) && t.continue_calls && !t.a_in_kernel);
     assert(!sl_inject_end(&c)); cases++;
 
+    // A failed attach names its own check and values, not cleanup's last step.
+    setup(&c); t.fail_lwp_at = 1;
+    assert(sl_inject_begin("SceRemotePlay", &c) == -1 && !strncmp(c.stage, "pin-lwpinfo e5 ", 15) && !t.attached);
+    t.fail_lwp_at = 0; cases++;
+    setup(&c); t.fail_code_read = 1;
+    assert(sl_inject_begin("SceRemotePlay", &c) == -1 && !strncmp(c.stage, "stop-code-read e5 ", 18) && t.detached);
+    t.fail_code_read = 0; cases++;
+
     // Clean end needs no A boundary: deliver B's signal once without resuming the process.
     const int b_codes[] = {SI_USER, SI_QUEUE};
     for (unsigned i = 0; i < 2; i++) {

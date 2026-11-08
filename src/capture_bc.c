@@ -472,7 +472,8 @@ const char *capture_run(const capture_params *p)
                     for (size_t i = 0; i < t; i++) // text from another process: printable ASCII only
                         why_text[i] = body[1 + i] >= 32 && body[1 + i] < 127 ? (char)body[1 + i] : '?';
                     why_text[t] = 0;
-                    bad = 1; // an explicit error is terminal; do not overwrite it with a later timeout
+                    LOG("capture: helper error: %s", why_text);
+                    bad = 2; // an explicit error is terminal; do not overwrite it with a later timeout
                 }
                 break;
             default:
@@ -484,7 +485,8 @@ const char *capture_run(const capture_params *p)
             have -= CAP_HEADER_BYTES + h.len;
         }
         if (bad) {
-            LOG("capture: a bad message from the helper, closing");
+            if (bad == 1)
+                LOG("capture: a bad message from the helper, closing");
             break;
         }
     }

@@ -148,6 +148,11 @@ intptr_t sl_module_base(pid_t pid, const char *basename)
     return kernel_dynlib_mapbase_addr(pid, handle);
 }
 
+// Console diagnosis: which check refused a stop, with its values, for the capture log.
+static char stop_diag[64];
+#define STOP_FAIL(...) do { snprintf(stop_diag, sizeof stop_diag, __VA_ARGS__); \
+                            ctx->stage = stop_diag; return -1; } while (0)
+
 static pid_t tracee(const sl_inject *ctx)
 {
     return ctx->thread_pid > 0 ? ctx->thread_pid : ctx->target_pid;
@@ -353,9 +358,18 @@ int sl_inject_begin(const char *name, sl_inject *ctx)
 
     ctx->stage = "pin-lwp";
     struct ptrace_lwpinfo info;
-    if (stopped_lwp(ctx, &info)) goto fail;
+    if (stopped_lwp(ctx, &info)) {
+        snprintf(stop_diag, sizeof stop_diag, "pin-lwpinfo e%d lwp%d pid%d f%x sig%d", errno, info.pl_lwpid,
+                 ctx->target_pid, info.pl_flags, ctx->last_stop_signal);
+        ctx->stage = stop_diag; goto fail;
+    }
     ctx->thread_pid = info.pl_lwpid;
-    if (acquire_boundary(ctx) || ctx->deferred_count || ctx->detach_signal) goto fail;
+    if (acquire_boundary(ctx)) goto fail;
+    if (ctx->deferred_count || ctx->detach_signal) {
+        snprintf(stop_diag, sizeof stop_diag, "pin-signal deferred%d detach%d", ctx->deferred_count,
+                 ctx->detach_signal);
+        ctx->stage = stop_diag; goto fail;
+    }
     ctx->stage = "get-regs";
     struct reg regs;
     if (inj_ptrace(PT_GETREGS, ctx->thread_pid, &regs, 0) != 0) goto fail;
@@ -380,10 +394,12 @@ int sl_inject_begin(const char *name, sl_inject *ctx)
 fail:
     ctx->last_errno = errno;
     if (did_attach) {
+        const char *failed = ctx->stage; // the capture log names the step that failed, not cleanup's last
         if (sl_inject_end(ctx) != 0) {
             ctx->stage = "attach-cleanup-failed";
             return -1;
         }
+        ctx->stage = failed;
     }
     ctx->attached = 0;
     ctx->running = 0;
@@ -518,12 +534,15 @@ static int acquire_stop(sl_inject *ctx, int need_boundary)
         if (!ctx->running) {
             if (ctx->boundary_ready) return 0;
             struct ptrace_lwpinfo info;
-            if (stopped_lwp(ctx, &info)) return -1;
+            if (stopped_lwp(ctx, &info))
+                STOP_FAIL("stop-lwpinfo e%d lwp%d pid%d f%x", errno, info.pl_lwpid, ctx->target_pid, info.pl_flags);
             if (!ctx->thread_pid) ctx->thread_pid = info.pl_lwpid;
             int forward = 0;
             if (!need_boundary || info.pl_lwpid == ctx->thread_pid) {
                 if (!ctx->stop_classified) {
-                    if (preserve_signal(ctx, ctx->last_stop_signal, &info) < 0) return -1;
+                    if (preserve_signal(ctx, ctx->last_stop_signal, &info) < 0)
+                        STOP_FAIL("stop-signal %d f%x code%d", ctx->last_stop_signal, info.pl_flags,
+                                  info.pl_siginfo.si_code);
                     ctx->stop_classified = 1;
                 }
                 // With no owned mutations, detach never writes registers or memory. Any
@@ -532,10 +551,13 @@ static int acquire_stop(sl_inject *ctx, int need_boundary)
                 if (!need_boundary) return 0;
                 struct reg regs;
                 uint8_t opcode[2];
-                if (inj_ptrace(PT_GETREGS, ctx->thread_pid, &regs, 0) || regs.r_rip < 2) return -1;
+                if (inj_ptrace(PT_GETREGS, ctx->thread_pid, &regs, 0) || regs.r_rip < 2)
+                    STOP_FAIL("stop-regs e%d lwp%d", errno, ctx->thread_pid);
+                ctx->last_rip = regs.r_rip;
                 struct ptrace_io_desc io = {.piod_op = PIOD_READ_I, .piod_offs = (void *)(regs.r_rip - 2),
                     .piod_addr = opcode, .piod_len = sizeof opcode};
-                if (inj_ptrace(PT_IO, ctx->target_pid, &io, 0) || io.piod_len != sizeof opcode) return -1;
+                if (inj_ptrace(PT_IO, ctx->target_pid, &io, 0) || io.piod_len != sizeof opcode)
+                    STOP_FAIL("stop-code-read e%d len%zu", errno, (size_t)io.piod_len);
                 if (!((opcode[0] == 0x0f && opcode[1] == 0x05) ||
                       (opcode[0] == 0xcd && opcode[1] == 0x80))) {
                     ctx->boundary_ready = 1; return 0;
@@ -543,6 +565,8 @@ static int acquire_stop(sl_inject *ctx, int need_boundary)
                 // Consuming a payload stop would lose the original kernel siginfo. Hold
                 // instead if a syscall boundary and a payload-bearing signal coincide.
                 if (ctx->detach_signal) { ctx->stage = "signal-syscall-held"; return -1; }
+                snprintf(stop_diag, sizeof stop_diag, "stop-syscall-boundary rip%llx", (unsigned long long)regs.r_rip);
+                ctx->stage = stop_diag; // overwritten by success; left only if the deadline ends it
             } else {
                 // B is untouched. Forward its original signal in-kernel, preserving siginfo.
                 forward = ctx->last_stop_signal;
