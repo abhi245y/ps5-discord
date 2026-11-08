@@ -646,6 +646,11 @@ void bc_rescue_controller(void)
     rp_rescue();
 }
 
+int bc_paced(void)
+{
+    return backend == WIRELESS; // never Remote Play's own video thread: it must not wait
+}
+
 void bc_request_keyframe(void)
 {
     if (backend == WIRELESS)

@@ -211,22 +211,64 @@ static void send_rtp(conn *c, int pt, uint32_t ssrc, uint16_t seq, uint32_t ts, 
         c->dropped++;
 }
 
+// Pacing (2026-11-09): a keyframe is 120-450 KB, 100-370 packets, and was sent in one burst
+// every second; viewers on a Wi-Fi console saw hiccups. Video now leaves in batches of
+// PACE_BATCH packets at no more than PACE_BITS_PER_S, with mlock released between batches so
+// sound keeps flowing. ponytail: fixed cap, the knob to tune if Wi-Fi still drops bursts.
+#define PACE_BATCH 8
+#define PACE_BITS_PER_S 40000000LL
+
 struct video_out {
     conn *c;
     uint32_t ts;
+    unsigned in_batch;
+    int gone;         // the connection ended while mlock was released: send nothing more
+    int64_t next_us;  // when the next batch may leave
 };
+
+static int64_t mono_us(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (int64_t)t.tv_sec * 1000000 + t.tv_nsec / 1000;
+}
 
 static void emit_video(void *user, const uint8_t *payload, size_t len, int marker)
 {
     struct video_out *v = user;
+    if (v->gone)
+        return;
+    if (v->in_batch == PACE_BATCH && bc_paced()) {
+        v->in_batch = 0;
+        conn *c = v->c;
+        pthread_mutex_unlock(&mlock);
+        const int64_t now = mono_us();
+        if (v->next_us > now)
+            usleep((useconds_t)(v->next_us - now));
+        else
+            v->next_us = now; // behind (or first batch): no catch-up burst
+        v->next_us += PACE_BATCH * (RTP_MTU + 40) * 8 * 1000000LL / PACE_BITS_PER_S;
+        pthread_mutex_lock(&mlock);
+        if (media != c || !c->media_ok) { // compared, never dereferenced, once it may be gone
+            v->gone = 1;
+            return;
+        }
+    }
+    v->in_batch++;
     send_rtp(v->c, PT_H264, v->c->video_ssrc, v->c->seq_v++, v->ts, marker, VIDEO_EXT, payload, len);
 }
 
-// mlock held. RFC 6184 (h264_packetize): a NAL up to RTP_MTU whole, a larger one as FU-A.
-static void send_frame_rtp(conn *c, const uint8_t *f, size_t n, uint32_t ts)
+// mlock held (released and retaken between batches). RFC 6184 (h264_packetize): a NAL up to
+// RTP_MTU whole, a larger one as FU-A. Returns 0 if the connection ended meanwhile: then c
+// must not be touched.
+static int send_frame_rtp(conn *c, const uint8_t *f, size_t n, uint32_t ts)
 {
-    struct video_out v = {c, ts};
+    static int64_t next_us; // shared across frames, so back-to-back frames keep the pace (mlock)
+    // Start on a batch boundary so a frame's first packets keep the pace too.
+    struct video_out v = {c, ts, bc_paced() ? PACE_BATCH : 0, 0, next_us};
     h264_packetize(f, n, RTP_MTU, emit_video, &v);
+    next_us = v.next_us;
+    return !v.gone;
 }
 
 static void on_video(const uint8_t *au, size_t n, int keyframe)
@@ -292,10 +334,8 @@ static void on_video(const uint8_t *au, size_t n, int keyframe)
         }
     }
     const uint8_t *send_buf = c->dave_version > 0 ? out : frame;
-    if (send_buf) {
-        send_frame_rtp(c, send_buf, out_len, (uint32_t)((mono_ms() - c->t0) * 90));
+    if (send_buf && send_frame_rtp(c, send_buf, out_len, (uint32_t)((mono_ms() - c->t0) * 90)))
         c->sent_frames++;
-    }
     pthread_mutex_unlock(&mlock);
     free(frame);
     free(out);

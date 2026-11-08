@@ -23,6 +23,7 @@ int bc_holds_controller(void);
 // From a crash handler (async-signal-safe): re-enumerate the controller if Go Live holds it.
 void bc_rescue_controller(void);
 void bc_request_keyframe(void); // a viewer lost the picture
+int bc_paced(void); // video may be paced on its sending thread (the wireless backend)
 // Before Go Live: "replug" when the USB controller should be unplugged and plugged in again
 // first (ds5_usb_replug_state), "unknown" when that cannot be told, else "ok".
 const char *bc_controller(void);
