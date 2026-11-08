@@ -474,6 +474,9 @@ bool engine_set_text_style(void*,void* widget,float size,int weight,const oui::C
     (void)prop_set_int(class_label,label,"HorizontalAlignment",align);
     (void)prop_set_int(class_label,label,"TextTrimming",trim);
     return true;}
+bool engine_set_text_valign(void*,void* widget,int v){
+    void* label=slot_object(static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(widget)));
+    return label&&prop_set_int(class_label,label,"VerticalAlignment",v);} // UI2.VerticalAlignment: Top 0, Bottom 1, Center 2
 bool engine_set_rect(void*,void* widget,const oui::Rect* r){
     void* object=slot_object(static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(widget)));
     void* type=object?fn<void*(*)(void*)>(ObjectClass)(object):nullptr;
@@ -485,7 +488,7 @@ bool engine_set_hold(void*,int ms){
 constexpr oui::Builder::Vt engine_vt{
     engine_add_panel,engine_add_label,engine_set_text,engine_set_visible,engine_set_color,
     engine_screen_w,engine_screen_h,engine_set_capture,engine_send,
-    engine_add_image,engine_set_image,engine_set_tint,engine_set_text_style,engine_set_rect,engine_set_hold,engine_send_text,engine_text_width};
+    engine_add_image,engine_set_image,engine_set_tint,engine_set_text_style,engine_set_rect,engine_set_hold,engine_send_text,engine_text_width,engine_set_text_valign};
 oui::Builder ui_builder(){return oui::Builder{&engine_vt,nullptr};}
 void refresh_text(){
     char text[text_limit];

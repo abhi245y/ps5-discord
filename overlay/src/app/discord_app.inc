@@ -170,7 +170,11 @@ std::uint64_t pend_until=0;
 constexpr std::uint64_t kPendFrames=60*4;
 
 // The panel.
-char timer_shown[16]="\x01"; // the timer's text now (the clock is placed when it changes)
+char timer_shown[16]="\x01"; // the timer's text now
+// The timer's box is as wide as the widest text of its format ("8:88", "88:88", "8:88:88"),
+// measured on a transparent probe once per format: right-aligned in it, the digits' right
+// edge and the clock never move as the seconds change (proportional digits made them jump).
+void* timer_probe=nullptr; int probe_wait=0; float timer_w=0;
 void* dock=nullptr; void* dock_mid=nullptr; void* dock_end=nullptr; void* title=nullptr; void* clock=nullptr; void* timer=nullptr;
 void* row_bg[kRows]={}; void* row_avatar[kRows]={}; void* row_ring[kRows]={}; void* row_name[kRows]={};
 void* row_icon[kRows]={};
@@ -184,6 +188,12 @@ struct MsgRow { void *bg,*avatar,*name,*time,*text,*chip,*loc; } mrow[kMsgRows]=
 void* men_focus=nullptr; void* in_field=nullptr; void* in_text=nullptr; void* in_kb=nullptr;
 void* empty_text=nullptr;
 int rows_layout=0; bool row_mine[kMsgRows]={}; int strip_page=-1,title_mode=1;
+// A tab switch: the page's content is set at once but shown a frame later (PUI trims and lays
+// text out lazily: a fast switch drew the new text in the old layout, past the panel), and the
+// tab highlight slides over (ease-out, 8 frames).
+int reveal=0;           // frames until the new page's content shows
+float pill_x=-1,pill_from=0; int slide_t=99; // the highlight's x now, where the slide began, its frame
+constexpr int kSlide=8;
 // The talking card.
 void* card=nullptr; void* pill=nullptr; void* card_head=nullptr; void* card_call=nullptr;
 void* talk_avatar[kTalkRows]={}; void* talk_ring[kTalkRows]={}; void* talk_name[kTalkRows]={};
@@ -600,6 +610,7 @@ void render_kb(Builder& b){
 // The tabs, Chat and Mentions. The panel's top: the tab strip; under it Chat's header and four
 // messages and the input row, or Mentions' four rows (the same row widgets).
 constexpr float kStripY=46,kSegW=173,kStripH=64;
+constexpr float kTitleY=118,kTitleH=44; // the call page's title line, under the tab strip (the timer shares it)
 constexpr float kHeadY=124,kChatY=208,kChatH=126,kChatStep=136,kInputY=kChatY+kChatStep*kMsgRows+2,kInputH=72;
 constexpr float kMenY=124,kMenH=172,kMenStep=182;
 const char* const kPageNames[kPages]={"Call","Chat","Mentions"};
@@ -625,6 +636,7 @@ void set_key_avatar(Builder& b,void* w,const char* key){
     b.set_image(w,p);
 }
 
+float pill_target(){return kRowX+3+kSegW*page;}
 void render_tabs(Builder& b,bool on){
     show(b,tabs_bg,on);show(b,tab_on,on);
     for(void* w:page_word)show(b,w,on);
@@ -632,7 +644,7 @@ void render_tabs(Builder& b,bool on){
     show(b,tab_badge,badge);show(b,tab_count,badge);
     if(!on)return;
     b.set_rect(tabs_bg,{kRowX,kStripY,kRowW,kStripH});
-    b.set_rect(tab_on,{kRowX+3+kSegW*page,kStripY+4,167,56});
+    if(slide_t>=kSlide){pill_x=pill_target();b.set_rect(tab_on,{pill_x,kStripY+4,167,56});} // else on_tick slides it
     for(int i=0;i<kPages;i++)
         b.set_rect(page_word[i],{kRowX+kSegW*i-(i==2&&badge?22:0),kStripY+14,kSegW,36});
     if(strip_page!=page){
@@ -670,9 +682,9 @@ void layout_rows(Builder& b,int layout){
 
 // The rows' texts and pictures for the open tab; returns where the panel's content ends (0: neither tab).
 float render_pages(Builder& b){
-    const bool shown=open&&!settings;
+    const bool shown=open&&!settings,content=shown&&!reveal;
     render_tabs(b,shown);
-    const bool chat_on=shown&&page==1,men_on=shown&&page==2,wait=chat_on&&loading();
+    const bool chat_on=content&&page==1,men_on=content&&page==2,wait=chat_on&&loading();
     const bool rows_chat=chat_on&&!wait&&chat.kind!='-'&&chat.n>0;
     const bool rows_men=men_on&&chat.nmen>0;
     float end=0;
@@ -750,6 +762,14 @@ float render_pages(Builder& b){
     return end;
 }
 
+// The timer's box ends at the cards' edge; the clock sits before it, centred on the digits.
+void place_timer(Builder& b){
+    const float w=timer_w+8,right=kRowX+kRowW;
+    b.set_rect(timer,{right-w,kTitleY+2,w,kTitleH}); // 2: the smaller font's descent is smaller (baselines meet)
+    // Bottom-aligned: the digits (≈0.7 em tall) end ≈0.23 em over the box bottom; the clock centres on them.
+    b.set_rect(clock,{right-w-34,kTitleY+2+kTitleH-25*0.23f-25*0.35f-13,26,26});
+}
+
 void render(Builder& b){
     const bool in_call=st.state=='c'||st.state=='j';
     char text[128];
@@ -803,15 +823,18 @@ void render(Builder& b){
     const bool call_page=open&&!settings&&page==0;
     if(title_mode!=(settings?0:1)){ // the call page's title shares its line with the timer, under the tabs
         title_mode=settings?0:1;
-        b.set_rect(title,settings?Rect{kDockX+37,kDockY+40,kDockW-74,54}:Rect{kDockX+37,118,kDockW-74-170,44});
+        b.set_rect(title,settings?Rect{kDockX+37,kDockY+40,kDockW-74,54}:Rect{kDockX+37,kTitleY,kDockW-74-170,kTitleH});
         b.set_text_style(title,settings?40:32,1,kWhite);}
     b.set_text(title,settings?"Settings":in_call?st.call:"Not in a call");
-    if(std::strcmp(st.timer,timer_shown)){ // the clock goes right before the text (measured; estimated if not)
+    if(std::strcmp(st.timer,timer_shown)){
+        const bool format=std::strlen(st.timer)!=std::strlen(timer_shown);
         std::snprintf(timer_shown,sizeof timer_shown,"%s",st.timer);b.set_text(timer,st.timer);
-        float w=b.text_width(timer);if(w<=0)w=14.5f*float(std::strlen(st.timer));
-        // Its baseline on the title's: the smaller font sits higher in the same box (2 px), so the box goes down.
-        b.set_rect(timer,{kRowX+kRowW-w,120,w+8,44}); // a right-aligned label pads its end: left-aligned, placed
-        b.set_rect(clock,{kRowX+kRowW-w-34,125,26,26});} // 123: level with the digits PUI draws ~4 px above their box's middle (two console photos)
+        if(format){ // a new format: its widest text on the probe, measured two frames on (layout first)
+            char widest[16];int i=0;for(;st.timer[i]&&i<15;i++)widest[i]=st.timer[i]==':'?':':'8';widest[i]=0;
+            b.set_text(timer_probe,widest);probe_wait=2;
+            timer_w=0;for(const char* c=st.timer;*c;c++)timer_w+=*c==':'?7:14; // until measured: 25 px digits
+            place_timer(b);}}
+    show(b,timer_probe,call_page&&in_call);
     for(int i=0;i<kRows;i++){
         const bool used=in_call&&i<st.count;
         if(used){
@@ -867,7 +890,7 @@ void render(Builder& b){
 
 void reset(){
     st=State{};chat.n=chat.nmen=chat.unseen=0;chat.kind='-';chat.chan[0]=chat.title[0]=chat.sub[0]=chat.icon[0]=chat.focus[0]=0;
-    page=scroll=men_sel=men_top=0;men_id[0]=last_focus[0]=pend_chan[0]=0;pend_until=0;
+    page=scroll=men_sel=men_top=0;men_id[0]=last_focus[0]=pend_chan[0]=0;pend_until=0;reveal=0;pill_x=-1;slide_t=99;
     tabs_bg=tab_on=tab_badge=tab_count=head_icon=head_title=head_sub=men_focus=in_field=in_text=in_kb=empty_text=nullptr;
     for(void*& w:page_word)w=nullptr;
     for(MsgRow& r:mrow)r=MsgRow{};
@@ -883,7 +906,7 @@ void reset(){
     nitro_note[0]=nitro_note[1]=nullptr;armed=-1;
     kb=false;kb_text[0]=0;kb_len=kb_chars=kb_caret=0;kb_shift=kb_page=0;kb_row=1;kb_col=0;kb_x=0.5f;kb_sx=kb_sy=0;
     kb_field=kb_input=kb_pages=kb_hl=kb_measure=kb_bar=nullptr;kb_blink=kb_hold=0;kb_shown[0]=0;kb_style=-1;
-    dock=dock_mid=dock_end=title=clock=timer=tile_sub=tile_focus=rule=nullptr;std::snprintf(timer_shown,sizeof timer_shown,"\x01");
+    dock=dock_mid=dock_end=title=clock=timer=timer_probe=tile_sub=tile_focus=rule=nullptr;std::snprintf(timer_shown,sizeof timer_shown,"\x01");probe_wait=0;timer_w=0;
     card=pill=card_head=card_call=you_ring=you_mic=you_text=card_rule=card_hint=nullptr;
     for(int i=0;i<kRows;i++)row_bg[i]=row_avatar[i]=row_ring[i]=row_name[i]=row_icon[i]=nullptr;
     for(int i=0;i<kTiles;i++)tile[i]=tile_icon[i]=tile_label[i]=nullptr;
@@ -896,10 +919,12 @@ bool build(Builder& b){
     dock=image(b,{kDockX,kDockY,kDockW,40},"dock_top");
     dock_mid=image(b,{kDockX,kDockY+40,kDockW,kDockH-80},"dock_mid");
     dock_end=image(b,{kDockX,kDockY+kDockH-40,kDockW,40},"dock_bottom");
-    title=label(b,{kDockX+37,118,kDockW-74-170,44},32,1,kWhite); // the call page's: under the tabs, with the timer at its right
-    clock=image(b,{kDockX+kDockW-37-34-110,125,26,26},"clock");
+    title=label(b,{kDockX+37,kTitleY,kDockW-74-170,kTitleH},32,1,kWhite); // the call page's: under the tabs, with the timer at its right
+    clock=image(b,{kRowX+kRowW-130-34,kTitleY,26,26},"clock");
     if(clock)b.set_tint(clock,kDim);
-    timer=label(b,{kRowX+kRowW-130,120,130,44},25,3,kDim); // placed by its width: ends at the cards' edge
+    timer=label(b,{kRowX+kRowW-130,kTitleY+2,130,kTitleH},25,3,kDim,2); // right-aligned; placed by place_timer
+    timer_probe=label(b,{kRowX,kTitleY,300,kTitleH},25,3,Color{1,1,1,0}); // inkless: measures the widest timer text
+    b.set_text_valign(title,1);b.set_text_valign(timer,1); // on the same baseline (box bottoms 2 px apart)
     for(int i=0;i<kRows;i++){
         const float y=kRowY+kRowStep*i;
         row_bg[i]=image(b,{kRowX,y,kRowW,kRowH},"row");
@@ -1150,6 +1175,7 @@ void on_gesture(Gesture,Builder& b){
 
 // Switches the tab. Mentions seen: the badge goes and the core is told.
 void set_page(int to,Builder& b){
+    if(to!=page){reveal=2;pill_from=pill_x<0?pill_target():pill_x;slide_t=0;}
     page=to;
     if(page==2&&chat.unseen>0){chat.unseen=0;b.send("seen");}
     render(b);
@@ -1267,6 +1293,14 @@ void on_chat(const char* feed,Builder& b){
 
 void on_tick(std::uint64_t frame,Builder& b){
     frame_now=frame;
+    if(open&&slide_t<kSlide){ // the tab highlight slides to its tab
+        const float t=float(++slide_t)/kSlide,e=1-(1-t)*(1-t);
+        pill_x=pill_from+(pill_target()-pill_from)*e;
+        b.set_rect(tab_on,{pill_x,kStripY+4,167,56});}
+    if(reveal&&open&&!--reveal)render(b); // the content, laid out by now
+    if(probe_wait&&open&&!--probe_wait){ // the widest timer text, laid out by now
+        const float w=b.text_width(timer_probe);
+        if(w>0){timer_w=w;place_timer(b);}}
     if(pend_chan[0]&&frame_now>=pend_until){pend_chan[0]=0;if(open)render(b);} // the chat never came: what the core shows
     if(kb&&open&&kb_bar){ // the caret blinks (0.5 s on, 0.5 s off) while no key is pressed
         if(++kb_blink>=30&&kb_blink%30==0)show(b,kb_bar,(kb_blink/30)%2==0);}

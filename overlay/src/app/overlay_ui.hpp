@@ -61,6 +61,9 @@ public:
         return vt&&vt->send_text_fn&&vt->send_text_fn(ctx,utf8,channel);}
     // A label's laid-out text width in px; -1 when the engine cannot measure it.
     float text_width(void* label){return vt&&vt->text_width_fn?vt->text_width_fn(ctx,label):-1.f;}
+    // Where a label's text sits in its box: 0 top (PUI's default), 1 bottom, 2 centre. Two
+    // labels with the same box bottom and 1 share a baseline (less their fonts' descent).
+    bool set_text_valign(void* label,int v){return vt&&vt->set_text_valign_fn&&vt->set_text_valign_fn(ctx,label,v);}
     float screen_width() const{return vt&&vt->screen_w_fn?vt->screen_w_fn(ctx):1920.f;}
     float screen_height() const{return vt&&vt->screen_h_fn?vt->screen_h_fn(ctx):1080.f;}
 
@@ -83,6 +86,7 @@ public:
         bool(*set_hold_fn)(void*,int);
         bool(*send_text_fn)(void*,const char*,const char*);
         float(*text_width_fn)(void*,void*);
+        bool(*set_text_valign_fn)(void*,void*,int);
     };
     const Vt* vt=nullptr;
     void* ctx=nullptr;

@@ -14,6 +14,7 @@ struct Widget {
     bool label=false, image=false, visible=true;
     char text[2200]="", path[160]="";
     oui::Rect r{};
+    int valign=0;
 };
 Widget widgets[192];
 int used=0;
@@ -44,10 +45,11 @@ bool send(void*,const char* t){std::snprintf(sent,sizeof sent,"%s",t);return tru
 char sent_text[9000]="",sent_channel[32]="";int sent_texts=0;
 bool send_text(void*,const char* t,const char* c){std::snprintf(sent_text,sizeof sent_text,"%s",t);std::snprintf(sent_channel,sizeof sent_channel,"%s",c);++sent_texts;return true;}
 float text_width(void*,void* l){return 15.f*float(std::strlen(static_cast<Widget*>(l)->text));} // 15 px a byte
+bool set_valign(void*,void* l,int v){static_cast<Widget*>(l)->valign=v;return true;}
 float sw(void*){return 1920;}
 float sh(void*){return 1080;}
 const oui::Builder::Vt vt{add_panel,add_label,set_text,set_visible,set_color,sw,sh,set_capture,send,
-                          add_image,set_image,set_tint,set_style,set_rect,set_hold,send_text,text_width};
+                          add_image,set_image,set_tint,set_style,set_rect,set_hold,send_text,text_width,set_valign};
 
 Widget* w(void* p){return static_cast<Widget*>(p);}
 bool shows(const char* text){
@@ -62,7 +64,7 @@ int main(){
     oui::Builder b{&vt,nullptr};
     reset();
     assert(build(b));
-    assert(used==169);
+    assert(used==170);
     for(int i=0;i<used;i++)assert(!widgets[i].visible); // nothing before the core says anything
 
     // In a call, two talking, the card on: their avatars and names, "You" under them.
@@ -353,7 +355,7 @@ int main(){
     std::uint64_t frame=20000;
     on_tick(frame,b);on_text(kCall,b); // (a quiet stretch: the core's beat is stale after the long jump)
     auto step=[&](int n){frame+=std::uint64_t(n);on_tick(frame,b);on_text(kCall,b);};
-    auto padx=[&](std::uint32_t d){on_pad(d,0,0,b);};
+    auto padx=[&](std::uint32_t d){on_pad(d,0,0,b);for(int i=0;i<kSlide;i++)on_tick(++frame,b);}; // a switch: its page shows after a frame, the highlight slides 8
     char feedbuf[9000];
     auto chat_feed=[&](const char* head,const char* body){std::snprintf(feedbuf,sizeof feedbuf,"%s%s",head,body);on_chat(feedbuf,b);};
     const char* kHead="H\tc\t555\t#raid-night\tNight Shift\t\t0\t\n";
@@ -374,6 +376,29 @@ int main(){
     assert(!strip_on()&&!w(head_title)->visible);
     on_gesture(oui::Gesture::Chord,b);
     assert(strip_on()&&page==0&&shows("Call")&&shows("Chat")&&shows("Mentions")&&w(tab_on)->r.x==1347+3);
+    // The timer: a fixed box as wide as its format's widest text (probe measured two frames on),
+    // right-aligned, ending at the cards' edge; the seconds change nothing; both on one baseline.
+    assert(w(title)->valign==1&&w(timer)->valign==1&&w(timer)->r.y==kTitleY+2&&w(title)->r.y==kTitleY);
+    assert(!std::strcmp(w(timer_probe)->text,"8:88")&&w(timer)->r.x+w(timer)->r.w==kRowX+kRowW);
+    for(int i=0;i<3;i++)on_tick(++frame,b); // the probe is read two frames after the panel opened
+    assert(w(timer)->r.w==15*4+8&&w(clock)->r.x==w(timer)->r.x-34); // 15 px a byte in this fake
+    {const float tx=w(timer)->r.x,cx=w(clock)->r.x,cy=w(clock)->r.y;
+     on_text("3|c|o|1||0|Raid Night|1:01|720p|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~t",b);
+     assert(!std::strcmp(w(timer)->text,"1:01")&&w(timer)->r.x==tx&&w(clock)->r.x==cx&&w(clock)->r.y==cy);
+     on_text("3|c|o|1||0|Raid Night|10:00|720p|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~t",b); // a new format
+     assert(!std::strcmp(w(timer_probe)->text,"88:88"));
+     for(int i=0;i<3;i++)on_tick(++frame,b);
+     assert(w(timer)->r.w==15*5+8&&w(timer)->r.x+w(timer)->r.w==kRowX+kRowW&&w(clock)->r.x<cx);
+     assert(cy>kTitleY&&cy+26<kTitleY+2+kTitleH); // the clock inside the title line
+     on_text(kCall,b);for(int i=0;i<3;i++)on_tick(++frame,b);assert(w(timer)->r.x==tx);}
+    // A tab switch: the page's rows show a frame later; the highlight slides over 8 frames.
+    on_pad(0x800,0,0,b);assert(page==1&&!w(head_title)->visible&&w(tab_on)->r.x==1347+3);
+    on_tick(++frame,b);assert(!w(head_title)->visible&&w(tab_on)->r.x>1347+3&&w(tab_on)->r.x<1347+3+173);
+    on_tick(++frame,b);assert(w(head_title)->visible);
+    for(int i=0;i<6;i++)on_tick(++frame,b);assert(w(tab_on)->r.x==1347+3+173);
+    on_pad(0x400,0,0,b);on_pad(0x800,0,0,b);assert(page==1&&!w(head_title)->visible); // fast: the last one shows
+    for(int i=0;i<kSlide;i++)on_tick(++frame,b);assert(w(head_title)->visible&&w(tab_on)->r.x==1347+3+173);
+    on_pad(0x400,0,0,b);for(int i=0;i<kSlide;i++)on_tick(++frame,b);assert(page==0&&w(tile[0])->visible);
     assert(!w(head_title)->visible&&!w(mrow[0].bg)->visible&&w(tile[0])->visible&&shows("Raid Night"));
     // L1/R1 switch (wrapping); a held button's repeats do not.
     padx(0x800);assert(page==1&&w(tab_on)->r.x==1347+3+173&&w(head_title)->visible&&!w(tile[0])->visible&&!w(row_bg[0])->visible);

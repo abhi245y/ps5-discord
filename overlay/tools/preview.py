@@ -51,6 +51,8 @@ def render(txt):
         elif kind == "l" and text:
             font = ImageFont.truetype(BOLD if weight in (1, 3) else REGULAR, max(8, int(size)))
             col = tuple(int(round(v * 255)) for v in map(float, ink.split(",")))
+            if col[3] == 0:  # inkless labels only measure text (the console draws nothing)
+                continue
             d = ImageDraw.Draw(screen)
             tw = d.textlength(text, font=font)
             while tw > box[2] and len(text) > 1:  # PUI ends long text in an ellipsis

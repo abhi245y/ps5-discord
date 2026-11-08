@@ -1197,6 +1197,13 @@ static void *feed(void *arg)
                 overlay_reload();
         }
         compose(line, sizeof line, &live_since);
+        {
+            static char state_was;
+            if (line[2] != state_was) { // where a join's seconds go: the app logs its request, this its arrival
+                state_was = line[2];
+                LOG("overlay: call state %c (line %.40s)", line[2], line);
+            }
+        }
         chat_tick();
         if (!quitting && strcmp(line, last) != 0 && write_line(line) == 0)
             snprintf(last, sizeof last, "%s", line);
