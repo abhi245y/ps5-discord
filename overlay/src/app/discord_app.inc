@@ -769,9 +769,10 @@ float render_pages(Builder& b){
 // The timer's box ends at the cards' edge; the clock sits before it, centred on the digits.
 void place_timer(Builder& b){
     const float w=timer_w+8,right=kRowX+kRowW;
-    b.set_rect(timer,{right-w,kTitleY+2,w,kTitleH}); // 2: the smaller font's descent is smaller (baselines meet)
-    // Bottom-aligned: the digits (≈0.7 em tall) end ≈0.23 em over the box bottom; the clock centres on them.
-    b.set_rect(clock,{right-w-34,kTitleY+2+kTitleH-25*0.23f-25*0.35f-13,26,26});
+    // Measured on the console (a straight-on photo, the 132 px card as the ruler): at +2 the
+    // digits' baseline was 10 px above the title's, the clock's middle 12 px below the digits'.
+    b.set_rect(timer,{right-w,kTitleY+12,w,kTitleH});
+    b.set_rect(clock,{right-w-34,kTitleY+16,26,26});
 }
 
 void render(Builder& b){
@@ -927,7 +928,7 @@ bool build(Builder& b){
     title=label(b,{kDockX+37,kTitleY,kDockW-74-170,kTitleH},32,1,kWhite); // the call page's: under the tabs, with the timer at its right
     clock=image(b,{kRowX+kRowW-130-34,kTitleY,26,26},"clock");
     if(clock)b.set_tint(clock,kDim);
-    timer=label(b,{kRowX+kRowW-130,kTitleY+2,130,kTitleH},25,3,kDim,2); // right-aligned; placed by place_timer
+    timer=label(b,{kRowX+kRowW-130,kTitleY+12,130,kTitleH},25,3,kDim,2); // right-aligned; placed by place_timer
     timer_probe=label(b,{kRowX,kTitleY,300,kTitleH},25,3,Color{1,1,1,0}); // inkless: measures the widest timer text
     b.set_text_valign(timer,1); // on the title's baseline (the title's is set with its mode; box bottoms 2 px apart)
     for(int i=0;i<kRows;i++){

@@ -378,7 +378,7 @@ int main(){
     assert(strip_on()&&page==0&&shows("Call")&&shows("Chat")&&shows("Mentions")&&w(tab_on)->r.x==1347+3);
     // The timer: a fixed box as wide as its format's widest text (probe measured two frames on),
     // right-aligned, ending at the cards' edge; the seconds change nothing; both on one baseline.
-    assert(w(title)->valign==1&&w(timer)->valign==1&&w(timer)->r.y==kTitleY+2&&w(title)->r.y==kTitleY);
+    assert(w(title)->valign==1&&w(timer)->valign==1&&w(timer)->r.y==kTitleY+12&&w(title)->r.y==kTitleY);
     assert(!std::strcmp(w(timer_probe)->text,"8:88")&&w(timer)->r.x+w(timer)->r.w==kRowX+kRowW);
     for(int i=0;i<3;i++)on_tick(++frame,b); // the probe is read two frames after the panel opened
     assert(w(timer)->r.w==15*4+8&&w(clock)->r.x==w(timer)->r.x-34); // 15 px a byte in this fake
@@ -389,7 +389,7 @@ int main(){
      assert(!std::strcmp(w(timer_probe)->text,"88:88"));
      for(int i=0;i<3;i++)on_tick(++frame,b);
      assert(w(timer)->r.w==15*5+8&&w(timer)->r.x+w(timer)->r.w==kRowX+kRowW&&w(clock)->r.x<cx);
-     assert(cy>kTitleY&&cy+26<kTitleY+2+kTitleH); // the clock inside the title line
+     assert(cy>kTitleY&&cy+26<kTitleY+12+kTitleH); // the clock inside the title line
      on_text(kCall,b);for(int i=0;i<3;i++)on_tick(++frame,b);assert(w(timer)->r.x==tx);}
     // A tab switch: the page's rows show a frame later; the highlight slides over 8 frames.
     on_pad(0x800,0,0,b);assert(page==1&&!w(head_title)->visible&&w(tab_on)->r.x==1347+3);
