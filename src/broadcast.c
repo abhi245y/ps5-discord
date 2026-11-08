@@ -129,12 +129,13 @@ void bc_set_usb_probe(int (*probe)(void))
     usb_at = 0; // look again
 }
 
-// Auto goes by the controller: on USB, Remote Play (it takes the pad over, as always);
-// otherwise the wireless capture, which leaves the pad alone.
+// Auto goes by the controller: on USB, Remote Play (it takes the pad over, as always) when it
+// is paired (else it could not run: the wireless capture does); with no pad on USB, the wireless
+// capture, which leaves the controller alone. The prefs can force either.
 static int choose_backend(void)
 {
     const int pref = prefs_get("golive_backend");
-    return pref == 1 ? WIRELESS : pref == 2 ? REMOTE_PLAY : usb_pad() ? REMOTE_PLAY : WIRELESS;
+    return pref == 1 ? WIRELESS : pref == 2 ? REMOTE_PLAY : usb_pad() && rp_used() >= 0 ? REMOTE_PLAY : WIRELESS;
 }
 
 int bc_needs_pairing(void)

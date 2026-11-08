@@ -387,6 +387,12 @@ static void *helper_thread(void *arg)
     return r;
 }
 
+static int launch_fails(void)
+{
+    launches++;
+    return -1;
+}
+
 static int launch(void)
 {
     launches++;
@@ -658,6 +664,18 @@ int main(void)
     capture_set_timeouts(3000, 2500);
     cases++;
 
+    // The helper is not in the app's assets (the launcher fails every time): an error that says so.
+    reset(H_NONE);
+    capture_set_timeouts(700, 2500);
+    capture_set_launcher(launch_fails);
+    assert(bc_start() == 0);
+    WAIT(!strcmp(bc_state(), "error"), 6000);
+    assert(!strcmp(bc_error(), "The capture helper is missing."));
+    check_stopped_clean();
+    capture_set_launcher(launch);
+    capture_set_timeouts(3000, 2500);
+    cases++;
+
     // The call ends while live: Go Live ends with it, as asked, no error.
     reset(H_NORMAL);
     assert(bc_start() == 0);
@@ -708,10 +726,10 @@ int main(void)
     assert(!bc_needs_pairing() && !strcmp(bc_controller(), "ok")); // auto, no USB pad: wireless
     usb_on = 1;
     bc_set_usb_probe(usb_probe);
-    assert(bc_needs_pairing()); // auto, pad on USB: Remote Play
-    reset(H_NORMAL);
-    assert(bc_start() == -1 && !strcmp(bc_state(), "error") && strstr(bc_error(), "not paired") && launches == 0);
+    assert(!bc_needs_pairing()); // auto, pad on USB but Remote Play not paired: it could not run, so wireless
     rp_paired = 5;
+    assert(bc_needs_pairing()); // auto, pad on USB, paired: Remote Play
+    reset(H_NORMAL);
     assert(bc_start() == 0);
     WAIT(!strcmp(bc_state(), "error"), 3000);
     assert(!strcmp(bc_error(), "Broadcasting needs the console.") && launches == 0); // Remote Play's run()
@@ -725,7 +743,7 @@ int main(void)
     assert(launches == 1 && bc_holds_controller() == 0);
     bc_stop();
     check_stopped_clean();
-    pref_backend = 2; // Remote Play forced without a pad on USB
+    pref_backend = 2; // Remote Play forced without a pad on USB or a pairing: its own error
     usb_on = 0;
     bc_set_usb_probe(usb_probe);
     assert(bc_needs_pairing());
@@ -737,12 +755,14 @@ int main(void)
     assert(bc_start() == 0);
     WAIT(!strcmp(bc_state(), "live"), 5000);
     usb_on = 1;
+    rp_paired = 5; // now Auto would pick Remote Play, but this Go Live is running wireless
     bc_set_usb_probe(usb_probe);
     assert(!bc_needs_pairing() && !strcmp(bc_controller(), "ok"));
     assert(bc_start() == 0 && launches == 1); // a repeat while running is the same Go Live
     bc_stop();
     check_stopped_clean();
     usb_on = 0;
+    rp_paired = -1;
     cases += 5;
 
     printf("PASS: wireless backend: %d scenarios against a replayed console recording\n", cases);

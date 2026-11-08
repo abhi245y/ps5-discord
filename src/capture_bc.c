@@ -39,7 +39,8 @@ static capture_launcher launcher = send_helper; // tests (and the host) set thei
 static capture_launcher launcher;
 #endif
 static const char *conn_file = CAP_CONN_FILE;
-static int connect_timeout_ms = 20000, stop_timeout_ms = 10000;
+// quit waits 10 s for Go Live to end (main.c end_calls): the helper's cleanup is given 8 of them
+static int connect_timeout_ms = 20000, stop_timeout_ms = 8000;
 
 static uint64_t mono_ms(void)
 {
@@ -258,7 +259,7 @@ const char *capture_run(const capture_params *p)
     struct audio audio;
     audio_start(&audio, p); // opens in the background while the helper loads
     const char *result = "Capture did not start.";
-    int fd = -1, launches = 0;
+    int fd = -1, launches = 0, launched_ok = 0;
     uint64_t begin = mono_ms(), next_launch = begin;
     unsigned rejects = 0;
     // The helper: launched now and again if it has not called after 8 s (one still cleaning up
@@ -269,12 +270,17 @@ const char *capture_run(const capture_params *p)
             result = NULL;
             goto out;
         }
-        if (now - begin >= (uint64_t)connect_timeout_ms || rejects >= LISTEN_MAX_REJECTS)
+        if (now - begin >= (uint64_t)connect_timeout_ms || rejects >= LISTEN_MAX_REJECTS) {
+            if (!launched_ok && launches)
+                result = "The capture helper is missing."; // not in the app's assets, or elfldr is down
             goto out;
+        }
         if (launches < 3 && now >= next_launch) {
             launches++;
             next_launch = now + 8000;
-            if (launcher && launcher() != 0)
+            if (launcher && launcher() == 0)
+                launched_ok++;
+            else
                 LOG("capture: the helper could not be sent to the console");
         }
         struct pollfd pf = {.fd = listener, .events = POLLIN};

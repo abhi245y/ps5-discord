@@ -33,7 +33,7 @@
 #include "capture_proto.h"
 #include "inject.h"
 #ifdef SL_PS5
-#include <ps5/kernel.h>
+int sceKernelSetProcessName(const char *name); // the SDK's kernel header does not declare it
 #endif
 
 #ifndef CAP_DIR
