@@ -555,23 +555,32 @@ static enum session_end capture_session(const struct start_req *req, int may_rec
     c.startup_done = 1;
     uint64_t last_picture = segment.begin_ms;
     uint32_t observed_mode = c.output_mode;
+    unsigned mode_misses = 0;
     while (!quit && !net_dead && !stop_requested) {
         net_poll(NULL, &(int){1}, 0);
         if (net_dead || stop_requested) break;
         if (now_ms() >= next_mode) {
             uint32_t current = 0;
-            if (read_mode(&c, &current)) goto done;
+            int mode_ok = read_mode(&c, &current) == 0;
             next_mode = now_ms() + MODE_POLL_MS;
-            if (current == 0x40 && !ALLOW_MODE_40) {
-                segment.refused_mode = 1;
-                why("Go Live can't capture while the console outputs 120 Hz.");
-                goto done;
-            }
-            // Transitions may precede the validated ReadVideo error. Keep reading so the
-            // existing one-recovery path can run; only 0x40 is refused immediately.
-            if (current != observed_mode) {
-                log_line("output mode changed 0x%x -> 0x%x; waiting for picture progress", observed_mode, current);
-                observed_mode = current;
+            if (!mode_ok) {
+                if (c.failed || c.ctx.quarantined || ++mode_misses >= 3) {
+                    why("The display mode could not be checked."); goto done;
+                }
+                log_line("output mode query missed (%u of 3); picture reads continue", mode_misses);
+            } else {
+                mode_misses = 0;
+                if (current == 0x40 && !ALLOW_MODE_40) {
+                    segment.refused_mode = 1;
+                    why("Go Live can't capture while the console outputs 120 Hz.");
+                    goto done;
+                }
+                // Transitions may precede the validated ReadVideo error. Keep reading so the
+                // existing one-recovery path can run; only 0x40 is refused immediately.
+                if (current != observed_mode) {
+                    log_line("output mode changed 0x%x -> 0x%x; waiting for picture progress", observed_mode, current);
+                    observed_mode = current;
+                }
             }
         }
         if (key_requested) {
@@ -591,7 +600,7 @@ static enum session_end capture_session(const struct start_req *req, int may_rec
             if (n != SL_CALL_ERROR && (int32_t)n < 0) segment.api_error = (uint32_t)n;
             // Only the observed API error is a recovery candidate. Oversize frames, unknown
             // errors and quarantined transport never are.
-            if (may_recover && segment.api_error == 0x81950009u && !c.ctx.quarantined) {
+            if (may_recover && segment.frames && segment.api_error == 0x81950009u && !c.ctx.quarantined) {
                 net_state(CAP_RECOVERING, "");
                 (void)wait_stable_mode(&c, &segment.stable_mode, MODE_WAIT_MS);
             }
@@ -628,6 +637,8 @@ done:
     cleanup(&c);
     segment.final_mode = c.final_mode;
     segment.cleanup_ok = !c.cleanup_failed && !c.ctx.quarantined;
+    if (!segment.cleanup_ok)
+        snprintf(segment.why, sizeof segment.why, "Capture cleanup failed. The console may need a restart.");
     segment.transport_failed = c.ctx.quarantined;
     // A stop (the core's, or its disappearance, or ours) is the normal end whatever stopped
     // the setup; only a failed cleanup makes it a failure.

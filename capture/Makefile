@@ -18,7 +18,7 @@ build/helper-test: tests/helper_test.c src/helper.c src/h264_timing.c src/h264_t
 	@mkdir -p build
 	$(CC) $(CFLAGS) -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread -o $@ tests/helper_test.c src/h264_timing.c
 
-build/h264-test: tests/h264_test.c src/h264_timing.c src/h264_timing.h
+build/h264-test: tests/h264_test.c src/h264_timing.c src/h264_timing.h ../tests/data/capture-1080p60-headers.h264
 	@mkdir -p build
 	$(CC) $(CFLAGS) -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -o $@ tests/h264_test.c src/h264_timing.c
 

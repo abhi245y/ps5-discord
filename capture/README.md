@@ -33,17 +33,19 @@ only file shared with the core is `src/capture_proto.h` (MIT).
 * Socket closed either way (or `CAP_STOP`): Stop, Close, free, ClearCallback, Terminate, scratch
   restored, detach, exit. Setup polls STOP/EOF between calls and header retries and has a shared
   absolute startup deadline. A successful OpenVideo with an unreadable handle reports uncertain
-  ownership and failed cleanup instead of claiming success.
+  ownership and failed cleanup instead of claiming success. Cleanup errors are reported to the
+  core even after Stop, so the app can warn that a console restart may be needed.
 * Recovery (RECOVERY.md of the PoC): only video-read error 0x81950009; poll the output mode until
   three equal nonzero readings (100 ms, 5 s), clean teardown, one fresh session, SPS/PPS read
   again, IDR requested. A second failure ends with an error state.
 * Mode guard: output mode 0x40 (the one Glint treats as 120 Hz) is refused at startup and polled
-  once a second while streaming. Other mode changes are logged while reads continue, preserving
+  once a second while streaming. Up to two API query misses are tolerated; transport failures
+  remain fatal. Other mode changes are logged while reads continue, preserving
   the validated recovery path when a transition precedes ReadVideo failure.
 * The encoder's SPS VUI may advertise twice the capture rate. `src/h264_timing.c` normalizes
   existing progressive timing to 30 or 60 fps, including SPS repeated in access units. Other
   NAL bytes stay unchanged. Malformed SPS, missing timing and HRD are refused explicitly.
-  Saved HDR-TV recordings decode to identical images before/after normalization: 242 frames
+  Tests include SPS/PPS fixtures for both validated profiles. Saved HDR-TV recordings decode to identical images before/after normalization: 242 frames
   at 720p30 and 482 at 1080p60, checked with FFmpeg/OpenH264. Decoded output uses 30/60 fps;
   Fedora's parser-only `ffprobe r_frame_rate` reports twice that even for FFmpeg's reference
   `h264_metadata=tick_rate=60:fixed_frame_rate_flag=1` output. Live RTP/Discord negotiation
@@ -61,4 +63,6 @@ only file shared with the core is `src/capture_proto.h` (MIT).
 Root `make all` builds this helper, root `make test` runs its sanitizer suites, and app packaging
 rebuilds it and requires both ELF and license. Root `make clean` removes its build output too.
 `make deploy` still sends only the core; update the packaged app assets to update the helper.
-All verification runs on arlp-pc; nothing in these commands deploys to the console.
+All verification runs on arlp-pc; nothing in these commands deploys to the console. Hardware
+acceptance still includes a 1080p60 session, a 30-minute mode-polling soak, a display-mode change,
+Stop followed by restart, and confirmation that elfldr discards a reset/truncated upload.

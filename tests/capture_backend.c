@@ -201,7 +201,7 @@ static void load_sample(void)
 
 enum mode { H_NORMAL, H_BAD_TOKEN_FIRST, H_RECOVER, H_DIES, H_ERROR, H_GARBAGE, H_NONE, H_WRONG_PROFILE, H_DEAF, H_FRAGMENTED, H_COALESCED, H_FLOOD, H_SLOW_HELLO,
             H_SILENT, H_PARTIAL, H_NO_IDR, H_NO_PROGRESS, H_RECOVER_HANG,
-            H_EOF_HELLO, H_EOF_PROFILE, H_EOF_HEADERS, H_SHORT_COMMANDS, H_COMMAND_STALL };
+            H_EOF_HELLO, H_EOF_PROFILE, H_EOF_HEADERS, H_SHORT_COMMANDS, H_COMMAND_STALL, H_STOP_ERROR, H_RECOVER_ERROR, H_BUSY_FIRST, H_LAUNCH_DELAY };
 static enum mode mode;
 static _Atomic int key_partly_sent, finish_key;
 static unsigned command_writes;
@@ -405,6 +405,7 @@ static void *helper_body(void *arg)
                 hs.stops++;
                 if (mode == H_DEAF)
                     continue; // never answers: the core must give up on it
+                if (mode == H_STOP_ERROR) send_state(fd, CAP_ERROR, "Capture cleanup failed. The console may need a restart.");
                 usleep(200000); // cleanup takes a moment
                 close(fd);
                 return NULL;
@@ -417,6 +418,11 @@ static void *helper_body(void *arg)
         }
         if (mode == H_NO_IDR || (mode == H_NO_PROGRESS && next >= 4)) {
             usleep(1000); continue;
+        }
+        if (mode == H_RECOVER_ERROR && next >= 4) {
+            send_state(fd, CAP_RECOVERING, "");
+            send_state(fd, CAP_ERROR, "The encoder could not reopen.");
+            usleep(20000); close(fd); return NULL;
         }
         if (mode == H_RECOVER_HANG && next >= 4) {
             send_state(fd, CAP_RECOVERING, "");
@@ -474,13 +480,15 @@ static void *helper_thread(void *arg)
 static int launch_fails(void)
 {
     launches++;
-    return -1;
+    return -2;
 }
+
+static int launch_io_fails(void) { launches++; return -1; }
 
 static int launch(void)
 {
     launches++;
-    if (mode == H_NONE)
+    if (mode == H_NONE || (mode == H_BUSY_FIRST && launches == 1))
         return 0;
     struct stat st;
     assert(stat(conn_path, &st) == 0);
@@ -489,6 +497,7 @@ static int launch(void)
     helpers_alive++;
     assert(pthread_create(&t, NULL, helper_thread, NULL) == 0);
     pthread_detach(t);
+    if (mode == H_LAUNCH_DELAY) usleep(700000);
     return 0;
 }
 
@@ -732,6 +741,25 @@ int main(void)
     assert(strstr(bc_error(), "receive a command"));
     cases++;
 
+    reset(H_STOP_ERROR);
+    assert(!bc_start()); WAIT(!strcmp(bc_state(), "live"), 5000);
+    bc_stop(); check_stopped_clean();
+    assert(!strcmp(bc_state(), "error") && strstr(bc_error(), "cleanup failed")); cases++;
+
+    reset(H_RECOVER_ERROR);
+    assert(!bc_start()); WAIT(!strcmp(bc_state(), "error"), 5000);
+    assert(!strcmp(bc_error(), "The encoder could not reopen.")); check_stopped_clean(); cases++;
+
+    reset(H_LAUNCH_DELAY);
+    assert(!bc_start()); WAIT(!strcmp(bc_state(), "live"), 5000);
+    bc_stop(); check_stopped_clean(); cases++;
+
+    // A prior helper still owns the lock: a later scheduled launch succeeds.
+    reset(H_BUSY_FIRST); capture_set_timeouts(12000, 2500);
+    assert(!bc_start()); WAIT(!strcmp(bc_state(), "live"), 11000);
+    assert(launches == 2); bc_stop(); check_stopped_clean(); cases++;
+    capture_set_timeouts(3000, 2500);
+
     // A game or display switch: the helper reports recovering, a gap, then a fresh session with its
     // own SPS/PPS and an IDR. The core stays "live" (the Discord stream holds) through it and asks
     // for a keyframe once the picture is back.
@@ -814,6 +842,11 @@ int main(void)
     capture_set_launcher(launch);
     capture_set_timeouts(3000, 2500);
     cases++;
+
+    reset(H_NONE); capture_set_timeouts(700, 2500); capture_set_launcher(launch_io_fails);
+    assert(!bc_start()); WAIT(!strcmp(bc_state(), "error"), 3000);
+    assert(!strcmp(bc_error(), "The capture helper could not be loaded.")); check_stopped_clean(); cases++;
+    capture_set_launcher(launch); capture_set_timeouts(3000, 2500);
 
     // The call ends while live: Go Live ends with it, as asked, no error.
     reset(H_NORMAL);

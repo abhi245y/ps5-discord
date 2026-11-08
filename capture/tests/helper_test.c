@@ -18,7 +18,7 @@
 
 enum scenario { OK, VIDEO_OPEN_FAIL, VIDEO_START_FAIL, BAD_HEADERS, VIDEO_OVERSIZE, TRANSPORT_FAIL, CALLBACK_FAIL,
                 NO_IDR, MODE_120HZ, CLOSE_FAIL, MODE_TRANSITION, MODE_CHANGED, CORE_CLOSES, BAD_PROFILE,
-                HANDLE_READ_FAIL, STOP_SETUP, EOF_SETUP, STOP_HEADERS, SLOW_SETUP, MODE_OTHER, MODE_ZERO, STOP_ATTACH, EOF_ATTACH, STOP_MODE, EOF_MODE,
+                HANDLE_READ_FAIL, STOP_SETUP, EOF_SETUP, STOP_HEADERS, SLOW_SETUP, MODE_OTHER, MODE_ZERO, STOP_ATTACH, EOF_ATTACH, STOP_MODE, EOF_MODE, MODE_QUERY_ONCE, MODE_QUERY_FAIL,
                 SCENARIO_COUNT,
                 RECOVER_OK, RECOVER_ZERO_MODE, RECOVER_REOPEN_FAIL, RECOVER_SECOND_FAULT, RECOVER_BAD_CLEANUP,
                 RECOVER_TRANSPORT, RECOVER_120HZ, RECOVER_EARLY_MODE, RECOVER_LAST = RECOVER_EARLY_MODE };
@@ -80,6 +80,9 @@ int64_t inj_call_fast(sl_inject *ctx, intptr_t fn, const uint64_t a[6], int save
     calls[id]++;
     switch (id) {
     case MODE:
+        if (calls[READ_VIDEO] && !vstop && (scenario == MODE_QUERY_FAIL || (scenario == MODE_QUERY_ONCE && !error_fired))) {
+            error_fired = 1; return -1;
+        }
         if (calls[MODE] == 2 && scenario == STOP_MODE) send_simple(fake_core_fd, CAP_STOP);
         if (calls[MODE] == 2 && scenario == EOF_MODE) shutdown(fake_core_fd, SHUT_WR);
         if (scenario == MODE_TRANSITION) *(uint32_t *)(uintptr_t)a[0] = 0;
@@ -350,7 +353,7 @@ int main(void)
         run_helper(&profile, &s, &rc, 1, 1);
         const int quarantined = scenario == TRANSPORT_FAIL;
         const int ends_ok = scenario == CORE_CLOSES || scenario == MODE_OTHER || scenario == MODE_ZERO || scenario == STOP_SETUP || scenario == EOF_SETUP || scenario == STOP_HEADERS || scenario == STOP_ATTACH || scenario == EOF_ATTACH ||
-                             scenario == STOP_MODE || scenario == EOF_MODE;
+                             scenario == STOP_MODE || scenario == EOF_MODE || scenario == MODE_QUERY_ONCE;
         const int refused_mode = scenario == MODE_TRANSITION || scenario == MODE_120HZ;
         if (scenario == BAD_PROFILE) {
             assert(rc == 1 && attachments == 0 && s.states[CAP_ERROR] == 1);
@@ -375,6 +378,8 @@ int main(void)
             assert(!s.states[CAP_LIVE] && !s.videos && vstop == 1 && vclose == 1 && !freed);
         if (scenario == HANDLE_READ_FAIL) assert(rc == 1 && !calls[START] && vclose == 0);
         if (scenario == MODE_CHANGED) assert(strstr(s.error, "120 Hz") && vstop == 1 && vclose == 1);
+        if (scenario == MODE_QUERY_FAIL) assert(strstr(s.error, "could not be checked"));
+        if (scenario == MODE_QUERY_ONCE) assert(rc == 0 && s.videos >= 8);
         if (scenario == MODE_OTHER || scenario == MODE_ZERO) assert(rc == 0 && s.videos >= 8 && !s.states[CAP_ERROR]);
         if (scenario == VIDEO_OPEN_FAIL) assert(vclose == 0);
         if (scenario == VIDEO_START_FAIL) assert(vstop == 1 && vclose == 1);
@@ -384,7 +389,7 @@ int main(void)
         if (scenario == BAD_HEADERS) assert(s.headers == 0 && s.videos == 0);
         if (scenario == VIDEO_OVERSIZE || scenario == TRANSPORT_FAIL) assert(attachments == 1 && s.videos == 0);
         if (quarantined) assert(calls[CLOSE] == 0 && calls[REMOTE_FREE] == 0);
-        if (scenario == CLOSE_FAIL) assert(s.states[CAP_ERROR] == 1 || rc == 1);
+        if (scenario == CLOSE_FAIL) assert(s.states[CAP_ERROR] == 1 && strstr(s.error, "cleanup failed"));
         cases++;
     }
 

@@ -45,7 +45,7 @@ _Static_assert(CAP_RECOVERY_MS > CAP_MODE_WAIT_MS + CAP_CLEANUP_BUDGET_MS + CAP_
 static capture_launcher launcher; // host tests replace the production loader
 static const char *conn_file = CAP_CONN_FILE;
 // quit waits 10 s for Go Live to end (main.c end_calls): the helper's cleanup is given 8 of them
-static int connect_timeout_ms = 20000, stop_timeout_ms = 8000;
+static int connect_timeout_ms = CAP_CONNECT_MS, stop_timeout_ms = 8000;
 
 static uint64_t mono_ms(void) { return cap_clock_ms(); }
 
@@ -71,7 +71,7 @@ static int send_helper(const capture_params *p, uint64_t deadline)
     const char *path = APP_ASSETS "/" CAP_ELF_NAME;
     FILE *f = fopen(path, "rb");
     if (!f)
-        return -1;
+        return -2; // distinguish a missing asset from a loader/upload failure
     fseek(f, 0, SEEK_END);
     long size = ftell(f);
     rewind(f);
@@ -267,7 +267,7 @@ const char *capture_run(const capture_params *p)
     struct audio audio;
     audio_start(&audio, p); // opens in the background while the helper loads
     const char *result = "Capture did not start.";
-    int fd = -1, launches = 0, launched_ok = 0;
+    int fd = -1, launches = 0, launched_ok = 0, helper_missing = 0;
     uint64_t begin = mono_ms(), next_launch = begin;
     uint64_t candidate_order = 0;
     struct hello candidates[HELLO_SLOTS];
@@ -282,12 +282,12 @@ const char *capture_run(const capture_params *p)
         }
         if (now - begin >= (uint64_t)connect_timeout_ms) {
             if (!launched_ok && launches)
-                result = "The capture helper is missing."; // not in the app's assets, or elfldr is down
+                result = helper_missing ? "The capture helper is missing." : "The capture helper could not be loaded.";
             goto out;
         }
-        if (launches < 3 && now >= next_launch) {
+        if (launches < CAP_LAUNCH_ATTEMPTS && now >= next_launch) {
             launches++;
-            next_launch = now + 8000;
+            next_launch = now + CAP_LAUNCH_RETRY_MS;
             int launched = launcher ? launcher() : -1;
 #ifdef __PROSPERO__
             if (!launcher) {
@@ -298,8 +298,10 @@ const char *capture_run(const capture_params *p)
 #endif
             if (launched == 0)
                 launched_ok++;
-            else
+            else {
+                helper_missing |= launched == -2;
                 LOG("capture: the helper could not be sent to the console");
+            }
         }
         struct pollfd pf[1 + HELLO_SLOTS] = {{.fd = listener, .events = POLLIN}};
         for (unsigned i = 0; i < HELLO_SLOTS; i++)
@@ -327,7 +329,14 @@ const char *capture_run(const capture_params *p)
                 if (candidates[i].fd < 0) { slot = i; break; }
                 if (candidates[i].order < candidates[slot].order) slot = i;
             }
-            if (candidates[slot].fd >= 0) close(candidates[slot].fd);
+            if (candidates[slot].fd >= 0) {
+                // A complete HELLO may have arrived after poll() and before this accept batch.
+                if (hello_step(&candidates[slot], token) > 0) {
+                    fd = candidates[slot].fd; candidates[slot].fd = -1;
+                    close(c); break;
+                }
+                close(candidates[slot].fd);
+            }
             candidates[slot] = (struct hello){.fd = c, .deadline = mono_ms() + HELLO_MS, .order = ++candidate_order};
         }
     }
@@ -480,9 +489,9 @@ const char *capture_run(const capture_params *p)
         }
     }
     free(in);
-    // Asked to stop: the helper's EOF (or our close) is the normal end. Otherwise the helper
-    // told why, or just vanished.
-    result = stopping || !p->keep_going() ? NULL : why_text[0] ? why_text : "Capture stopped.";
+    // An explicit helper error survives Stop (especially failed cleanup). Otherwise EOF
+    // after an intentional stop is normal.
+    result = why_text[0] ? why_text : stopping || !p->keep_going() ? NULL : "Capture stopped.";
 out:
     for (unsigned i = 0; i < HELLO_SLOTS; i++)
         if (candidates[i].fd >= 0) close(candidates[i].fd);

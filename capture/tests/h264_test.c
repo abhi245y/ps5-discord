@@ -43,7 +43,11 @@ int main(int argc, char **argv)
             for (size_t j = 5; j < len; j++) { random = random * 1664525u + 1013904223u; bytes[j] = random >> 24; }
             (void)capture_h264_timing(bytes, &len, capacity, 30);
         }
-        puts("PASS: SPS timing normalization, payload preservation, idempotence, truncated and malformed SPS");
+        // Real SPS/PPS from the separately decoded HDR-TV 1080p60 recording.
+        f = fopen("../tests/data/capture-1080p60-headers.h264", "rb"); assert(f);
+        size_t headers = fread(bytes, 1, capacity, f); fclose(f);
+        assert(headers > 20 && !capture_h264_timing(bytes, &headers, capacity, 60));
+        puts("PASS: 720p30/1080p60 SPS timing, payload preservation, idempotence, truncated and malformed SPS");
     }
     free(bytes); free(copy); return 0;
 }
