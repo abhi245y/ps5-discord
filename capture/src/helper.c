@@ -32,6 +32,7 @@
 
 #include "capture_proto.h"
 #include "inject.h"
+#include "h264_timing.h"
 #ifdef SL_PS5
 int sceKernelSetProcessName(const char *name); // the SDK's kernel header does not declare it
 #endif
@@ -56,14 +57,17 @@ int sceKernelSetProcessName(const char *name); // the SDK's kernel header does n
 #define FRAME_CAP 0x100000u
 #define FEATURE 12u
 #ifndef START_WAIT_MS
-#define START_WAIT_MS 15000u
+#define START_WAIT_MS CAP_STARTUP_MS
 #endif
 #define SEND_STALL_MS 5000u
+#ifndef MODE_POLL_MS
+#define MODE_POLL_MS 1000u
+#endif
 #ifndef NO_PICTURE_MS
-#define NO_PICTURE_MS 10000u
+#define NO_PICTURE_MS CAP_PICTURE_MS
 #endif
 #ifndef MODE_WAIT_MS
-#define MODE_WAIT_MS 5000u // a transitional or changing output mode is waited out this long
+#define MODE_WAIT_MS CAP_MODE_WAIT_MS // a transitional or changing output mode is waited out this long
 #endif
 
 enum function {
@@ -291,7 +295,8 @@ static int headers_annexb(const uint8_t *h, size_t n, uint8_t *out, size_t cap, 
 struct capture {
     sl_inject ctx;
     intptr_t fn[FUNCTION_COUNT];
-    uint64_t video, remote_frame;
+    uint64_t video, remote_frame, startup_deadline;
+    int startup_done, video_unknown;
     int initialized, callback, video_open, video_start_attempted, cleanup, failed, cleanup_failed;
     uint32_t output_mode, final_mode;
     uint8_t *scratch_copy;
@@ -309,15 +314,19 @@ static struct session_result segment;
 
 static int64_t remote(struct capture *c, enum function id, const uint64_t args[6])
 {
-    if (quit && !c->cleanup) return SL_CALL_ERROR;
+    if (!c->cleanup) {
+        net_poll(NULL, &(int){1}, 0);
+        if (quit || net_dead || stop_requested || (!c->startup_done && now_ms() >= c->startup_deadline))
+            return SL_CALL_ERROR;
+    }
     if (c->ctx.quarantined) { c->failed = 1; return SL_CALL_ERROR; }
     if (progress) progress->function = id + 1;
-    if (id != READ_VIDEO) log_line("calling %s", symbols[id]);
+    if (id != READ_VIDEO && (id != MODE || !c->startup_done)) log_line("calling %s", symbols[id]);
     // Preserve the borrowed thread's x87/SSE state across media calls.
     int64_t rc = inj_call_fast(&c->ctx, c->fn[id], args, 1);
     if (progress) progress->function = 0;
     beat();
-    if (id != READ_VIDEO) log_line("%s returned 0x%llx", symbols[id], (unsigned long long)rc);
+    if (id != READ_VIDEO && (id != MODE || !c->startup_done)) log_line("%s returned 0x%llx", symbols[id], (unsigned long long)rc);
     if (rc == SL_CALL_ERROR) {
         log_line("transport failure in %s; stage=%s quarantined=%d", symbols[id],
                  c->ctx.stage ? c->ctx.stage : "unknown", c->ctx.quarantined);
@@ -422,6 +431,10 @@ static void cleanup(struct capture *c)
         c->failed = c->cleanup_failed = 1;
         log_line("remote calls quarantined; service cleanup incomplete, reboot may be needed");
     }
+    if (c->video_unknown) {
+        c->failed = c->cleanup_failed = 1;
+        log_line("OpenVideo succeeded but ownership is uncertain; Terminate is not a verified Close");
+    }
     if (c->scratch_copy && c->ctx.attached) {
         if (c->ctx.running || sl_inject_write_at(&c->ctx, c->ctx.scratch, c->scratch_copy, 0x4000)) {
             log_line("scratch restoration failed");
@@ -442,7 +455,7 @@ enum session_end { SESS_STOPPED, SESS_RECOVERABLE, SESS_FAILED };
 static enum session_end capture_session(const struct start_req *req, int may_recover)
 {
     memset(&segment, 0, sizeof segment);
-    struct capture c = {0};
+    struct capture c = {.startup_deadline = now_ms() + START_WAIT_MS};
     uint8_t *frame = NULL;
     int first_idr = 0;
     enum session_end end = SESS_FAILED;
@@ -487,7 +500,17 @@ static enum session_end capture_session(const struct start_req *req, int may_rec
         !good(REMOTE(&c, OPEN_VIDEO, base, base + 8, 0))) { why("The console's encoder would not open."); goto done; }
     // Read failures after a successful open still need cleanup; use the returned handle only
     // after a complete eight-byte transfer.
-    if (sl_inject_read_at(&c.ctx, base, &c.video, 8) || !c.video) goto done;
+    c.video_unknown = 1;
+    if (sl_inject_read_at(&c.ctx, base, &c.video, 8) || !c.video) {
+        // Retry once while the target is stopped; never use a partial or zero handle.
+        c.video = 0;
+        if (sl_inject_read_at(&c.ctx, base, &c.video, 8) || !c.video) {
+            c.cleanup_failed = 1;
+            why("The encoder opened but its handle could not be read.");
+            goto done;
+        }
+    }
+    c.video_unknown = 0;
     c.video_open = 1;
     // The bitrate is set once, before Start: a change mid-session wedges the encoder until
     // the console restarts.
@@ -499,7 +522,9 @@ static enum session_end capture_session(const struct start_req *req, int may_rec
     if (!good(REMOTE(&c, START, c.video))) { why("The console's encoder would not start."); goto done; }
 
     int headers_ready = 0;
-    for (unsigned i = 0; i < 20 && !quit && !net_dead; i++) {
+    for (unsigned i = 0; i < 20 && !quit && !net_dead && !stop_requested && now_ms() < c.startup_deadline; i++) {
+        net_poll(NULL, &(int){1}, 0);
+        if (quit || net_dead || stop_requested) goto done;
         memset(headers, 0, sizeof headers);
         if (sl_inject_write_at(&c.ctx, base + 0x2000, headers, sizeof headers) ||
             !good(REMOTE(&c, HEADERS, c.video, base + 0x2000)) ||
@@ -508,11 +533,11 @@ static enum session_end capture_session(const struct start_req *req, int may_rec
         usleep(50000);
         beat();
     }
-    if (!headers_ready || quit || net_dead) { why("The encoder gave no picture headers."); goto done; }
-    // The encoder's SPS VUI may claim 60000/1001 at 720p30 and 120000/1001 at 1080p60 on an HDR
-    // TV; arrival rates were 30 and 60. SPS_TIMING_NOTE: not rewritten here; the core's
-    // CAP_PROFILE (the rate we asked for) is the truth for Discord. If viewers misjudge the rate
-    // in the console test, patch the VUI timing in `annexb` right here before it is sent.
+    if (!headers_ready || quit || net_dead || stop_requested || now_ms() >= c.startup_deadline) { why("The encoder gave no picture headers."); goto done; }
+    if (capture_h264_timing(annexb, &annexb_len, sizeof annexb, req->fps)) {
+        why("The encoder gave unsupported picture timing.");
+        goto done;
+    }
     uint8_t profile[16];
     cap_put32(profile, req->width); cap_put32(profile + 4, req->height);
     cap_put32(profile + 8, req->fps); cap_put32(profile + 12, mode);
@@ -523,12 +548,32 @@ static enum session_end capture_session(const struct start_req *req, int may_rec
     c.remote_frame = (uint64_t)allocated;
     frame = malloc(CAP_HEADER_BYTES + FRAME_CAP);
     if (!frame || !good(REMOTE(&c, KEYFRAME, c.video))) goto done;
+    net_poll(NULL, &(int){1}, 0);
+    if (quit || net_dead || stop_requested || now_ms() >= c.startup_deadline) goto done;
     segment.begin_ms = now_ms();
-    uint64_t last_key = segment.begin_ms;
-    unsigned empty_reads = 0;
+    uint64_t last_key = segment.begin_ms, next_mode = segment.begin_ms;
+    c.startup_done = 1;
+    uint64_t last_picture = segment.begin_ms;
+    uint32_t observed_mode = c.output_mode;
     while (!quit && !net_dead && !stop_requested) {
         net_poll(NULL, &(int){1}, 0);
         if (net_dead || stop_requested) break;
+        if (now_ms() >= next_mode) {
+            uint32_t current = 0;
+            if (read_mode(&c, &current)) goto done;
+            next_mode = now_ms() + MODE_POLL_MS;
+            if (current == 0x40 && !ALLOW_MODE_40) {
+                segment.refused_mode = 1;
+                why("Go Live can't capture while the console outputs 120 Hz.");
+                goto done;
+            }
+            // Transitions may precede the validated ReadVideo error. Keep reading so the
+            // existing one-recovery path can run; only 0x40 is refused immediately.
+            if (current != observed_mode) {
+                log_line("output mode changed 0x%x -> 0x%x; waiting for picture progress", observed_mode, current);
+                observed_mode = current;
+            }
+        }
         if (key_requested) {
             key_requested = 0;
             if (!good(REMOTE(&c, KEYFRAME, c.video))) goto done;
@@ -539,6 +584,7 @@ static enum session_end capture_session(const struct start_req *req, int may_rec
             last_key = now_ms();
             if (!good(REMOTE(&c, KEYFRAME, c.video))) goto done;
         }
+        if (now_ms() - last_picture >= NO_PICTURE_MS) { why("The picture stopped."); goto done; }
         int64_t n = REMOTE(&c, READ_VIDEO, c.video, c.remote_frame, FRAME_CAP, base + 0x300, 0);
         if (n == SL_CALL_ERROR || n < 0 || n > FRAME_CAP) {
             log_line("ReadVideo failed: 0x%llx", (unsigned long long)n);
@@ -553,11 +599,9 @@ static enum session_end capture_session(const struct start_req *req, int may_rec
             goto done;
         }
         if (n < 5) {
-            if (++empty_reads >= 2000) { why("The picture stopped."); goto done; }
             usleep(1000);
             continue;
         }
-        empty_reads = 0;
         if (sl_inject_read_at(&c.ctx, (intptr_t)c.remote_frame, frame + CAP_HEADER_BYTES, (size_t)n)) goto done;
         uint8_t *au = frame + CAP_HEADER_BYTES;
         if (!annexb_ok(au, (size_t)n)) { log_line("invalid frame (not Annex-B)"); why("The encoder sent a bad picture."); goto done; }
@@ -567,7 +611,12 @@ static enum session_end capture_session(const struct start_req *req, int may_rec
             first_idr = 1;
             if (net_state(CAP_LIVE, "")) goto done;
         }
-        if (net_send_inplace(frame, CAP_VIDEO, idr ? CAP_KEY : 0, (uint32_t)n)) break;
+        size_t au_len = (size_t)n;
+        if (has_nal(au, au_len, 7) && capture_h264_timing(au, &au_len, FRAME_CAP, req->fps)) {
+            why("The encoder gave unsupported picture timing."); goto done;
+        }
+        if (net_send_inplace(frame, CAP_VIDEO, idr ? CAP_KEY : 0, (uint32_t)au_len)) break;
+        last_picture = now_ms();
         segment.frames++;
         segment.last_video_ms = now_ms() - segment.begin_ms;
         if (segment.frames <= 3 || segment.frames % (req->fps * 10) == 0)
@@ -598,11 +647,11 @@ static int helper_run(void)
     if (net_connect()) return 1;
     struct start_req req = {0};
     int got = 0;
-    for (uint64_t begin = now_ms(); !got && !net_dead && !quit && now_ms() - begin < START_WAIT_MS;) {
+    for (uint64_t begin = now_ms(); !got && !net_dead && !quit && !stop_requested && now_ms() - begin < START_WAIT_MS;) {
         net_poll(&req, &got, 100);
         beat();
     }
-    if (!got || stop_requested) { net_close(); return got ? 0 : 1; }
+    if (!got || stop_requested) { net_close(); return stop_requested ? 0 : 1; }
     const int sel_ok = (req.selector == 3 && req.width == 1280 && req.height == 720) ||
                        (req.selector == 4 && req.width == 1920 && req.height == 1080);
     if (!sel_ok || req.fps_flag > 1 || req.fps != (req.fps_flag ? 60u : 30u) || req.bitrate < 500000 || req.bitrate > 30000000) {

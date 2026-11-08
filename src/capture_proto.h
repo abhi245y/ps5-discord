@@ -23,6 +23,17 @@
 #define CAP_LOCK_FILE "/data/ps5-discord/capture.lock"
 #define CAP_PROCESS_NAME "discord-capture.elf"
 #define CAP_ELF_NAME "discord-capture.elf" // in the app's assets
+// Deadline nesting shared by the separate core and helper. Remote cleanup may make up to
+// ten bounded calls (including their stop/restore waits), so recovery reserves 30 seconds.
+#define CAP_STARTUP_MS 15000u
+#define CAP_PICTURE_MS 10000u
+#define CAP_MODE_WAIT_MS 5000u
+#define CAP_CLEANUP_BUDGET_MS 30000u
+#define CAP_DEADLINE_MARGIN_MS 5000u
+#define CAP_FIRST_MEDIA_MS (CAP_STARTUP_MS + CAP_PICTURE_MS + CAP_DEADLINE_MARGIN_MS)
+#define CAP_MEDIA_MS (CAP_PICTURE_MS + CAP_DEADLINE_MARGIN_MS)
+#define CAP_RECOVERY_MS (CAP_MODE_WAIT_MS + CAP_CLEANUP_BUDGET_MS + CAP_FIRST_MEDIA_MS)
+
 #define CAP_VERSION 1u
 #define CAP_TOKEN_BYTES 16
 #define CAP_HEADER_BYTES 8

@@ -12,6 +12,19 @@ All notable changes to this project are documented here. The format follows
   Bluetooth headset (`src/bt/game_audio.cpp`). The controller is left alone. Settings, Voice &
   audio, Capture: Auto (a USB controller means Remote Play, else wireless), Wireless, USB controller.
 
+### Fixed
+- Wireless Go Live: loader upload and commands handle short writes, backpressure and cancellation;
+  concurrent handshake candidates and media deadlines prevent a stalled helper holding the session.
+- Capture setup observes Stop and disconnected cores between stages; the 120 Hz guard also runs
+  during streaming, while other display transitions preserve the existing recovery path.
+- Capture SPS timing matches the requested 30/60 fps, validated against saved console recordings.
+  An unreadable handle after OpenVideo reports uncertain cleanup ownership.
+- Clean builds and app packaging build and require the capture helper and its license; root host
+  CI runs helper lifecycle and SPS sanitizer tests alongside socket fault tests.
+
+The injector restore/supervisor finding remains open on `wip/capture-inject-restore`; these changes
+have not been deployed and do not complete wireless capture's hardware acceptance.
+
 ## [0.6.0-alpha.2] - 2026-10-31
 
 ### Fixed

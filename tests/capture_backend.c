@@ -6,6 +6,7 @@
 #include <arpa/inet.h>
 #include <assert.h>
 #include <fcntl.h>
+#include <errno.h>
 #include <netinet/in.h>
 #include <opus.h>
 #include <poll.h>
@@ -198,8 +199,26 @@ static void load_sample(void)
 
 // ---- the fake helper -------------------------------------------------------------------------------
 
-enum mode { H_NORMAL, H_BAD_TOKEN_FIRST, H_RECOVER, H_DIES, H_ERROR, H_GARBAGE, H_NONE, H_WRONG_PROFILE, H_DEAF };
+enum mode { H_NORMAL, H_BAD_TOKEN_FIRST, H_RECOVER, H_DIES, H_ERROR, H_GARBAGE, H_NONE, H_WRONG_PROFILE, H_DEAF, H_FRAGMENTED, H_COALESCED, H_FLOOD, H_SLOW_HELLO,
+            H_SILENT, H_PARTIAL, H_NO_IDR, H_NO_PROGRESS, H_RECOVER_HANG,
+            H_EOF_HELLO, H_EOF_PROFILE, H_EOF_HEADERS, H_SHORT_COMMANDS, H_COMMAND_STALL };
 static enum mode mode;
+static _Atomic int key_partly_sent, finish_key;
+static unsigned command_writes;
+
+// Linked only by the backend test object; this is the production session writer's send().
+ssize_t capture_test_send(int fd, const void *buf, size_t n, int flags)
+{
+    if (mode == H_COMMAND_STALL) { errno = EAGAIN; return -1; }
+    if (mode == H_SHORT_COMMANDS) {
+        unsigned attempt = command_writes++;
+        if (attempt == 0 || attempt == 2) { errno = attempt == 0 ? EINTR : EAGAIN; return -1; }
+        if (key_partly_sent && !finish_key) { errno = EAGAIN; return -1; }
+        if (n == CAP_HEADER_BYTES && ((const uint8_t *)buf)[0] == CAP_KEYFRAME) key_partly_sent = 1;
+        if (n > 3) n = 3;
+    }
+    return send(fd, buf, n, flags);
+}
 static char conn_path[200];
 static _Atomic unsigned launches;
 static struct {
@@ -212,7 +231,14 @@ static struct {
 
 static int send_all(int fd, const void *p, size_t n)
 {
-    return send(fd, p, n, MSG_NOSIGNAL) == (ssize_t)n ? 0 : -1;
+    const uint8_t *bytes = p;
+    while (n) {
+        size_t take = mode == H_FRAGMENTED && n > 3 ? 3 : n;
+        ssize_t w = send(fd, bytes, take, MSG_NOSIGNAL);
+        if (w <= 0) return -1;
+        bytes += w; n -= (size_t)w;
+    }
+    return 0;
 }
 static int send_msg(int fd, uint8_t type, uint8_t flags, const void *body, uint32_t len)
 {
@@ -294,7 +320,8 @@ static void *helper_body(void *arg)
         sscanf(hex + 2 * i, "%2x", &v);
         token[i] = (uint8_t)v;
     }
-    if (mode == H_BAD_TOKEN_FIRST) { // a stranger on loopback: refused, closed on, nothing served
+    if (mode == H_BAD_TOKEN_FIRST || mode == H_FLOOD) {
+      for (unsigned attempt = 0; attempt < (mode == H_FLOOD ? 40u : 1u); attempt++) { // a stranger on loopback: refused, closed on, nothing served
         uint8_t wrong[CAP_TOKEN_BYTES];
         memcpy(wrong, token, sizeof wrong);
         wrong[CAP_TOKEN_BYTES - 1] ^= 1; // only the last byte differs
@@ -305,23 +332,62 @@ static void *helper_body(void *arg)
         uint8_t b;
         hs.rejected = recv(bad, &b, 1, 0) <= 0;
         close(bad);
+      }
+    }
+    int slow[12];
+    if (mode == H_SLOW_HELLO) for (unsigned i = 0; i < 12; i++) {
+        slow[i] = socket(AF_INET, SOCK_STREAM, 0);
+        struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons((uint16_t)hs.port)};
+        a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        assert(!connect(slow[i], (struct sockaddr *)&a, sizeof a));
+        assert(send(slow[i], "C", 1, MSG_NOSIGNAL) == 1);
     }
     int fd = connect_core(token);
+    if (mode == H_SLOW_HELLO) for (unsigned i = 0; i < 12; i++) close(slow[i]);
     assert(fd >= 0);
+    if (mode == H_EOF_HELLO) { close(fd); return NULL; }
     uint8_t body[64];
     size_t len = 0;
     int eof = 0, type;
     while (!eof && (type = poll_msg(fd, 3000, &eof, body, &len)) != CAP_START)
         assert(type == 0);
+    if (eof && mode == H_COMMAND_STALL) { hs.saw_eof = 1; close(fd); return NULL; }
     assert(!eof && len == 24);
     for (int i = 0; i < 6; i++)
         hs.start[i] = cap_get32(body + 4 * i);
     hs.started = 1;
+    if (mode == H_SILENT || mode == H_PARTIAL) {
+        if (mode == H_PARTIAL) {
+            uint8_t partial[CAP_HEADER_BYTES + 3];
+            cap_pack_header(partial, CAP_PROFILE, 0, 16);
+            memset(partial + CAP_HEADER_BYTES, 0, 3);
+            assert(!send_all(fd, partial, sizeof partial));
+        }
+        struct pollfd pf = {.fd = fd, .events = POLLIN};
+        assert(poll(&pf, 1, 3000) > 0);
+        uint8_t b;
+        hs.saw_eof = recv(fd, &b, 1, 0) <= 0;
+        close(fd); return NULL;
+    }
     const int wrong = mode == H_WRONG_PROFILE;
-    send_state(fd, CAP_STARTING, "");
-    send_profile(fd, wrong ? 1920 : hs.start[3], wrong ? 1080 : hs.start[4], wrong ? 60 : hs.start[5]);
-    send_msg(fd, CAP_HEADERS, 0, sample, (uint32_t)header_len);
-    send_state(fd, CAP_LIVE, "");
+    if (mode == H_COALESCED) {
+        size_t total = 3 * CAP_HEADER_BYTES + 16 + header_len + 1;
+        uint8_t *messages = calloc(1, total), *m = messages;
+        assert(messages);
+        cap_pack_header(m, CAP_PROFILE, 0, 16); m += CAP_HEADER_BYTES;
+        cap_put32(m, hs.start[3]); cap_put32(m + 4, hs.start[4]); cap_put32(m + 8, hs.start[5]); m += 16;
+        cap_pack_header(m, CAP_HEADERS, 0, (uint32_t)header_len); m += CAP_HEADER_BYTES;
+        memcpy(m, sample, header_len); m += header_len;
+        cap_pack_header(m, CAP_STATE, 0, 1); m[CAP_HEADER_BYTES] = CAP_LIVE;
+        assert(!send_all(fd, messages, total)); free(messages);
+    } else {
+        send_state(fd, CAP_STARTING, "");
+        send_profile(fd, wrong ? 1920 : hs.start[3], wrong ? 1080 : hs.start[4], wrong ? 60 : hs.start[5]);
+        if (mode == H_EOF_PROFILE) { close(fd); return NULL; }
+        send_msg(fd, CAP_HEADERS, 0, sample, (uint32_t)header_len);
+        if (mode == H_EOF_HEADERS) { close(fd); return NULL; }
+        send_state(fd, CAP_LIVE, "");
+    }
     unsigned next = 1, resend = 0, lives = 1;
     int quiet_after = 0;
     for (;;) {
@@ -348,6 +414,13 @@ static void *helper_body(void *arg)
             hs.saw_eof = 1;
             close(fd);
             return NULL;
+        }
+        if (mode == H_NO_IDR || (mode == H_NO_PROGRESS && next >= 4)) {
+            usleep(1000); continue;
+        }
+        if (mode == H_RECOVER_HANG && next >= 4) {
+            send_state(fd, CAP_RECOVERING, "");
+            usleep(20000); continue; // repeated state cannot extend the deadline
         }
         if (mode == H_DIES && next == 4) {
             close(fd);
@@ -440,6 +513,7 @@ static void reset(enum mode m)
     mode = m;
     memset(&hs, 0, sizeof hs);
     launches = 0;
+    key_partly_sent = finish_key = 0; command_writes = 0;
     pthread_mutex_lock(&seen_mu);
     n_videos = n_opus = 0;
     pthread_mutex_unlock(&seen_mu);
@@ -613,6 +687,49 @@ int main(void)
     assert(hs.rejected && hs.started);
     bc_stop();
     check_stopped_clean();
+    cases++;
+
+    // Wire fragmentation/coalescing and more than 32 wrong tokens cannot abort startup.
+    const enum mode good_wire[] = {H_FRAGMENTED, H_COALESCED, H_FLOOD, H_SLOW_HELLO};
+    for (unsigned i = 0; i < sizeof good_wire / sizeof *good_wire; i++) {
+        reset(good_wire[i]);
+        assert(!bc_start());
+        WAIT(!strcmp(bc_state(), "live"), 5000);
+        WAIT(count_videos() >= 13, 5000);
+        assert(launches == 1);
+        bc_stop(); check_stopped_clean();
+        assert(!strcmp(bc_state(), "off") && hs.stops == 1);
+        cases++;
+    }
+    const enum mode failed_wire[] = {H_SILENT, H_PARTIAL, H_NO_IDR, H_NO_PROGRESS, H_RECOVER_HANG,
+                                     H_EOF_HELLO, H_EOF_PROFILE, H_EOF_HEADERS};
+    capture_set_media_timeouts(500, 500, 500);
+    for (unsigned i = 0; i < sizeof failed_wire / sizeof *failed_wire; i++) {
+        reset(failed_wire[i]);
+        assert(!bc_start());
+        WAIT(!strcmp(bc_state(), "error"), 2500);
+        check_stopped_clean();
+        if (i < 5) assert(strstr(bc_error(), "stopped responding"));
+        cases++;
+    }
+    capture_set_media_timeouts(CAP_FIRST_MEDIA_MS, CAP_MEDIA_MS, CAP_RECOVERY_MS);
+
+    // Short START, then a partially written keyframe while STOP waits. No header is spliced.
+    reset(H_SHORT_COMMANDS);
+    assert(!bc_start());
+    WAIT(!strcmp(bc_state(), "live"), 5000);
+    bc_request_keyframe();
+    WAIT(key_partly_sent, 1000);
+    bc_stop(); finish_key = 1;
+    check_stopped_clean();
+    assert(!strcmp(bc_state(), "off") && hs.keyframes == 1 && hs.stops == 1);
+    cases++;
+    // A command that never makes progress ends the session independently of media deadlines.
+    reset(H_COMMAND_STALL);
+    assert(!bc_start());
+    WAIT(!strcmp(bc_state(), "error"), 2500);
+    check_stopped_clean();
+    assert(strstr(bc_error(), "receive a command"));
     cases++;
 
     // A game or display switch: the helper reports recovering, a gap, then a fresh session with its

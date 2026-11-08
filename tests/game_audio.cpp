@@ -368,7 +368,9 @@ int main()
     // kept up is not; a stale backlog is discarded when read; a reopened capture is a cut.
     {
         Fake lib;
-        GameAudio g(lib, [] { return true; }, quick());
+        Options o = quick();
+        o.stallMs = 100000; // isolate stale-queue behavior from the independent reopen deadline
+        GameAudio g(lib, [] { return true; }, o);
         const int slow = g.acquire(), fast = g.acquire();
         assert(until([&] { return g.live(); }));
         float buf[2048];
@@ -388,6 +390,8 @@ int main()
         assert(g.read(slow, buf, sizeof buf, 0, &disc) > 0 && disc == 0);
         // A stall: the sound stops, the consumer wakes 300 ms later. Everything older than 100 ms is
         // gone when it reads (no stale sound passed off as current) and the next sound is a cut.
+        const unsigned queued_after = lib.seq;
+        assert(until([&] { return lib.seq >= queued_after + 8; }));
         lib.mode = 2;
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
         const unsigned before = g.stale(fast);

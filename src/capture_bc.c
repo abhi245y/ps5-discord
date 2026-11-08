@@ -20,35 +20,34 @@
 #include <unistd.h>
 
 #include "capture_proto.h"
+#include "capture_io.h"
 #include "game_audio.h"
 #include "golive_opus.h"
 #include "log.h"
 #include "tls.h"
 
 #define APP_ASSETS "/data/homebrew/PPSA99072/assets"
-#define LISTEN_MAX_REJECTS 32
+#define HELLO_SLOTS 8
+#define HELLO_MS 500
+#define COMMAND_MS 1000
 #define STALE_MS 100
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER; // conn_fd and the profile
 static int conn_fd = -1;                                 // the authenticated helper, or -1
 static int actual_w, actual_h, actual_fps;
 static uint64_t last_key_ms;
-#ifdef __PROSPERO__
-static int send_helper(void);
-static capture_launcher launcher = send_helper; // tests (and the host) set their own
-#else
-static capture_launcher launcher;
-#endif
+static int key_pending;
+static int first_media_ms = CAP_FIRST_MEDIA_MS, media_ms = CAP_MEDIA_MS, recovery_ms = CAP_RECOVERY_MS;
+_Static_assert(CAP_FIRST_MEDIA_MS > CAP_STARTUP_MS + CAP_PICTURE_MS, "first-media budget too short");
+_Static_assert(CAP_MEDIA_MS > CAP_PICTURE_MS, "media-progress budget too short");
+_Static_assert(CAP_RECOVERY_MS > CAP_MODE_WAIT_MS + CAP_CLEANUP_BUDGET_MS + CAP_STARTUP_MS + CAP_PICTURE_MS,
+               "recovery budget too short");
+static capture_launcher launcher; // host tests replace the production loader
 static const char *conn_file = CAP_CONN_FILE;
 // quit waits 10 s for Go Live to end (main.c end_calls): the helper's cleanup is given 8 of them
 static int connect_timeout_ms = 20000, stop_timeout_ms = 8000;
 
-static uint64_t mono_ms(void)
-{
-    struct timespec t;
-    clock_gettime(CLOCK_MONOTONIC, &t);
-    return (uint64_t)t.tv_sec * 1000 + (uint64_t)t.tv_nsec / 1000000;
-}
+static uint64_t mono_ms(void) { return cap_clock_ms(); }
 
 void capture_set_launcher(capture_launcher l) { launcher = l; }
 void capture_set_conn_file(const char *path) { conn_file = path; }
@@ -58,9 +57,16 @@ void capture_set_timeouts(int connect_ms, int stop_ms)
     stop_timeout_ms = stop_ms;
 }
 
+void capture_set_media_timeouts(int first_ms, int progress_ms, int recover_ms)
+{
+    first_media_ms = first_ms;
+    media_ms = progress_ms;
+    recovery_ms = recover_ms;
+}
+
 #ifdef __PROSPERO__
 // The helper payload from the app's assets to elfldr (as overlay.c's send_elf).
-static int send_helper(void)
+static int send_helper(const capture_params *p, uint64_t deadline)
 {
     const char *path = APP_ASSETS "/" CAP_ELF_NAME;
     FILE *f = fopen(path, "rb");
@@ -75,27 +81,21 @@ static int send_helper(void)
     int fd = socket(AF_INET, SOCK_STREAM, 0), ok = -1;
     struct sockaddr_in to = {.sin_len = sizeof to, .sin_family = AF_INET, .sin_port = htons(9021)}; // elfldr
     to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    size_t sent = 0;
-    if (fd >= 0 && n == (size_t)size && connect(fd, (struct sockaddr *)&to, sizeof to) == 0) {
-        for (ssize_t w; sent < n && (w = send(fd, elf + sent, n - sent, 0)) > 0;)
-            sent += (size_t)w;
-        ok = sent == n ? 0 : -1;
-    }
-    if (fd >= 0)
+    if (fd >= 0 && size > 0 && n == (size_t)size &&
+        !cap_connect(fd, (struct sockaddr *)&to, sizeof to, deadline, p->keep_going))
+        ok = cap_upload(fd, (const uint8_t *)elf, n, deadline, p->keep_going);
+    if (fd >= 0) {
+        if (ok) {
+            struct linger abort_upload = {.l_onoff = 1, .l_linger = 0};
+            setsockopt(fd, SOL_SOCKET, SO_LINGER, &abort_upload, sizeof abort_upload);
+        }
         close(fd);
+    }
     free(elf);
-    LOG("capture: sent %s to elfldr (%zu of %zu bytes)", path, sent, n);
+    LOG("capture: helper upload %s (%zu bytes, result %d)", path, n, ok);
     return ok;
 }
 #endif
-
-static int send_msg(int fd, uint8_t type)
-{
-    uint8_t m[CAP_HEADER_BYTES];
-    cap_pack_header(m, type, 0, 0);
-    // 8 bytes into an empty loopback buffer; MSG_DONTWAIT so that no lock is held on a stall.
-    return send(fd, m, sizeof m, MSG_DONTWAIT | MSG_NOSIGNAL) == (ssize_t)sizeof m ? 0 : -1;
-}
 
 void capture_request_keyframe(void)
 {
@@ -103,7 +103,7 @@ void capture_request_keyframe(void)
     const uint64_t now = mono_ms();
     if (conn_fd >= 0 && now - last_key_ms >= 200) { // viewers ask every second; a burst is one IDR
         last_key_ms = now;
-        send_msg(conn_fd, CAP_KEYFRAME);
+        key_pending = 1; // the session worker is the only socket writer
     }
     pthread_mutex_unlock(&lock);
 }
@@ -207,29 +207,28 @@ static int write_conn_file(unsigned port, const uint8_t token[CAP_TOKEN_BYTES])
     return close(fd) == 0 && ok ? 0 : -1;
 }
 
-// 0 when the connection said hello with our token and version.
-static int authenticate(int fd, const uint8_t token[CAP_TOKEN_BYTES])
+// Fixed concurrent candidates: one slow or rejected peer never consumes a session budget.
+struct hello {
+    int fd;
+    uint64_t deadline, order;
+    size_t have;
+    uint8_t bytes[CAP_HEADER_BYTES + 4 + CAP_TOKEN_BYTES];
+};
+
+static int hello_step(struct hello *c, const uint8_t token[CAP_TOKEN_BYTES])
 {
-    uint8_t buf[CAP_HEADER_BYTES + 4 + CAP_TOKEN_BYTES];
-    size_t got = 0;
-    const uint64_t begin = mono_ms();
-    while (got < sizeof buf && mono_ms() - begin < 2000) {
-        struct pollfd pf = {.fd = fd, .events = POLLIN};
-        if (poll(&pf, 1, 100) <= 0)
-            continue;
-        ssize_t n = recv(fd, buf + got, sizeof buf - got, 0);
-        if (n <= 0)
-            return -1;
-        got += (size_t)n;
-    }
+    ssize_t n = recv(c->fd, c->bytes + c->have, sizeof c->bytes - c->have, MSG_DONTWAIT);
+    if (!n) return -1;
+    if (n < 0) return errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK ? 0 : -1;
+    c->have += (size_t)n;
+    if (c->have < sizeof c->bytes) return 0;
     cap_header h;
-    if (got < sizeof buf || cap_parse_header(buf, &h) || h.type != CAP_HELLO || h.len != 4 + CAP_TOKEN_BYTES ||
-        cap_get32(buf + CAP_HEADER_BYTES) != CAP_VERSION)
-        return -1;
-    unsigned char diff = 0; // the whole token is compared, whatever the first byte says
+    if (cap_parse_header(c->bytes, &h) || h.type != CAP_HELLO || h.len != 4 + CAP_TOKEN_BYTES ||
+        cap_get32(c->bytes + CAP_HEADER_BYTES) != CAP_VERSION) return -1;
+    unsigned char diff = 0;
     for (unsigned i = 0; i < CAP_TOKEN_BYTES; i++)
-        diff |= buf[CAP_HEADER_BYTES + 4 + i] ^ token[i];
-    return diff ? -1 : 0;
+        diff |= c->bytes[CAP_HEADER_BYTES + 4 + i] ^ token[i];
+    return diff ? -1 : 1;
 }
 
 static void set_conn(int fd)
@@ -237,6 +236,7 @@ static void set_conn(int fd)
     pthread_mutex_lock(&lock);
     conn_fd = fd;
     last_key_ms = 0;
+    key_pending = 0;
     pthread_mutex_unlock(&lock);
 }
 
@@ -244,7 +244,9 @@ const char *capture_run(const capture_params *p)
 {
     static char why_text[128];
     why_text[0] = 0;
+    pthread_mutex_lock(&lock);
     actual_w = actual_h = actual_fps = 0;
+    pthread_mutex_unlock(&lock);
     uint8_t token[CAP_TOKEN_BYTES];
     if (tls_random(NULL, token, sizeof token) != 0)
         return "Capture could not start.";
@@ -252,7 +254,7 @@ const char *capture_run(const capture_params *p)
     struct sockaddr_in a = {.sin_family = AF_INET};
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK); // loopback only
     socklen_t al = sizeof a;
-    if (listener < 0 || bind(listener, (struct sockaddr *)&a, sizeof a) != 0 || listen(listener, 4) != 0 ||
+    if (listener < 0 || bind(listener, (struct sockaddr *)&a, sizeof a) != 0 || listen(listener, 16) != 0 || cap_nonblock(listener) != 0 ||
         getsockname(listener, (struct sockaddr *)&a, &al) != 0) {
         if (listener >= 0)
             close(listener);
@@ -267,7 +269,9 @@ const char *capture_run(const capture_params *p)
     const char *result = "Capture did not start.";
     int fd = -1, launches = 0, launched_ok = 0;
     uint64_t begin = mono_ms(), next_launch = begin;
-    unsigned rejects = 0;
+    uint64_t candidate_order = 0;
+    struct hello candidates[HELLO_SLOTS];
+    for (unsigned i = 0; i < HELLO_SLOTS; i++) candidates[i] = (struct hello){.fd = -1};
     // The helper: launched now and again if it has not called after 8 s (one still cleaning up
     // from the last Go Live holds its single-instance lock and exits; a second launch is harmless).
     while (fd < 0) {
@@ -276,7 +280,7 @@ const char *capture_run(const capture_params *p)
             result = NULL;
             goto out;
         }
-        if (now - begin >= (uint64_t)connect_timeout_ms || rejects >= LISTEN_MAX_REJECTS) {
+        if (now - begin >= (uint64_t)connect_timeout_ms) {
             if (!launched_ok && launches)
                 result = "The capture helper is missing."; // not in the app's assets, or elfldr is down
             goto out;
@@ -284,40 +288,67 @@ const char *capture_run(const capture_params *p)
         if (launches < 3 && now >= next_launch) {
             launches++;
             next_launch = now + 8000;
-            if (launcher && launcher() == 0)
+            int launched = launcher ? launcher() : -1;
+#ifdef __PROSPERO__
+            if (!launcher) {
+                uint64_t deadline = begin + (uint64_t)connect_timeout_ms;
+                if (deadline > now + 3000) deadline = now + 3000;
+                launched = send_helper(p, deadline);
+            }
+#endif
+            if (launched == 0)
                 launched_ok++;
             else
                 LOG("capture: the helper could not be sent to the console");
         }
-        struct pollfd pf = {.fd = listener, .events = POLLIN};
-        if (poll(&pf, 1, 100) <= 0)
-            continue;
-        int c = accept(listener, NULL, NULL);
-        if (c < 0)
-            continue;
-        if (authenticate(c, token) == 0)
-            fd = c;
-        else {
-            LOG("capture: a connection without the right token was dropped");
-            rejects++;
-            close(c);
+        struct pollfd pf[1 + HELLO_SLOTS] = {{.fd = listener, .events = POLLIN}};
+        for (unsigned i = 0; i < HELLO_SLOTS; i++)
+            pf[i + 1] = (struct pollfd){.fd = candidates[i].fd, .events = POLLIN};
+        int ready = poll(pf, 1 + HELLO_SLOTS, 25);
+        if (ready < 0 && errno != EINTR) goto out;
+        // Service established candidates before accepting another bounded batch.
+        for (unsigned i = 0; i < HELLO_SLOTS; i++) {
+            struct hello *c = &candidates[i];
+            if (c->fd < 0) continue;
+            int r = pf[i + 1].revents ? hello_step(c, token) : 0;
+            // An inline loader upload may delay servicing; consume a complete buffered HELLO
+            // before expiring an idle candidate.
+            if (!r && mono_ms() >= c->deadline) r = -1;
+            if (r > 0) { fd = c->fd; c->fd = -1; break; }
+            if (r < 0) { close(c->fd); c->fd = -1; }
         }
+        if (fd >= 0) break;
+        if (pf[0].revents & POLLIN) for (unsigned accepted = 0; accepted < HELLO_SLOTS; accepted++) {
+            int c = accept(listener, NULL, NULL);
+            if (c < 0) break;
+            if (cap_nonblock(c)) { close(c); continue; }
+            unsigned slot = 0;
+            for (unsigned i = 0; i < HELLO_SLOTS; i++) {
+                if (candidates[i].fd < 0) { slot = i; break; }
+                if (candidates[i].order < candidates[slot].order) slot = i;
+            }
+            if (candidates[slot].fd >= 0) close(candidates[slot].fd);
+            candidates[slot] = (struct hello){.fd = c, .deadline = mono_ms() + HELLO_MS, .order = ++candidate_order};
+        }
+    }
+    for (unsigned i = 0; i < HELLO_SLOTS; i++) {
+        if (candidates[i].fd >= 0) close(candidates[i].fd);
+        candidates[i].fd = -1;
     }
     close(listener); // no one else may connect now
     listener = -1;
     unlink(conn_file);
     LOG("capture: helper connected after %llu ms", (unsigned long long)(mono_ms() - begin));
 
+    uint8_t tx[CAP_HEADER_BYTES + 24];
+    size_t tx_len = sizeof tx, tx_offset = 0;
+    uint64_t tx_at = mono_ms();
     {
-        uint8_t m[CAP_HEADER_BYTES + 24];
+        uint8_t *m = tx;
         cap_pack_header(m, CAP_START, 0, 24);
         const uint32_t selector = p->height >= 1080 ? 4 : 3, flag = p->fps >= 60;
         cap_put32(m + 8, selector), cap_put32(m + 12, flag), cap_put32(m + 16, (uint32_t)p->bitrate);
         cap_put32(m + 20, (uint32_t)p->width), cap_put32(m + 24, (uint32_t)p->height), cap_put32(m + 28, (uint32_t)p->fps);
-        if (send(fd, m, sizeof m, MSG_NOSIGNAL) != (ssize_t)sizeof m) {
-            result = "Capture could not start.";
-            goto out;
-        }
     }
     set_conn(fd);
 
@@ -328,13 +359,12 @@ const char *capture_run(const capture_params *p)
     }
     size_t have = 0;
     int stopping = 0, was_recovering = 0, live = 0;
-    uint64_t stop_at = 0, frames = 0;
+    uint64_t stop_at = 0, media_at = mono_ms();
+    int profile_seen = 0, headers_seen = 0, idr_seen = 0;
     result = "Capture stopped.";
+    int stop_sent = 0;
     for (;;) {
         if (!stopping && !p->keep_going()) {
-            pthread_mutex_lock(&lock);
-            send_msg(fd, CAP_STOP);
-            pthread_mutex_unlock(&lock);
             stopping = 1;
             stop_at = mono_ms();
         }
@@ -342,12 +372,40 @@ const char *capture_run(const capture_params *p)
             LOG("capture: the helper did not finish in %d ms; closing on it", stop_timeout_ms);
             break;
         }
-        struct pollfd pf = {.fd = fd, .events = POLLIN};
-        if (poll(&pf, 1, 100) > 0) {
-            ssize_t n = recv(fd, in + have, CAP_HEADER_BYTES + CAP_MAX_PAYLOAD - have, 0);
-            if (n <= 0)
-                break; // the helper is gone
-            have += (size_t)n;
+        if (!stopping && mono_ms() - media_at >= (uint64_t)(was_recovering ? recovery_ms :
+                            profile_seen && headers_seen && idr_seen ? media_ms : first_media_ms)) {
+            snprintf(why_text, sizeof why_text, "The capture helper stopped responding.");
+            break;
+        }
+        // An entirely unsent command can be replaced by STOP. A partial header must finish
+        // first, otherwise the receiver would parse STOP bytes as the remainder of that frame.
+        if (stopping && tx_len && !tx_offset && tx[0] != CAP_STOP) tx_len = 0;
+        if (!tx_len) {
+            int type = 0;
+            pthread_mutex_lock(&lock);
+            if (stopping && !stop_sent) { type = CAP_STOP; stop_sent = 1; key_pending = 0; }
+            else if (!stopping && key_pending) { type = CAP_KEYFRAME; key_pending = 0; }
+            pthread_mutex_unlock(&lock);
+            if (type) {
+                cap_pack_header(tx, (uint8_t)type, 0, 0);
+                tx_len = CAP_HEADER_BYTES; tx_offset = 0; tx_at = mono_ms();
+            }
+        }
+        if (tx_len) {
+            int r = cap_write_step(fd, tx, tx_len, &tx_offset);
+            if (r < 0 || mono_ms() - tx_at >= COMMAND_MS) {
+                snprintf(why_text, sizeof why_text, "The capture helper could not receive a command.");
+                break;
+            }
+            if (r > 0) tx_len = tx_offset = 0;
+        }
+        struct pollfd pf = {.fd = fd, .events = POLLIN | (tx_len ? POLLOUT : 0)};
+        int r = poll(&pf, 1, 25);
+        if (r < 0 && errno != EINTR) break;
+        if (r > 0 && pf.revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL)) {
+            ssize_t n = recv(fd, in + have, CAP_HEADER_BYTES + CAP_MAX_PAYLOAD - have, MSG_DONTWAIT);
+            if (!n || (n < 0 && errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)) break;
+            if (n > 0) have += (size_t)n;
         }
         int bad = 0;
         for (;;) { // every whole message in what has arrived
@@ -363,42 +421,49 @@ const char *capture_run(const capture_params *p)
             const uint8_t *body = in + CAP_HEADER_BYTES;
             switch (h.type) {
             case CAP_VIDEO:
-                frames++;
+                if (!h.len || !profile_seen || !headers_seen) { bad = 1; break; }
+                if (!idr_seen && !(h.flags & CAP_KEY)) break;
+                if (h.flags & CAP_KEY) {
+                    idr_seen = 1;
+                    if (was_recovering) {
+                        was_recovering = 0;
+                        capture_request_keyframe();
+                    }
+                }
+                media_at = mono_ms();
+                if (!live) { live = 1; audio.live = 1; if (p->live) p->live(); }
                 if (p->video)
                     p->video(body, h.len, h.flags & CAP_KEY);
                 break;
             case CAP_HEADERS: // SPS and PPS as an access unit of their own: stream.c keeps them for the IDRs
+                if (!h.len) { bad = 1; break; }
+                headers_seen = 1;
                 if (p->video)
                     p->video(body, h.len, 0);
                 break;
             case CAP_PROFILE:
                 if (h.len == 16) {
+                    profile_seen = 1;
                     pthread_mutex_lock(&lock);
                     actual_w = (int)cap_get32(body), actual_h = (int)cap_get32(body + 4), actual_fps = (int)cap_get32(body + 8);
                     pthread_mutex_unlock(&lock);
                     LOG("capture: encoder runs %dx%d at %d fps (output mode 0x%x)", actual_w, actual_h, actual_fps,
                         cap_get32(body + 12));
-                }
+                } else bad = 1;
                 break;
             case CAP_STATE:
                 if (h.len >= 1 && body[0] == CAP_LIVE) {
-                    if (!live && p->live)
-                        p->live();
-                    live = 1;
-                    audio.live = 1;
-                    if (was_recovering) { // the picture is back: a keyframe so viewers join it at once
-                        LOG("capture: recovered after a gap (%llu frames so far)", (unsigned long long)frames);
-                        was_recovering = 0;
-                        capture_request_keyframe();
-                    }
-                } else if (h.len >= 1 && body[0] == CAP_RECOVERING) {
-                    LOG("capture: the picture is recovering (a game or display switch)");
+                    // Only a complete IDR, profile and headers prove media progress.
+                } else if (h.len >= 1 && body[0] == CAP_RECOVERING && !was_recovering && live) {
                     was_recovering = 1;
+                    profile_seen = headers_seen = idr_seen = 0;
+                    media_at = mono_ms();
                 } else if (h.len >= 1 && body[0] == CAP_ERROR) {
                     size_t t = h.len - 1 < sizeof why_text - 1 ? h.len - 1 : sizeof why_text - 1;
                     for (size_t i = 0; i < t; i++) // text from another process: printable ASCII only
                         why_text[i] = body[1 + i] >= 32 && body[1 + i] < 127 ? (char)body[1 + i] : '?';
                     why_text[t] = 0;
+                    bad = 1; // an explicit error is terminal; do not overwrite it with a later timeout
                 }
                 break;
             default:
@@ -419,6 +484,8 @@ const char *capture_run(const capture_params *p)
     // told why, or just vanished.
     result = stopping || !p->keep_going() ? NULL : why_text[0] ? why_text : "Capture stopped.";
 out:
+    for (unsigned i = 0; i < HELLO_SLOTS; i++)
+        if (candidates[i].fd >= 0) close(candidates[i].fd);
     set_conn(-1);
     if (fd >= 0)
         close(fd); // either way the helper ends its capture session when this closes

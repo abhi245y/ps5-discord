@@ -126,7 +126,7 @@ PS5_OBJ = $(patsubst %.c,build/ps5/%.o,$(APP_SRC) $(PS5_ONLY_SRC) $(PS5_DAVE_SRC
 	$(patsubst %.cpp,build/ps5/%.o,$(BLUEV_CXX))
 HOST_OBJ = $(patsubst %.c,build/host/%.o,$(APP_SRC) src/headset_stub.c $(HOST_DAVE_SRC) build/ca_bundle.c $(DEP_SRC))
 
-.PHONY: all deps dave ffmpeg host test deploy stop clean release FORCE
+.PHONY: all deps dave ffmpeg host test deploy stop clean release capture capture-test FORCE
 .DEFAULT_GOAL := all
 
 build/build_config.h: FORCE
@@ -150,7 +150,13 @@ release:
 	cp build/ps5-discord.elf dist/ps5-discord-core-v$(VERSION).elf
 	cp app/dist/PPSA99072.zip dist/ps5-discord-app-v$(VERSION).zip
 	cd dist && sha256sum ps5-discord-* > SHA256SUMS && cat SHA256SUMS
-all: build/ps5-discord.elf
+all: build/ps5-discord.elf capture
+
+capture:
+	$(MAKE) -C capture PS5_PAYLOAD_SDK=$(abspath $(SDK))
+
+capture-test:
+	$(MAKE) -C capture test CC=$(HOST_CC)
 
 deps:
 	@bash tools/deps.sh
@@ -197,12 +203,13 @@ build/host/%.o: %.c
 
 test: build/host/selftest build/host/browser-storage-test build/host/client-read-state-test build/host/gif-frames-test \
 		build/host/ds5-usb-test build/host/web-test build/host/gateway-test build/host/update-test $(HOST_DAVE_TEST) \
-		build/host/golive-opus-test build/host/game-audio-test build/host/game-audio-tsan-test build/host/capture-test
+		build/host/golive-opus-test build/host/game-audio-test build/host/game-audio-tsan-test build/host/capture-test build/host/capture-io-test capture-test
 	./build/host/selftest
 	./build/host/golive-opus-test
 	./build/host/game-audio-test
 	./build/host/game-audio-tsan-test
 	./build/host/capture-test
+	./build/host/capture-io-test
 	./build/host/ds5-usb-test
 	./build/host/web-test
 	./build/host/gateway-test
@@ -226,11 +233,20 @@ build/host/game-audio-tsan-test: $(GA_TEST_SRC) src/bt/game_audio.cpp src/game_a
 	@mkdir -p $(@D)
 	$(CXX) $(GA_TEST_FLAGS) -fsanitize=thread -o $@ $(GA_TEST_SRC)
 # broadcast.c and capture_bc.c as built for the host, with the rest of the core stubbed in the test.
-build/host/capture-test: build/host/tests/capture_backend.o build/host/src/broadcast.o build/host/src/capture_bc.o \
+build/host/capture-test: build/host/tests/capture_backend.o build/host/src/broadcast.o build/host/tests/capture_bc_fault.o \
 		build/host/src/golive_opus.o $(patsubst %.c,build/host/%.o,$(OPUS_SRC))
 	@mkdir -p $(@D)
 	@echo "  LD    $@"
 	@$(HOST_CC) -o $@ $^ -lpthread -lm
+
+# Deterministic short writes/backpressure in the real session writer, leaving helper sends intact.
+build/host/tests/capture_bc_fault.o: src/capture_bc.c src/capture_bc.h src/capture_io.h src/capture_proto.h src/game_audio.h src/golive_opus.h
+	@mkdir -p $(@D)
+	$(HOST_CC) $(HOST_CFLAGS) -Werror -Dsend=capture_test_send -c $< -o $@
+
+build/host/capture-io-test: tests/capture_io.c src/capture_io.h
+	@mkdir -p $(@D)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -g -O1 -fsanitize=address,undefined -pthread -o $@ $<
 
 # The external sender is libdave's test helper (C++, tests/dave): it signs the group's proposals.
 # The media leg links the engine's packet code, Opus and mbedTLS (GCM) as objects.
@@ -309,6 +325,7 @@ stop:
 
 clean:
 	rm -rf build
+	$(MAKE) -C capture clean
 
 # Header dependencies written by -MMD.
 -include $(PS5_OBJ:.o=.d) $(HOST_OBJ:.o=.d)

@@ -10,6 +10,7 @@
 #define LOG_PATH "./helper-test.log"
 #define NO_PICTURE_MS 1200u
 #define MODE_WAIT_MS 700u
+#define MODE_POLL_MS 2u
 #define START_WAIT_MS 600u
 #include "../src/helper.c"
 #undef main
@@ -17,15 +18,22 @@
 
 enum scenario { OK, VIDEO_OPEN_FAIL, VIDEO_START_FAIL, BAD_HEADERS, VIDEO_OVERSIZE, TRANSPORT_FAIL, CALLBACK_FAIL,
                 NO_IDR, MODE_120HZ, CLOSE_FAIL, MODE_TRANSITION, MODE_CHANGED, CORE_CLOSES, BAD_PROFILE,
+                HANDLE_READ_FAIL, STOP_SETUP, EOF_SETUP, STOP_HEADERS, SLOW_SETUP, MODE_OTHER, MODE_ZERO, STOP_ATTACH, EOF_ATTACH, STOP_MODE, EOF_MODE,
                 SCENARIO_COUNT,
                 RECOVER_OK, RECOVER_ZERO_MODE, RECOVER_REOPEN_FAIL, RECOVER_SECOND_FAULT, RECOVER_BAD_CLEANUP,
-                RECOVER_TRANSPORT, RECOVER_120HZ, RECOVER_LAST = RECOVER_120HZ };
+                RECOVER_TRANSPORT, RECOVER_120HZ, RECOVER_EARLY_MODE, RECOVER_LAST = RECOVER_EARLY_MODE };
 static enum scenario scenario;
 static uint8_t scratch[0x4000], video_mem[FRAME_CAP];
 static const uint64_t video_handle = 0x1234567800000012ull;
 static unsigned calls[FUNCTION_COUNT], vstop, vclose, detached, freed, attachments, mode_samples, reads_in_session;
 static int saw_video_start, saw_bitrate, error_fired;
+static const uint8_t real_sps[] = {
+    0x67,0x4d,0x40,0x28,0x91,0x8a,0x01,0x40,0x16,0xec,0x05,0xa8,0x08,0x08,
+    0x0a,0x00,0x00,0x1f,0x48,0x00,0x07,0x53,0x01,0x13,0x43,0xc7,0xc5,0x40
+};
 static struct start_req profile;
+static int fake_core_fd = -1;
+static void send_simple(int fd, uint8_t type);
 
 int sl_inject_begin(const char *name, sl_inject *ctx)
 {
@@ -34,6 +42,8 @@ int sl_inject_begin(const char *name, sl_inject *ctx)
     ctx->attached = 1; ctx->target_pid = 123;
     attachments++; reads_in_session = 0; saw_video_start = saw_bitrate = 0;
     ctx->scratch = (intptr_t)scratch; ctx->scratch_len = sizeof scratch;
+    if (scenario == STOP_ATTACH) send_simple(fake_core_fd, CAP_STOP);
+    if (scenario == EOF_ATTACH) shutdown(fake_core_fd, SHUT_WR);
     return 0;
 }
 int sl_inject_end(sl_inject *ctx) { assert(ctx->attached); ctx->attached = 0; detached++; return 0; }
@@ -50,6 +60,7 @@ int sl_inject_read_at(sl_inject *ctx, intptr_t address, void *out, size_t n)
     if ((uintptr_t)address >= (uintptr_t)scratch && (uintptr_t)address < (uintptr_t)scratch + sizeof scratch)
         assert((uintptr_t)address + n <= (uintptr_t)scratch + sizeof scratch);
     else assert(address == (intptr_t)video_mem && n <= sizeof video_mem);
+    if (scenario == HANDLE_READ_FAIL && address == (intptr_t)scratch && n == 8) return -1;
     memcpy(out, (void *)address, n); return 0;
 }
 int sl_inject_write_at(sl_inject *ctx, intptr_t address, const void *input, size_t n)
@@ -69,14 +80,18 @@ int64_t inj_call_fast(sl_inject *ctx, intptr_t fn, const uint64_t a[6], int save
     calls[id]++;
     switch (id) {
     case MODE:
+        if (calls[MODE] == 2 && scenario == STOP_MODE) send_simple(fake_core_fd, CAP_STOP);
+        if (calls[MODE] == 2 && scenario == EOF_MODE) shutdown(fake_core_fd, SHUT_WR);
         if (scenario == MODE_TRANSITION) *(uint32_t *)(uintptr_t)a[0] = 0;
         else if (scenario == MODE_120HZ) *(uint32_t *)(uintptr_t)a[0] = 0x40;
+        else if (scenario == RECOVER_EARLY_MODE && attachments == 1 && reads_in_session && !error_fired) *(uint32_t *)(uintptr_t)a[0] = 0;
         else if (recovery_scenario() && error_fired && attachments == 1) {
             mode_samples++;
             *(uint32_t *)(uintptr_t)a[0] = scenario == RECOVER_ZERO_MODE ? 0 : scenario == RECOVER_120HZ ? 0x40 :
                                            mode_samples < 3 ? 0 : 0x13c;
         } else if (recovery_scenario() && attachments > 1) *(uint32_t *)(uintptr_t)a[0] = 0x13c;
-        else *(uint32_t *)(uintptr_t)a[0] = scenario == MODE_CHANGED && calls[READ_VIDEO] > 0 ? 0x40 : 0x30;
+        else *(uint32_t *)(uintptr_t)a[0] = calls[READ_VIDEO] > 0 ?
+            scenario == MODE_CHANGED ? 0x40 : scenario == MODE_OTHER ? 0x31 : scenario == MODE_ZERO ? 0 : 0x30 : 0x30;
         break;
     case SET_CALLBACK:
         assert(a[0] == FEATURE && a[1] == REMOTE_GETPID + 1);
@@ -100,6 +115,9 @@ int64_t inj_call_fast(sl_inject *ctx, intptr_t fn, const uint64_t a[6], int save
         assert(*(uint32_t *)(scratch + 0x780 + 8) == profile.bitrate);
         saw_bitrate = 1; break;
     case START:
+        if (scenario == STOP_SETUP) send_simple(fake_core_fd, CAP_STOP);
+        if (scenario == EOF_SETUP) shutdown(fake_core_fd, SHUT_WR);
+        if (scenario == SLOW_SETUP) usleep(START_WAIT_MS * 1000 + 10000);
         assert(a[0] == video_handle && saw_bitrate);
         saw_video_start = 1;
         if (scenario == VIDEO_START_FAIL) return -1;
@@ -111,9 +129,10 @@ int64_t inj_call_fast(sl_inject *ctx, intptr_t fn, const uint64_t a[6], int save
         break;
     case HEADERS: {
         assert(a[0] == video_handle && saw_video_start);
+        if (scenario == STOP_HEADERS) { send_simple(fake_core_fd, CAP_STOP); return 0; }
         uint8_t *p = (void *)(uintptr_t)a[1];
-        put32(p, 0x10, scenario == BAD_HEADERS ? 129 : 5); put32(p, 0x98, 2);
-        memcpy(p + 0x18, "\x67\x4d\x40\x28\x91", 5); p[0xa0] = 0x68; p[0xa1] = 0xee;
+        put32(p, 0x10, scenario == BAD_HEADERS ? 129 : sizeof real_sps); put32(p, 0x98, 2);
+        memcpy(p + 0x18, real_sps, sizeof real_sps); p[0xa0] = 0x68; p[0xa1] = 0xee;
         break;
     }
     case KEYFRAME: assert(a[0] == video_handle); break;
@@ -220,6 +239,7 @@ static int run_helper(const struct start_req *req, struct seen *s, int *rc_out, 
             assert(read_exact(fd, buf, hh.len, 1000) == 1);
             s->hello = cap_get32(buf) == CAP_VERSION && !memcmp(buf + 4, token, CAP_TOKEN_BYTES);
         }
+        fake_core_fd = fd;
         if (send_start_msg) send_start(fd, req);
         unsigned want_videos = scenario == RECOVER_OK ? 6 : 8;
         for (;;) {
@@ -306,7 +326,12 @@ int main(void)
         assert(s.hello && rc == 0);
         assert(s.profiles == 1 && s.profile_w == profile.width && s.profile_h == profile.height &&
                s.profile_fps == profile.fps && s.profile_mode == 0x30);
-        assert(s.headers == 1 && s.headers_len == 4 + 5 + 4 + 2 && !memcmp(s.headers_bytes, "\0\0\0\1\x67\x4d\x40\x28\x91\0\0\0\1\x68\xee", 15));
+        uint8_t expected[128] = {0,0,0,1};
+        memcpy(expected + 4, real_sps, sizeof real_sps);
+        memcpy(expected + 4 + sizeof real_sps, "\0\0\0\1\x68\xee", 6);
+        size_t expected_len = 10 + sizeof real_sps;
+        assert(!capture_h264_timing(expected, &expected_len, sizeof expected, profile.fps));
+        assert(s.headers == 1 && s.headers_len == expected_len && !memcmp(s.headers_bytes, expected, expected_len));
         assert(s.states[CAP_STARTING] == 1 && s.states[CAP_LIVE] == 1 && !s.states[CAP_ERROR] && !s.states[CAP_RECOVERING]);
         assert(s.videos >= 8 && s.keys == s.videos);
         assert(calls[KEYFRAME] >= 2); // once at setup, once for the core's request
@@ -324,7 +349,8 @@ int main(void)
         struct seen s; int rc;
         run_helper(&profile, &s, &rc, 1, 1);
         const int quarantined = scenario == TRANSPORT_FAIL;
-        const int ends_ok = scenario == MODE_CHANGED || scenario == CORE_CLOSES;
+        const int ends_ok = scenario == CORE_CLOSES || scenario == MODE_OTHER || scenario == MODE_ZERO || scenario == STOP_SETUP || scenario == EOF_SETUP || scenario == STOP_HEADERS || scenario == STOP_ATTACH || scenario == EOF_ATTACH ||
+                             scenario == STOP_MODE || scenario == EOF_MODE;
         const int refused_mode = scenario == MODE_TRANSITION || scenario == MODE_120HZ;
         if (scenario == BAD_PROFILE) {
             assert(rc == 1 && attachments == 0 && s.states[CAP_ERROR] == 1);
@@ -335,11 +361,21 @@ int main(void)
         assert((rc == 0) == ends_ok);
         assert(attachments == 1 && detached == 1);
         for (size_t j = 0; j < sizeof scratch; j++) assert(scratch[j] == 0xab);
+        if (scenario == STOP_ATTACH || scenario == EOF_ATTACH || scenario == STOP_MODE || scenario == EOF_MODE) {
+            assert(rc == 0 && !s.videos && !calls[OPEN_VIDEO] && !vclose && !freed);
+            assert(calls[TERMINATE] == (unsigned)(scenario == STOP_MODE || scenario == EOF_MODE));
+            cases++; continue;
+        }
         assert(calls[TERMINATE] == (unsigned)!quarantined);
         assert(calls[CLEAR_CALLBACK] == (unsigned)(scenario != CALLBACK_FAIL && !quarantined && scenario != MODE_TRANSITION &&
                                                     scenario != MODE_120HZ));
         if (!ends_ok) assert(s.states[CAP_ERROR] == 1 && s.error[0]); // the core is told why
-        if (ends_ok) assert(s.states[CAP_LIVE] == 1 && !s.states[CAP_ERROR] && s.videos >= 8 && vstop == 1 && vclose == 1 && freed == 1);
+        if (scenario == CORE_CLOSES) assert(s.states[CAP_LIVE] == 1 && !s.states[CAP_ERROR] && s.videos >= 8 && vstop == 1 && vclose == 1 && freed == 1);
+        if (scenario == STOP_SETUP || scenario == EOF_SETUP || scenario == STOP_HEADERS || scenario == SLOW_SETUP)
+            assert(!s.states[CAP_LIVE] && !s.videos && vstop == 1 && vclose == 1 && !freed);
+        if (scenario == HANDLE_READ_FAIL) assert(rc == 1 && !calls[START] && vclose == 0);
+        if (scenario == MODE_CHANGED) assert(strstr(s.error, "120 Hz") && vstop == 1 && vclose == 1);
+        if (scenario == MODE_OTHER || scenario == MODE_ZERO) assert(rc == 0 && s.videos >= 8 && !s.states[CAP_ERROR]);
         if (scenario == VIDEO_OPEN_FAIL) assert(vclose == 0);
         if (scenario == VIDEO_START_FAIL) assert(vstop == 1 && vclose == 1);
         if (refused_mode) assert(calls[OPEN_VIDEO] == 0 && s.videos == 0);
@@ -359,13 +395,13 @@ int main(void)
         reset_fake();
         struct seen s; int rc;
         run_helper(&profile, &s, &rc, 1, 1);
-        const int reopens = scenario == RECOVER_OK || scenario == RECOVER_REOPEN_FAIL || scenario == RECOVER_SECOND_FAULT;
+        const int reopens = scenario == RECOVER_OK || scenario == RECOVER_EARLY_MODE || scenario == RECOVER_REOPEN_FAIL || scenario == RECOVER_SECOND_FAULT;
         const unsigned expected = reopens ? 2 : 1;
         assert(s.hello);
         assert(attachments == expected && detached == expected && calls[OPEN_VIDEO] == expected);
         assert(calls[TERMINATE] == (scenario == RECOVER_TRANSPORT ? 0 : expected));
         for (size_t j = 0; j < sizeof scratch; j++) assert(scratch[j] == 0xab);
-        if (scenario == RECOVER_OK) {
+        if (scenario == RECOVER_OK || scenario == RECOVER_EARLY_MODE) {
             assert(rc == 0 && s.states[CAP_RECOVERING] == 1 && s.states[CAP_LIVE] == 2 && !s.states[CAP_ERROR]);
             assert(s.headers == 2 && s.profiles == 2 && s.profile_mode == 0x13c); // re-read SPS/PPS, new mode
             assert(s.frames_after_recovering >= 3 && s.keys >= 1);

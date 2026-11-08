@@ -27,3 +27,6 @@ typedef int (*capture_launcher)(void); // starts the helper (after the connectio
 void capture_set_launcher(capture_launcher launcher);
 void capture_set_conn_file(const char *path);
 void capture_set_timeouts(int connect_ms, int stop_ms);
+
+// Independent first-picture, streaming-progress and recovery budgets (milliseconds).
+void capture_set_media_timeouts(int first_ms, int progress_ms, int recover_ms);
