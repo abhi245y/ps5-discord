@@ -27,6 +27,7 @@
 
 #define APP_ASSETS "/data/homebrew/PPSA99072/assets"
 #define LISTEN_MAX_REJECTS 32
+#define STALE_MS 100
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER; // conn_fd and the profile
 static int conn_fd = -1;                                 // the authenticated helper, or -1
@@ -140,14 +141,19 @@ static void *audio_main(void *arg)
     static __thread float pcm[0x2000 / 4];
     int down = 0;
     while (!a->stop) {
-        const int n = ga_read(a->id, pcm, sizeof pcm);
+        // Sound older than 100 ms when read is thrown away by the owner (this thread stalled: it
+        // must not be encoded as current), and a drop, a discard or a reopened capture comes back
+        // as `disc`: the half frame waiting is dropped, so two stretches that are not adjacent are
+        // never joined inside one Opus frame.
+        int disc = 0;
+        const int n = ga_read2(a->id, pcm, sizeof pcm, STALE_MS, &disc);
         if (n < 0) { // the capture is down (it reopens itself): a gap, then a clean start
             down = 1;
             usleep(10000);
         } else if (n < 8) {
             usleep(4000);
         } else {
-            if (down)
+            if (down || disc)
                 gl_opus_discontinuity(a->enc);
             down = 0;
             if (a->live)

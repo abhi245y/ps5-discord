@@ -72,9 +72,14 @@ static _Atomic int ga_go, ga_acquired, ga_released;
 int ga_acquire(void) { ga_acquired++; return 3; }
 void ga_release(int id) { assert(id == 3); ga_released++; }
 int ga_live(void) { return 1; }
-int ga_read(int id, float *out, unsigned max)
+static int ga_disc_at = -1; // flag a discontinuity on this 1024-frame record
+static size_t ga_record;
+static unsigned ga_stale_seen;
+int ga_read2(int id, float *out, unsigned max, unsigned stale_ms, int *disc)
 {
     assert(id == 3);
+    ga_stale_seen = stale_ms;
+    *disc = 0;
     if (!ga_go || pcm_pos >= pcm_frames)
         return 0;
     size_t n = pcm_frames - pcm_pos < 1024 ? pcm_frames - pcm_pos : 1024;
@@ -82,7 +87,13 @@ int ga_read(int id, float *out, unsigned max)
     for (size_t i = 0; i < n * 2; i++)
         out[i] = pcm16[pcm_pos * 2 + i] / 32768.0f;
     pcm_pos += n;
+    *disc = (int)ga_record++ == ga_disc_at;
     return (int)(n * 8);
+}
+int ga_read(int id, float *out, unsigned max)
+{
+    int d;
+    return ga_read2(id, out, max, 0, &d);
 }
 
 // ---- the sample and the sink -----------------------------------------------------------------------
@@ -433,6 +444,7 @@ static void reset(enum mode m)
     n_videos = n_opus = 0;
     pthread_mutex_unlock(&seen_mu);
     pcm_pos = 0;
+    ga_record = 0;
     ga_go = 0;
     ga_acquired = ga_released = 0;
     stops_of_stream = alerts = 0;
@@ -479,7 +491,7 @@ static void normal_run(int quality, unsigned selector, unsigned flag, unsigned b
     bc_profile(&pw, &ph, &pfps);
     assert((unsigned)pw == w && (unsigned)ph == h && (unsigned)pfps == fps);
     ga_go = 1;
-    WAIT(count_videos() >= 13 && count_opus() >= 50, 5000);
+    WAIT(count_videos() >= 13 && count_opus() >= (ga_disc_at < 0 ? 50u : 49u), 5000);
     usleep(150000);
     pthread_mutex_lock(&seen_mu);
     // The headers first as an access unit of their own (stream.c keeps them for the IDRs), then
@@ -493,7 +505,11 @@ static void normal_run(int quality, unsigned selector, unsigned flag, unsigned b
         assert(!memcmp(videos[i].first, "\0\0\0\1", 4));
     }
     // Sound: half a second is exactly 50 frames of 10 ms, each a stereo Opus frame.
-    assert(n_opus == 50);
+    // 24000 frames are exactly 50 frames of 10 ms; a flagged cut drops the half frame waiting
+    // (10 records of 1024 = 10240 frames: 21 whole frames, 160 left over, thrown away) so the rest
+    // starts a clean frame: 13760 frames more = 28 whole, never 50 spliced across the cut.
+    assert(n_opus == (ga_disc_at < 0 ? 50u : 49u));
+    assert(ga_stale_seen == 100);
     int err;
     OpusDecoder *dec = opus_decoder_create(48000, 2, &err);
     double energy = 0;
@@ -560,6 +576,12 @@ int main(void)
     normal_run(2, 4, 0, 15000000, 1920, 1080, 30), cases++;
     normal_run(3, 4, 1, 15000000, 1920, 1080, 60), cases++;
     pref_quality = 0;
+
+    // The owner reports a cut in the sound (records dropped, a stale backlog, a reopened capture):
+    // the Opus framing starts clean there.
+    ga_disc_at = 10;
+    normal_run(0, 3, 0, 10000000, 1280, 720, 30), cases++;
+    ga_disc_at = -1;
 
     // Repeated and concurrent starts are one Go Live: one helper launch, one connection.
     reset(H_NORMAL);

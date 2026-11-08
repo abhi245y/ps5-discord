@@ -68,6 +68,17 @@ int ga_read(int id, float *pcm, unsigned max_bytes)
     return -1;
 }
 
+int ga_read2(int id, float *pcm, unsigned max_bytes, unsigned stale_ms, int *discontinuity)
+{
+    (void)id;
+    (void)pcm;
+    (void)max_bytes;
+    (void)stale_ms;
+    if (discontinuity)
+        *discontinuity = 0;
+    return -1;
+}
+
 int ga_live(void)
 {
     return 0;

@@ -28,11 +28,16 @@ struct Fake final : IAvcap2
     std::atomic<int> inits{0}, terms{0}, opens{0}, closes{0}, starts{0}, stops{0};
     std::atomic<int> mode{0};        // 0 records, 1 read error, 2 nothing new
     std::atomic<int> failInits{0};   // Initialize fails this many times first
+    std::atomic<int> initDelayMs{0}; // Initialize takes this long (a start in flight)
     std::atomic<unsigned> seq{0};
     std::atomic<long long> lastRead{0};
     int initialize() override
     {
         inits++;
+        if (initDelayMs > 0)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(initDelayMs.load()));
+        }
         if (failInits > 0)
         {
             failInits--;
@@ -93,6 +98,7 @@ Options quick()
     Options o;
     o.backoffMs[0] = 20, o.backoffMs[1] = 40, o.backoffMs[2] = 80, o.backoffMs[3] = 160;
     o.stallMs = 300;
+    o.firstMs = 100000; // off unless a test wants it
     o.verifyMs = 150;
     o.pollMs = 1;
     o.closeWaitMs = 2000;
@@ -298,6 +304,141 @@ int main()
         std::this_thread::sleep_for(std::chrono::milliseconds(30));
         assert(drain(g, headset).size() > 3);
         g.release(headset);
+        cases++;
+    }
+
+    // Opened but silent from the start (Initialize, Open and Start succeed, no record ever comes):
+    // reopened with the backoff, not left open for ever.
+    {
+        Fake lib;
+        lib.mode = 2;
+        Options o = quick();
+        o.firstMs = 100;
+        GameAudio g(lib, [] { return true; }, o);
+        const int id = g.acquire();
+        assert(until([&] { return lib.opens >= 3; }, 3000));
+        assert(lib.terms >= 2 && lib.inits == lib.terms + (g.live() ? 1 : 0));
+        lib.mode = 0; // and when sound comes it stays
+        assert(until([&] { return g.live() && lib.opens >= 3; }));
+        const int opens = lib.opens;
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        assert(lib.opens == opens && drain(g, id).size() > 3);
+        g.release(id);
+        cases++;
+    }
+
+    // Starvation after a reopen: the source fails, comes back silent, and is reopened again.
+    {
+        Fake lib;
+        Options o = quick();
+        o.firstMs = 100;
+        GameAudio g(lib, [] { return true; }, o);
+        const int id = g.acquire();
+        assert(until([&] { return g.live(); }));
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        lib.mode = 1;
+        assert(until([&] { return lib.terms >= 1; }));
+        lib.mode = 2; // reopens fine, delivers nothing
+        assert(until([&] { return lib.opens >= 3; }, 3000));
+        lib.mode = 0;
+        assert(until([&] { return g.live(); }));
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        assert(drain(g, id).size() > 2);
+        g.release(id);
+        cases++;
+    }
+
+    // A consumer leaves while another stays, and the capture never delivered anything: the check
+    // after the release covers that too.
+    {
+        Fake lib;
+        lib.mode = 2;
+        Options o = quick(); // firstMs and stallMs far away: only the post-release check can notice
+        o.stallMs = 100000;
+        GameAudio g(lib, [] { return true; }, o);
+        const int headset = g.acquire(), golive = g.acquire();
+        assert(until([&] { return g.live(); }));
+        g.release(golive);
+        assert(until([&] { return lib.terms >= 1 && lib.opens >= 2; }, 2000));
+        g.release(headset);
+        cases++;
+    }
+
+    // A cut in the sound is reported: a consumer that fell behind (records dropped) is told, one that
+    // kept up is not; a stale backlog is discarded when read; a reopened capture is a cut.
+    {
+        Fake lib;
+        GameAudio g(lib, [] { return true; }, quick());
+        const int slow = g.acquire(), fast = g.acquire();
+        assert(until([&] { return g.live(); }));
+        float buf[2048];
+        int disc = -1;
+        auto stop = std::chrono::steady_clock::now() + std::chrono::milliseconds(800);
+        int fast_cuts = 0;
+        while (std::chrono::steady_clock::now() < stop)
+        {
+            while (g.read(fast, buf, sizeof buf, 0, &disc) > 0)
+            {
+                fast_cuts += disc;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        assert(fast_cuts == 0 && g.dropped(slow) > 0);
+        assert(g.read(slow, buf, sizeof buf, 0, &disc) > 0 && disc == 1); // told once
+        assert(g.read(slow, buf, sizeof buf, 0, &disc) > 0 && disc == 0);
+        // A stall: the sound stops, the consumer wakes 300 ms later. Everything older than 100 ms is
+        // gone when it reads (no stale sound passed off as current) and the next sound is a cut.
+        lib.mode = 2;
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        const unsigned before = g.stale(fast);
+        assert(g.read(fast, buf, sizeof buf, 100, &disc) == 0);
+        assert(g.stale(fast) > before + 3);
+        lib.mode = 0;
+        int n = 0;
+        assert(until([&] { return (n = g.read(fast, buf, sizeof buf, 100, &disc)) > 0; }));
+        assert(disc == 1);
+        {
+            std::vector<unsigned> rest{static_cast<unsigned>(buf[0])};
+            auto more = drain(g, fast);
+            rest.insert(rest.end(), more.begin(), more.end());
+            assert(increasing(rest));
+        }
+        // The capture fails and opens again: the next sound is a cut.
+        drain(g, fast);
+        lib.mode = 1;
+        assert(until([&] { return lib.terms >= 1; }));
+        lib.mode = 0;
+        assert(until([&] { return g.live() && lib.opens >= 2; }));
+        int cut = 0;
+        assert(until([&] {
+            int d = 0;
+            const int r = g.read(fast, buf, sizeof buf, 0, &d);
+            cut |= d;
+            return r > 0 && cut;
+        }));
+        assert(cut == 1);
+        g.release(slow);
+        g.release(fast);
+        cases++;
+    }
+
+    // The last release while a start is still in flight waits for it and for the cleanup:
+    // Terminate has happened when release returns.
+    {
+        Fake lib;
+        lib.initDelayMs = 300;
+        GameAudio g(lib, [] { return true; }, quick());
+        const int id = g.acquire();
+        assert(until([&] { return lib.inits == 1; })); // Initialize is running
+        g.release(id);
+        assert(lib.terms == 1 && lib.closes == 1 && !g.live());
+        // A new holder right after (teardown and reacquire racing) gets a clean open.
+        lib.initDelayMs = 0;
+        const int again = g.acquire();
+        assert(until([&] { return g.live(); }));
+        assert(lib.inits == lib.terms + 1);
+        g.release(again);
+        assert(lib.inits == lib.terms);
         cases++;
     }
 

@@ -22,6 +22,11 @@ void ga_release(int id);
 // Copies up to max_bytes of interleaved stereo float (a whole number of 8-byte frames; one record
 // at a time). Returns the bytes, 0 when nothing is waiting, -1 while the capture is down.
 int ga_read(int id, float *pcm, unsigned max_bytes);
+// As ga_read, for a consumer that turns the sound into timed output (Go Live): records older than
+// stale_ms (0: keep all) are discarded when read, and *discontinuity (may be NULL) is set to 1 when
+// the sound returned now does not follow the sound returned before it (records dropped or discarded,
+// or the capture was opened again): start a clean frame, never join the two inside one.
+int ga_read2(int id, float *pcm, unsigned max_bytes, unsigned stale_ms, int *discontinuity);
 // 1 while the capture is open.
 int ga_live(void);
 
