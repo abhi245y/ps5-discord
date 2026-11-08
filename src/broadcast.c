@@ -586,8 +586,12 @@ int bc_start(void)
         set_state("error", "Join a call first.");
         return -1;
     }
-    const int chosen = choose_backend(); // used only when none is running; a repeat keeps its own
+    // Only when none is running: a repeat keeps its own backend, and a look at USB must not
+    // happen while Remote Play holds the controller (ds5_usb_replug_state's rule).
+    int chosen = running ? 0 : choose_backend();
     pthread_mutex_lock(&run_lock);
+    if (!running && !chosen) // it ended between the look above and the lock
+        chosen = choose_backend();
     const int b = running ? (int)backend : chosen;
     if (b == REMOTE_PLAY && rp_used() < 0) {
         pthread_mutex_unlock(&run_lock);
