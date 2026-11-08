@@ -269,6 +269,7 @@ struct Voice
     std::string broadcast;        // Go Live: "off", "starting", "live", "error"
     std::string broadcast_error;  // why it stopped, when it did
     std::string replug;           // before Go Live: "ok", "replug" or "unknown" (bc_controller)
+    std::string backend;          // how Go Live runs (or would): "wireless" or "remote_play"
     bool paired = false;          // Go Live's Remote Play pairing with the console exists
     std::string pair_state;       // "idle", "pairing", "paired", "need_pin", "error"
     std::string pair_error;
@@ -355,6 +356,7 @@ struct Bluetooth
 struct Prefs
 {
     int golive_quality = 0; // 0 720p30, 1 720p60, 2 1080p30, 3 1080p60
+    int golive_backend = 0; // 0 auto (a USB controller: Remote Play, else wireless), 1 wireless, 2 Remote Play
     int mic_gain = 5;       // 0..10, 5 = as captured
     int call_volume = 5;    // 0..10, the voices heard: 5 = as received
     bool notify_dm = true;
@@ -374,6 +376,8 @@ struct Prefs
     {
         if (key == "golive_quality")
             golive_quality = value;
+        else if (key == "golive_backend")
+            golive_backend = value;
         else if (key == "mic_gain")
             mic_gain = value;
         else if (key == "call_volume")

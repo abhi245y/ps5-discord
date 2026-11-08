@@ -64,6 +64,8 @@ void ds5_usb_default_config(ds5_usb_config *config);
 int ds5_usb_run(const ds5_usb_config *config, const ds5_usb_callbacks *callbacks,
                 void *user, ds5_usb_stats *stats);
 void ds5_usb_request_stop(void);
+// 1 when a DualSense is on USB right now (a look only: nothing is opened for use, no log).
+int ds5_usb_present(void);
 // Not while ds5_usb_run runs. 1: the pad on USB was handed back (re-enumerated) and not
 // replugged since; a PS press then reaches the console over Bluetooth too, as a second pad
 // with no user. 0: fine, or no pad on USB. 2: the console would not tell.

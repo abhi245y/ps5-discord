@@ -33,7 +33,7 @@ OPUS_INCLUDES := -I$(OPUS)/include -I$(OPUS)/celt -I$(OPUS)/silk -I$(OPUS)/silk/
 
 DS5 := tools/ds5-usb-bridge
 APP_SRC := src/main.c src/log.c src/status.c src/web.c src/chat.c src/gateway.c src/remote_auth.c src/browser_auth.c src/browser_storage.c src/http.c src/props.c src/ws.c src/tls.c src/zstream.c src/ratelimit.c \
-	src/core_key.c src/voice.c src/voice_proto.c src/voice_audio.c src/broadcast.c src/rp_pair.c src/prefs.c src/notify.c src/stream.c src/playing.c src/update.c src/update_verify.c src/resample.c src/overlay.c src/png_circle.c $(DS5)/pcm_stream.c
+	src/core_key.c src/voice.c src/voice_proto.c src/voice_audio.c src/broadcast.c src/capture_bc.c src/golive_opus.c src/rp_pair.c src/prefs.c src/notify.c src/stream.c src/playing.c src/update.c src/update_verify.c src/resample.c src/overlay.c src/png_circle.c $(DS5)/pcm_stream.c
 # Controller audio without Go Live (controller_voice.c) is parked: CONTROLLER_VOICE=1 builds it.
 ifneq ($(CONTROLLER_VOICE),)
 APP_SRC += src/controller_voice.c
@@ -196,8 +196,13 @@ build/host/%.o: %.c
 	@$(HOST_CC) $(if $(filter .deps/%,$<),-w) $(HOST_CFLAGS) $(if $(filter src/% tests/%,$<),-Werror) -MMD -MP -c $< -o $@
 
 test: build/host/selftest build/host/browser-storage-test build/host/client-read-state-test build/host/gif-frames-test \
-		build/host/ds5-usb-test build/host/web-test build/host/gateway-test build/host/update-test $(HOST_DAVE_TEST)
+		build/host/ds5-usb-test build/host/web-test build/host/gateway-test build/host/update-test $(HOST_DAVE_TEST) \
+		build/host/golive-opus-test build/host/game-audio-test build/host/game-audio-tsan-test build/host/capture-test
 	./build/host/selftest
+	./build/host/golive-opus-test
+	./build/host/game-audio-test
+	./build/host/game-audio-tsan-test
+	./build/host/capture-test
 	./build/host/ds5-usb-test
 	./build/host/web-test
 	./build/host/gateway-test
@@ -206,6 +211,26 @@ test: build/host/selftest build/host/browser-storage-test build/host/client-read
 	./build/host/client-read-state-test
 	./build/host/gif-frames-test
 	$(if $(HOST_DAVE_TEST),./build/host/dave-test)
+
+# Wireless Go Live: the Opus framing, the shared game-sound owner (against a fake Avcap2, under
+# sanitizers and under TSan) and the backend with a fake helper replaying a console recording.
+build/host/golive-opus-test: tests/golive_opus.c src/golive_opus.c src/golive_opus.h $(patsubst %.c,build/host/%.o,$(OPUS_SRC))
+	@mkdir -p $(@D)
+	$(HOST_CC) $(HOST_CFLAGS) -Werror -o $@ tests/golive_opus.c src/golive_opus.c $(patsubst %.c,build/host/%.o,$(OPUS_SRC)) -lm
+GA_TEST_SRC := tests/game_audio.cpp third_party/bluev/src/core/audio/avcap_capture.cpp
+GA_TEST_FLAGS := -std=c++20 -g -O1 -Wall -Wextra -Werror -pthread -DGA_TEST -Ithird_party/bluev/src -Isrc
+build/host/game-audio-test: $(GA_TEST_SRC) src/bt/game_audio.cpp src/game_audio.h
+	@mkdir -p $(@D)
+	$(CXX) $(GA_TEST_FLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer -o $@ $(GA_TEST_SRC)
+build/host/game-audio-tsan-test: $(GA_TEST_SRC) src/bt/game_audio.cpp src/game_audio.h
+	@mkdir -p $(@D)
+	$(CXX) $(GA_TEST_FLAGS) -fsanitize=thread -o $@ $(GA_TEST_SRC)
+# broadcast.c and capture_bc.c as built for the host, with the rest of the core stubbed in the test.
+build/host/capture-test: build/host/tests/capture_backend.o build/host/src/broadcast.o build/host/src/capture_bc.o \
+		build/host/src/golive_opus.o $(patsubst %.c,build/host/%.o,$(OPUS_SRC))
+	@mkdir -p $(@D)
+	@echo "  LD    $@"
+	@$(HOST_CC) -o $@ $^ -lpthread -lm
 
 # The external sender is libdave's test helper (C++, tests/dave): it signs the group's proposals.
 # The media leg links the engine's packet code, Opus and mbedTLS (GCM) as objects.

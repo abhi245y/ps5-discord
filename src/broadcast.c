@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Broadcast (broadcast.h). The order matters: the core takes the USB DualSense from
+// Broadcast (broadcast.h), two backends behind one API (prefs golive_backend: 0 auto, 1 wireless,
+// 2 Remote Play). Auto: a DualSense on USB means Remote Play, else the wireless capture.
+//
+// Wireless (capture_bc.c): the picture from the capture helper payload, the sound from the
+// core's own game-audio capture. No pairing, no controller takeover.
+//
+// Remote Play: the order matters: the core takes the USB DualSense from
 // the system only once the Remote Play session is connected (the session's virtual
 // pad is then the user's controller), and gives it back as soon as the session ends,
 // so the user is never left without a controller. Afterwards the user presses PS to
@@ -17,11 +23,16 @@
 #include <string.h>
 #include <time.h>
 
+#include "capture_bc.h"
 #include "log.h"
 #include "notify.h"
 #include "prefs.h"
 #include "rp_pair.h"
 #include "stream.h"
+#include "voice.h"
+#ifdef __PROSPERO__
+#include "ds5_usb.h"
+#endif
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static char state[16] = "off", error[160];
@@ -38,7 +49,15 @@ static void set_state(const char *s, const char *why)
 
 const char *bc_state(void)
 {
-    return state;
+    // A literal, so that what the caller compares never changes under it.
+    static const char *const names[] = {"off", "starting", "live", "error"};
+    const char *r = "off";
+    pthread_mutex_lock(&lock);
+    for (unsigned i = 0; i < sizeof names / sizeof *names; i++)
+        if (strcmp(state, names[i]) == 0)
+            r = names[i];
+    pthread_mutex_unlock(&lock);
+    return r;
 }
 
 const char *bc_error(void)
@@ -57,38 +76,142 @@ static const struct {
 } profiles[] = {{1280, 720, 30}, {1280, 720, 60}, {1920, 1080, 30}, {1920, 1080, 60}};
 static _Atomic int profile;
 
+// The wireless bitrates are what the Remote Play backend asks for (chiaki's presets): 10 Mbit/s at
+// 720p, 15 at 1080p, whatever the rate. The encoder takes it once, before it starts.
+static int bitrate_for(int h)
+{
+    return h >= 1080 ? 15000000 : 10000000;
+}
+
+enum { WIRELESS = 1, REMOTE_PLAY = 2 };
+static _Atomic int backend; // of the running (or last) Go Live
+static _Atomic int running_now; // a Go Live is running: bc_profile reads the encoder's own numbers
+
 void bc_profile(int *w, int *h, int *fps)
 {
+    if (running_now && backend == WIRELESS && capture_actual_profile(w, h, fps))
+        return;
     *w = profiles[profile].w;
     *h = profiles[profile].h;
     *fps = profiles[profile].fps;
 }
 
+// ---- which backend ---------------------------------------------------------------------------
+
+#ifdef __PROSPERO__
+static int (*usb_probe)(void) = ds5_usb_present; // 1: a DualSense is on USB (tests set theirs)
+#else
+static int (*usb_probe)(void);
+#endif
+
+static pthread_mutex_t usb_once = PTHREAD_MUTEX_INITIALIZER;
+static time_t usb_at;
+static int usb_present;
+
+// A look at USB opens devices: at most every 2 s (the app asks on every poll).
+static int usb_pad(void)
+{
+    if (!usb_probe)
+        return 0;
+    pthread_mutex_lock(&usb_once);
+    if (time(NULL) - usb_at >= 2 || !usb_at) {
+        usb_present = usb_probe();
+        usb_at = time(NULL);
+    }
+    const int r = usb_present;
+    pthread_mutex_unlock(&usb_once);
+    return r;
+}
+
+void bc_set_usb_probe(int (*probe)(void))
+{
+    usb_probe = probe;
+    usb_at = 0; // look again
+}
+
+// Auto goes by the controller: on USB, Remote Play (it takes the pad over, as always);
+// otherwise the wireless capture, which leaves the pad alone.
+static int choose_backend(void)
+{
+    const int pref = prefs_get("golive_backend");
+    return pref == 1 ? WIRELESS : pref == 2 ? REMOTE_PLAY : usb_pad() ? REMOTE_PLAY : WIRELESS;
+}
+
+int bc_needs_pairing(void)
+{
+    return running_now ? backend == REMOTE_PLAY : choose_backend() == REMOTE_PLAY;
+}
+
+// What start/stop/worker share; each backend's run() below uses them.
+static _Atomic int want, running, holding;
+// bc_start's test-and-set of running, and the worker's way out: two presses on two request
+// threads must not both start a session on the one struct of the Remote Play backend.
+static pthread_mutex_t run_lock = PTHREAD_MUTEX_INITIALIZER;
+static int exiting; // the worker is past run(): a start now would find nothing to keep it
+static unsigned starts; // bc_start calls: one during run()'s teardown runs it again
+
+// ---- the wireless backend ----------------------------------------------------------------------
+
+static int wireless_wanted(void)
+{
+    return want && voice_wanted();
+}
+
+static void wireless_video(const uint8_t *au, size_t n, int key)
+{
+    const bc_sink *s = sink;
+    if (s && s->video)
+        s->video(au, n, key);
+}
+
+static void wireless_audio(const uint8_t *opus, size_t n)
+{
+    const bc_sink *s = sink;
+    if (s && s->audio)
+        s->audio(opus, n);
+}
+
+static void wireless_live(void)
+{
+    set_state("live", "");
+}
+
+static const char *run_wireless(void)
+{
+    const capture_params p = {.width = profiles[profile].w,
+                              .height = profiles[profile].h,
+                              .fps = profiles[profile].fps,
+                              .bitrate = bitrate_for(profiles[profile].h),
+                              .keep_going = wireless_wanted,
+                              .video = wireless_video,
+                              .audio = wireless_audio,
+                              .live = wireless_live};
+    LOG("broadcast: wireless capture, %dx%d at %d fps, %d bit/s", p.width, p.height, p.fps, p.bitrate);
+    const char *why = capture_run(&p);
+    if (!why && want && !voice_wanted())
+        return NULL; // the call ended: Go Live with it
+    return why;
+}
+
 #ifndef __PROSPERO__
-int bc_start(void)
+static const char *run(void)
 {
-    set_state("error", "Broadcasting needs the console.");
-    return -1;
+    return "Broadcasting needs the console.";
 }
 
-void bc_stop(void)
-{
-}
-
-int bc_holds_controller(void)
-{
-    return 0;
-}
-
-void bc_rescue_controller(void)
+static void rp_request_keyframe(void)
 {
 }
 
-void bc_request_keyframe(void)
+static void rp_stop(void)
 {
 }
 
-const char *bc_controller(void)
+static void rp_rescue(void)
+{
+}
+
+static const char *rp_controller(void)
 {
     return "ok";
 }
@@ -108,13 +231,8 @@ const char *bc_controller(void)
 #include "voice_audio.h"
 
 static ChiakiSession session;
-static _Atomic int want, running, connected, quit, ds5_done, live, holding;
+static _Atomic int connected, quit, ds5_done, live;
 static unsigned frames, audio_frames, keyframes;
-// bc_start's test-and-set of running, and the worker's way out: two presses on two request
-// threads must not both start a session on the one struct above.
-static pthread_mutex_t run_lock = PTHREAD_MUTEX_INITIALIZER;
-static int exiting; // the worker is past run(): a start now would find nothing to keep it
-static unsigned starts; // bc_start calls: one during run()'s teardown runs it again
 
 static void rp_log(ChiakiLogLevel level, const char *msg, void *user)
 {
@@ -177,7 +295,7 @@ static void audio_frame_cb(uint8_t *buf, size_t size, void *user)
 // being torn down.
 static pthread_mutex_t live_lock = PTHREAD_MUTEX_INITIALIZER;
 
-void bc_request_keyframe(void)
+static void rp_request_keyframe(void)
 {
     pthread_mutex_lock(&live_lock);
     if (live)
@@ -385,100 +503,18 @@ static const char *run(void)
     return why;
 }
 
-static void *worker(void *arg)
+// ---- Remote Play: what the common parts below call -------------------------------------------
+
+static void rp_stop(void)
 {
-    (void)arg;
-    const char *why;
-    for (;;) {
-        pthread_mutex_lock(&run_lock);
-        const unsigned seen = starts;
-        pthread_mutex_unlock(&run_lock);
-        why = run();
-        pthread_mutex_lock(&run_lock);
-        // Stopped, then started again while run() was handing everything back: it saw the
-        // stop, so it runs once more for the start (which was told yes).
-        const int again = !why && want && starts != seen && voice_wanted();
-        if (!again)
-            exiting = 1;
-        else
-            profile = prefs_get("golive_quality");
-        pthread_mutex_unlock(&run_lock);
-        if (!again)
-            break;
-        LOG("broadcast: started again while stopping");
-        set_state("starting", "");
-    }
-    LOG("broadcast: off%s%s", why ? ": " : "", why ? why : "");
-    set_state(why ? "error" : "off", why ? why : "");
-    if (why) {
-        stream_stop(); // the picture is gone: no frozen stream left in the call
-        app_alert("Go Live stopped", why, NULL, 1); // the game is in front: say so there
-    }
-    pthread_mutex_lock(&run_lock);
-    want = 0;
-    running = 0;
-    exiting = 0;
-    pthread_mutex_unlock(&run_lock);
-    return NULL;
 }
 
-int bc_start(void)
-{
-    if (!voice_wanted()) {
-        set_state("error", "Join a call first.");
-        return -1;
-    }
-    if (rp_used() < 0) {
-        set_state("error", "Remote Play is not paired with this console.");
-        return -1;
-    }
-    pthread_mutex_lock(&run_lock);
-    if (running && exiting) {
-        pthread_mutex_unlock(&run_lock);
-        set_state("error", "Go Live is stopping, try again.");
-        return -1;
-    }
-    want = 1;
-    starts++;
-    if (running) {
-        pthread_mutex_unlock(&run_lock);
-        return 0;
-    }
-    running = 1;
-    profile = prefs_get("golive_quality");
-    set_state("starting", "");
-    pthread_t t;
-    pthread_attr_t attr;
-    pthread_attr_init(&attr);
-    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-    int failed = pthread_create(&t, &attr, worker, NULL) != 0;
-    pthread_attr_destroy(&attr);
-    if (failed)
-        want = running = 0;
-    pthread_mutex_unlock(&run_lock);
-    if (failed) {
-        set_state("error", "Broadcasting could not start.");
-        return -1;
-    }
-    return 0;
-}
-
-void bc_stop(void)
-{
-    want = 0;
-}
-
-int bc_holds_controller(void)
-{
-    return holding;
-}
-
-void bc_rescue_controller(void)
+static void rp_rescue(void)
 {
     ds5_usb_rescue();
 }
 
-const char *bc_controller(void)
+static const char *rp_controller(void)
 {
     static const char *last = "ok";
     static time_t at;
@@ -499,3 +535,124 @@ const char *bc_controller(void)
     return r;
 }
 #endif
+
+// ---- start, stop, the worker (both backends) ---------------------------------------------------
+
+static void *worker(void *arg)
+{
+    (void)arg;
+    const char *why;
+    for (;;) {
+        pthread_mutex_lock(&run_lock);
+        const unsigned seen = starts;
+        const int b = backend;
+        pthread_mutex_unlock(&run_lock);
+        why = b == WIRELESS ? run_wireless() : run();
+        pthread_mutex_lock(&run_lock);
+        // Stopped, then started again while run() was handing everything back: it saw the
+        // stop, so it runs once more for the start (which was told yes).
+        const int again = !why && want && starts != seen && voice_wanted();
+        if (!again)
+            exiting = 1;
+        else {
+            profile = prefs_get("golive_quality");
+            backend = choose_backend();
+        }
+        pthread_mutex_unlock(&run_lock);
+        if (!again)
+            break;
+        LOG("broadcast: started again while stopping");
+        set_state("starting", "");
+    }
+    LOG("broadcast: off%s%s", why ? ": " : "", why ? why : "");
+    set_state(why ? "error" : "off", why ? why : "");
+    if (why) {
+        stream_stop(); // the picture is gone: no frozen stream left in the call
+        app_alert("Go Live stopped", why, NULL, 1); // the game is in front: say so there
+    }
+    pthread_mutex_lock(&run_lock);
+    want = 0;
+    running = 0;
+    running_now = 0;
+    exiting = 0;
+    pthread_mutex_unlock(&run_lock);
+    return NULL;
+}
+
+int bc_start(void)
+{
+    if (!voice_wanted()) {
+        set_state("error", "Join a call first.");
+        return -1;
+    }
+    const int chosen = choose_backend(); // used only when none is running; a repeat keeps its own
+    pthread_mutex_lock(&run_lock);
+    const int b = running ? (int)backend : chosen;
+    if (b == REMOTE_PLAY && rp_used() < 0) {
+        pthread_mutex_unlock(&run_lock);
+        set_state("error", "Remote Play is not paired with this console.");
+        return -1;
+    }
+    if (running && exiting) {
+        pthread_mutex_unlock(&run_lock);
+        set_state("error", "Go Live is stopping, try again.");
+        return -1;
+    }
+    want = 1;
+    starts++;
+    if (running) {
+        pthread_mutex_unlock(&run_lock);
+        return 0;
+    }
+    running = 1;
+    running_now = 1;
+    backend = b;
+    profile = prefs_get("golive_quality");
+    set_state("starting", "");
+    pthread_t t;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    int failed = pthread_create(&t, &attr, worker, NULL) != 0;
+    pthread_attr_destroy(&attr);
+    if (failed)
+        want = running = running_now = 0;
+    pthread_mutex_unlock(&run_lock);
+    if (failed) {
+        set_state("error", "Broadcasting could not start.");
+        return -1;
+    }
+    return 0;
+}
+
+void bc_stop(void)
+{
+    want = 0;
+    rp_stop();
+}
+
+int bc_holds_controller(void)
+{
+    return holding; // only the Remote Play backend ever sets it
+}
+
+void bc_rescue_controller(void)
+{
+    rp_rescue();
+}
+
+void bc_request_keyframe(void)
+{
+    if (backend == WIRELESS)
+        capture_request_keyframe();
+    else
+        rp_request_keyframe();
+}
+
+const char *bc_controller(void)
+{
+    // The wireless backend never touches the controller: nothing to unplug or replug.
+    if (running_now ? backend == WIRELESS : choose_backend() == WIRELESS)
+        return "ok";
+    return rp_controller();
+}

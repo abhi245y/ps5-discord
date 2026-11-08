@@ -75,6 +75,8 @@ struct Row
 
 // Prefs::golive_quality. Remote Play streams 1080p at most; Discord wants H.264.
 constexpr const char *kQualities[] = {"720p · 30 fps", "720p · 60 fps", "1080p · 30 fps", "1080p · 60 fps"};
+// Prefs::golive_backend: how Go Live gets the picture.
+constexpr const char *kCaptures[] = {"Auto", "Wireless", "USB controller"};
 // Prefs::notify_server and quiet_hours (the core's notify.c has the same hours).
 constexpr const char *kServerMessages[] = {"Off", "As in Discord", "Every message"};
 // Prefs::bt_handsfree: the headset in calls (overlay/src/app/discord_app.inc says the same).
@@ -176,6 +178,8 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
             pair,
             choice_row("Go Live quality", "From the next Go Live on. Above 720p · 30 fps may need Nitro.",
                        "golive_quality", kQualities, s.prefs.golive_quality),
+            choice_row("Capture", "Auto: the USB controller if plugged in, else wireless.",
+                       "golive_backend", kCaptures, s.prefs.golive_backend),
         };
     }
     case 2: {

@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Wireless Go Live: the picture from the console's own hardware encoder through a helper payload
+  (`capture/`, GPL-3.0-only), the sound from the core's game-audio capture, shared with the
+  Bluetooth headset (`src/bt/game_audio.cpp`). The controller is left alone. Settings, Voice &
+  audio, Capture: Auto (a USB controller means Remote Play, else wireless), Wireless, USB controller.
+
 ## [0.6.0-alpha.2] - 2026-10-31
 
 ### Fixed

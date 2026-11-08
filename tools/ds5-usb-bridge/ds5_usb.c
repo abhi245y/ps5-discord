@@ -583,6 +583,15 @@ int ds5_usb_replug_state(void)
     return 0;
 }
 
+int ds5_usb_present(void)
+{
+    const int fd = scan(1);
+    if (fd < 0)
+        return 0;
+    close(fd);
+    return 1;
+}
+
 void ds5_usb_rescue(void)
 {
     int fd = atomic_exchange(&rescue_fd, -1);

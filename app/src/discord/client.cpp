@@ -1425,6 +1425,7 @@ void Client::poll_voice()
             voice.broadcast = text(v["broadcast"], "state");
             voice.broadcast_error = text(v["broadcast"], "error");
             voice.replug = text(v["broadcast"], "controller");
+            voice.backend = text(v["broadcast"], "backend");
             voice.paired = flag(v["broadcast"], "paired", false);
             voice.pair_state = text(v["broadcast"], "pair_state");
             voice.pair_error = text(v["broadcast"], "pair_error");
@@ -1445,6 +1446,7 @@ void Client::poll_voice()
             const json &p = v["prefs"];
             Prefs &prefs = snapshot_.prefs;
             prefs.golive_quality = std::clamp(static_cast<int>(num(p, "golive_quality", 0.0)), 0, 3);
+            prefs.golive_backend = std::clamp(static_cast<int>(num(p, "golive_backend", 0.0)), 0, 2);
             prefs.mic_gain = std::clamp(static_cast<int>(num(p, "mic_gain", 5.0)), 0, 10);
             prefs.call_volume = std::clamp(static_cast<int>(num(p, "call_volume", 5.0)), 0, 10);
             prefs.notify_dm = num(p, "notify_dm", 1.0) != 0.0;

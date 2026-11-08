@@ -633,7 +633,9 @@ static char *voice_json(void)
     }
     snprintf(id, sizeof id, "%08x", (unsigned)used);
     cJSON_AddStringToObject(bc, "use", used >= 0 ? id : "");
-    cJSON_AddBoolToObject(bc, "paired", used >= 0);
+    // The wireless capture needs no pairing: the app asks for one only when Remote Play would run.
+    cJSON_AddBoolToObject(bc, "paired", used >= 0 || !bc_needs_pairing());
+    cJSON_AddStringToObject(bc, "backend", bc_needs_pairing() ? "remote_play" : "wireless");
     cJSON_AddStringToObject(bc, "pair_state", rp_pair_state());
     cJSON_AddStringToObject(bc, "pair_error", rp_pair_error());
     cJSON_AddStringToObject(bc, "controller", bc_controller());

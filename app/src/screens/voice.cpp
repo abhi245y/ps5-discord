@@ -375,7 +375,8 @@ void VoiceRoom::draw(const discord::Snapshot &s, DrawList &list) const
     {
         // Go Live: what it is doing, or why it stopped.
         const bool failed = v.broadcast == "error";
-        const std::string line = v.broadcast == "live"       ? "Live · the controller is the headset and plays the game"
+        const std::string line = v.broadcast == "live" && v.backend == "wireless" ? "Live"
+                                 : v.broadcast == "live"     ? "Live · the controller is the headset and plays the game"
                                  : v.broadcast == "starting" ? "Going live…"
                                                              : v.broadcast_error;
         ui::text(list, ink_.fonts.regular, fit(ink_.fonts.regular, line, 26.0f, 1300.0f), kMargin, 196.0f, 26.0f,

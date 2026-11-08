@@ -19,7 +19,6 @@
 #include "hfp_ag.hpp"
 #include "core/audio/a2dp_session.hpp"
 #include "core/audio/a2dp_streamer.hpp"
-#include "core/audio/avcap_capture.hpp"
 #include "core/audio/avrcp.hpp"
 #include "core/bluetooth/address.hpp"
 #include "core/bluetooth/bt_stack.hpp"
@@ -29,12 +28,12 @@
 #include "core/ports/log.hpp"
 #include "platform/posix/file_bond_store.hpp"
 #include "platform/posix/file_firmware_store.hpp"
-#include "platform/ps5/avcap_library.hpp"
 #include "platform/ps5/ps5_usb_directory.hpp"
 #include "platform/ps5/ugen_device.hpp"
 
 extern "C" {
 #include "broadcast.h"
+#include "game_audio.h"
 #include "log.h"
 #include "prefs.h"
 #include "voice.h"
@@ -59,6 +58,48 @@ struct CoreLog final : ILogSink
     {
         LOG("bt: %s", text);
     }
+};
+
+// The headset's share of the game sound: the core's one capture (game_audio.h) shared with
+// Go Live. Opening and closing it is the owner's business (it counts the holders and heals
+// the capture itself): read says -1 while the capture is down, as the capture itself did.
+class SharedGame final : public IAudioSource
+{
+  public:
+    void acquire()
+    {
+        if (m_id < 0)
+        {
+            m_id = ga_acquire();
+        }
+    }
+    void release()
+    {
+        if (m_id >= 0)
+        {
+            ga_release(m_id);
+        }
+        m_id = -1;
+    }
+    bool live() const
+    {
+        return m_id >= 0 && ga_live();
+    }
+    int read(float* buffer, std::uint32_t maxBytes) override
+    {
+        return m_id < 0 ? -1 : ga_read(m_id, buffer, maxBytes);
+    }
+    bool restart() override // the owner reopens it by itself; true once it is open
+    {
+        return live();
+    }
+    long overruns() override
+    {
+        return 0;
+    }
+
+  private:
+    int m_id = -1;
 };
 
 // The game's sound with the call mixed in, while the headset is the call's device.
@@ -143,7 +184,7 @@ class Radio
     Radio(std::string bondDir, std::string firmwareDir)
         : m_bonds(std::move(bondDir)), m_firmware(std::move(firmwareDir)),
           m_transport(m_device, m_clock, kConsoleBluetoothNode), m_bt(m_transport, m_bonds, m_usb, m_firmware, m_clock),
-          m_a2dp(m_bt, m_clock), m_avrcp(m_bt), m_capture(m_avcap), m_mix(m_capture),
+          m_a2dp(m_bt, m_clock), m_avrcp(m_bt), m_mix(m_game),
           m_streamer(m_bt, m_a2dp, m_mix, m_clock,
                      [](int, int queueMs, int pps, long) {
                          std::lock_guard<std::mutex> lock(g_mu);
@@ -161,7 +202,6 @@ class Radio
 
     void run()
     {
-        m_avcapLoaded = m_avcap.load();
         for (;;)
         {
             Request r;
@@ -352,7 +392,8 @@ class Radio
         if (ok)
         {
             m_avrcp.start();
-            const bool capturing = m_avcapLoaded && m_capture.start();
+            m_game.acquire();
+            const bool capturing = m_game.live();
             m_airpods = m_mic.open();
             {
                 std::lock_guard<std::mutex> lock(g_mu);
@@ -403,7 +444,7 @@ class Radio
         releaseExt();
         m_avrcp.stop();
         m_a2dp.stop();
-        m_capture.close();
+        m_game.release(); // Go Live keeps the capture if it holds it too
         m_bt.disconnect();
         listen();
         if (m_offAfter)
@@ -458,7 +499,7 @@ class Radio
         while (m_bt.linkUp() && m_wantSco && !m_stopSession)
         {
             m_bt.poll(2);
-            const int got = m_capture.read(rec.data(), static_cast<std::uint32_t>(rec.size() * sizeof(float)));
+            const int got = m_game.read(rec.data(), static_cast<std::uint32_t>(rec.size() * sizeof(float)));
             const std::size_t frames = got > 0 ? static_cast<std::size_t>(got) / 8 : 0;
             if (frames > 0)
             {
@@ -573,13 +614,12 @@ class Radio
     BtStack m_bt;
     A2dpSession m_a2dp;
     Avrcp m_avrcp;
-    AvcapLibrary m_avcap;
-    AvcapCapture m_capture;
+    SharedGame m_game;
     MixSource m_mix;
     A2dpStreamer m_streamer;
     AacpMic m_mic;
     HfpAg m_hfp{m_bt};
-    bool m_on = false, m_avcapLoaded = false, m_airpods = false, m_micFailed = false;
+    bool m_on = false, m_airpods = false, m_micFailed = false;
     bool m_hfpFailed = false, m_wantSco = false, m_stopSession = false;
     bool m_ownExt = false, m_offAfter = false, m_resetA2dp = false;
     int m_resetIn = 0; // ticks until the music stream is set up again (m_resetA2dp)
