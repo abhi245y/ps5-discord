@@ -29,7 +29,7 @@
 
 static _Atomic int call_on = 1, usb_on, rp_paired = -1;
 static int usb_probe(void) { return usb_on; }
-static int pref_quality, pref_backend;
+static int pref_quality, pref_backend, pref_bitrate;
 static _Atomic unsigned stops_of_stream, alerts;
 static char alert_text[160];
 
@@ -47,7 +47,10 @@ void log_printf(const char *fmt, ...)
 int voice_wanted(void) { return call_on; }
 int prefs_get(const char *key)
 {
-    return !strcmp(key, "golive_quality") ? pref_quality : !strcmp(key, "golive_backend") ? pref_backend : 0;
+    return !strcmp(key, "golive_quality")   ? pref_quality
+           : !strcmp(key, "golive_backend") ? pref_backend
+           : !strcmp(key, "golive_bitrate") ? pref_bitrate
+                                            : 0;
 }
 int32_t rp_used(void) { return rp_paired; }
 void stream_stop(void) { stops_of_stream++; }
@@ -651,19 +654,27 @@ int main(void)
     bc_set_sink(&sink);
     int cases = 0;
 
-    // Every profile the prefs offer reaches the encoder as selector/flag/size/fps/bitrate (10 Mbit/s
-    // at 720p, 15 at 1080p as the Remote Play backend asks for), and each run delivers the recording
-    // exactly. Only 720p30 and 1080p60 are console-tested; 720p60 and 1080p30 pass through.
+    // Every profile the prefs offer reaches the encoder as selector/flag/size/fps/bitrate (the
+    // recommended 4, 6, 6 and 8 Mbit/s), and each run delivers the recording exactly. Only 720p30
+    // and 1080p60 are console-tested; 720p60 and 1080p30 pass through.
+    normal_run(0, 3, 0, 4000000, 1280, 720, 30), cases++;
+    normal_run(1, 3, 1, 6000000, 1280, 720, 60), cases++;
+    normal_run(2, 4, 0, 6000000, 1920, 1080, 30), cases++;
+    normal_run(3, 4, 1, 8000000, 1920, 1080, 60), cases++;
+    // A custom bitrate (prefs level n: n + 1 Mbit/s), held to what the stream announces to
+    // Discord: 10 Mbit/s at 720p, 20 at 1080p.
+    pref_bitrate = 2;
+    normal_run(0, 3, 0, 3000000, 1280, 720, 30), cases++;
+    pref_bitrate = 19;
     normal_run(0, 3, 0, 10000000, 1280, 720, 30), cases++;
-    normal_run(1, 3, 1, 10000000, 1280, 720, 60), cases++;
-    normal_run(2, 4, 0, 15000000, 1920, 1080, 30), cases++;
-    normal_run(3, 4, 1, 15000000, 1920, 1080, 60), cases++;
+    normal_run(3, 4, 1, 20000000, 1920, 1080, 60), cases++;
+    pref_bitrate = 0;
     pref_quality = 0;
 
     // The owner reports a cut in the sound (records dropped, a stale backlog, a reopened capture):
     // the Opus framing starts clean there.
     ga_disc_at = 10;
-    normal_run(0, 3, 0, 10000000, 1280, 720, 30), cases++;
+    normal_run(0, 3, 0, 4000000, 1280, 720, 30), cases++;
     ga_disc_at = -1;
 
     // Repeated and concurrent starts are one Go Live: one helper launch, one connection.
@@ -802,7 +813,7 @@ int main(void)
     WAIT(stops_of_stream == 1 && alerts == 1, 2000);
     assert(strstr(alert_text, "Go Live stopped"));
     check_stopped_clean();
-    normal_run(0, 3, 0, 10000000, 1280, 720, 30);
+    normal_run(0, 3, 0, 4000000, 1280, 720, 30);
     cases++;
 
     // The helper says why before it goes: that text is the error.

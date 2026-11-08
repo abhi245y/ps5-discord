@@ -277,6 +277,31 @@ static void test_gcm(void)
     assert(voice_rtp_header_len(ext, 8) == 0);
 }
 
+// Discord's receiver reports about our stream: report blocks, NACK, PLI, REMB, and the
+// RTCP transport encryption (8 clear bytes).
+static void test_rtcp(void)
+{
+    const uint32_t ours = 8760;
+    uint8_t p[] = {
+        0x81, 201, 0, 7, 0, 0, 0, 1,                 // RR, one block, from SSRC 1
+        0, 0, 0x22, 0x38, 64, 0xff, 0xff, 0xfe,      // about 8760: fraction 64/256, cumulative -2
+        0, 0, 0, 0, 0, 0, 0x01, 0x2c, 0, 0, 0, 0, 0, 0, 0, 0, // jitter 300
+        0x81, 205, 0, 3, 0, 0, 0, 1, 0, 0, 0x22, 0x38, // generic NACK for 8760
+        0x00, 0x10, 0x00, 0x05,                      // PID 16 and two more (BLP bits 0, 2)
+        0x81, 206, 0, 2, 0, 0, 0, 1, 0, 0, 0x22, 0x38, // PLI for 8760
+        0x8f, 206, 0, 5, 0, 0, 0, 1, 0, 0, 0, 0, 'R', 'E', 'M', 'B', 1, (2 << 2) | 0, 0x01, 0x00, 0, 0, 0x22, 0x38,
+    };
+    rtcp_stats st = {0};
+    assert(rtcp_parse(p, sizeof p, ours, &st) == 0);
+    assert(st.reports == 1 && st.max_fraction == 64 && st.cumulative == -2 && st.max_jitter == 300);
+    assert(st.nack_packets == 3 && st.pli == 1 && st.fir == 0 && st.remb_bps == 256 << 2);
+    rtcp_stats other = {0};
+    assert(rtcp_parse(p, sizeof p, 1234, &other) == 0 && !other.reports && !other.nack_packets && !other.pli);
+    assert(rtcp_parse(p, sizeof p - 3, ours, &other) == -1); // truncated
+    uint8_t key[32] = {7}, opened[128], plain[16] = {0x80, 201, 0, 1, 0, 0, 0, 9, 1, 2, 3, 4, 5, 6, 7, 8};
+    assert(voice_gcm_open_rtcp(key, plain, sizeof plain, opened, sizeof opened) == 0); // no room for tag and counter
+}
+
 static void test_ip_discovery(void)
 {
     uint8_t req[74], rep[74] = {0};
@@ -1207,6 +1232,7 @@ int main(void)
     test_ws_frame();
     test_zstream();
     test_gcm();
+    test_rtcp();
     test_ip_discovery();
     test_voice_json();
     test_bin_frame();

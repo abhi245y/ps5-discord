@@ -54,12 +54,12 @@ size_t voice_gcm_seal(const uint8_t key[32], uint32_t counter, const uint8_t *pk
     return len + GCM_TAG + GCM_COUNTER;
 }
 
-size_t voice_gcm_open(const uint8_t key[32], const uint8_t *pkt, size_t len, uint8_t *out, size_t cap)
+static size_t gcm_open(const uint8_t key[32], const uint8_t *pkt, size_t len, uint8_t *out, size_t cap, int rtcp)
 {
     if (len < GCM_TAG + GCM_COUNTER)
         return 0;
     const size_t plain_len = len - GCM_TAG - GCM_COUNTER;
-    const size_t hlen = voice_rtp_header_len(pkt, plain_len);
+    const size_t hlen = rtcp ? (plain_len >= 8 ? 8 : 0) : voice_rtp_header_len(pkt, plain_len);
     if (!hlen || cap < plain_len)
         return 0;
     const uint8_t *tail = pkt + len - GCM_COUNTER;
@@ -76,6 +76,71 @@ size_t voice_gcm_open(const uint8_t key[32], const uint8_t *pkt, size_t len, uin
         return 0;
     memcpy(out, pkt, hlen);
     return plain_len;
+}
+
+size_t voice_gcm_open(const uint8_t key[32], const uint8_t *pkt, size_t len, uint8_t *out, size_t cap)
+{
+    return gcm_open(key, pkt, len, out, cap, 0);
+}
+
+size_t voice_gcm_open_rtcp(const uint8_t key[32], const uint8_t *pkt, size_t len, uint8_t *out, size_t cap)
+{
+    return gcm_open(key, pkt, len, out, cap, 1);
+}
+
+static uint32_t be32(const uint8_t *p)
+{
+    return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
+}
+
+// RFC 3550 SR/RR report blocks, RFC 4585 generic NACK, PLI and FIR (RFC 5104), and REMB
+// (draft-alvestrand-rmcat-remb) about `ssrc`.
+int rtcp_parse(const uint8_t *p, size_t len, uint32_t ssrc, rtcp_stats *st)
+{
+    while (len >= 4) {
+        if ((p[0] >> 6) != 2)
+            return -1;
+        const unsigned count = p[0] & 0x1f, pt = p[1];
+        const size_t n = 4 * ((size_t)(p[2] << 8 | p[3]) + 1);
+        if (n > len)
+            return -1;
+        if ((pt == 200 || pt == 201) && n >= 8) { // SR: 20 bytes of sender info before the blocks
+            size_t at = pt == 200 ? 28 : 8;
+            for (unsigned i = 0; i < count && at + 24 <= n; i++, at += 24) {
+                const uint8_t *b = p + at;
+                if (be32(b) != ssrc)
+                    continue;
+                st->reports++;
+                if (b[4] > st->max_fraction)
+                    st->max_fraction = b[4];
+                int32_t lost = (int32_t)((uint32_t)b[5] << 16 | (uint32_t)b[6] << 8 | b[7]);
+                st->cumulative = lost & 0x800000 ? lost - 0x1000000 : lost;
+                if (be32(b + 12) > st->max_jitter)
+                    st->max_jitter = be32(b + 12);
+            }
+        } else if (pt == 205 && count == 1 && n >= 12 && be32(p + 8) == ssrc) {
+            for (size_t at = 12; at + 4 <= n; at += 4) { // PID, then a bitmask of the 16 after it
+                unsigned blp = (unsigned)(p[at + 2] << 8 | p[at + 3]);
+                st->nack_packets++;
+                for (; blp; blp &= blp - 1)
+                    st->nack_packets++;
+            }
+        } else if (pt == 206 && n >= 12) {
+            if (count == 1 && be32(p + 8) == ssrc)
+                st->pli++;
+            else if (count == 4)
+                for (size_t at = 12; at + 8 <= n; at += 8)
+                    st->fir += be32(p + at) == ssrc;
+            else if (count == 15 && n >= 20 && !memcmp(p + 12, "REMB", 4)) {
+                const uint8_t *r = p + 16; // number of SSRCs, then 6-bit exponent, 18-bit mantissa
+                uint64_t bps = (uint64_t)(((uint32_t)(r[1] & 3) << 16) | (uint32_t)r[2] << 8 | r[3]) << (r[1] >> 2);
+                st->remb_bps = bps > 0xffffffffu ? 0xffffffffu : (uint32_t)bps;
+            }
+        }
+        p += n;
+        len -= n;
+    }
+    return len ? -1 : 0;
 }
 
 size_t voice_ip_discovery_request(uint8_t out[74], uint32_t ssrc)

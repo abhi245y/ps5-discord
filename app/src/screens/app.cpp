@@ -50,7 +50,7 @@ const app::ConceptInfo kInfo{
 // Screen names in captures follow the framework's frame numbers.
 constexpr app::TourStep kTour[] = {
     {0.9f, 0, Direction::none, "home"},
-    // Settings (frame 11): Options from Home, sign out, Voice & audio, pairing, quality,
+    // Settings (frame 11): Options from Home, sign out, Voice & audio, Go Live (pairing, quality),
     // notifications, Appearance.
     {0.4f, action_bit(Action::menu)},
     {0.8f, 0, Direction::none, "settings"},
@@ -63,6 +63,12 @@ constexpr app::TourStep kTour[] = {
     {0.4f, 0, Direction::right},
     {0.4f, 0, Direction::right},
     {0.6f, 0, Direction::none, "settings-voice"},
+    // Go Live: quality, bitrate, capture, pairing (the last row).
+    {0.4f, action_bit(Action::back)},
+    {0.4f, 0, Direction::down},
+    {0.4f, 0, Direction::right},
+    {0.6f, 0, Direction::none, "settings-golive"},
+    {0.4f, 0, Direction::down},
     {0.4f, 0, Direction::down},
     {0.4f, 0, Direction::down},
     {0.4f, action_bit(Action::confirm)},
@@ -78,7 +84,9 @@ constexpr app::TourStep kTour[] = {
     {0.4f, action_bit(Action::back)},
     {0.6f, 0, Direction::none, "settings-pair-users-paired"},
     {0.4f, action_bit(Action::back)},
-    {0.4f, 0, Direction::down},
+    {0.4f, 0, Direction::up},
+    {0.4f, 0, Direction::up},
+    {0.4f, 0, Direction::up},
     {0.4f, 0, Direction::right},
     {0.6f, 0, Direction::none, "settings-quality"},
     {0.4f, action_bit(Action::confirm)},

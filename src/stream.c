@@ -64,6 +64,9 @@ typedef struct {
     _Atomic int spent; // the 32-bit GCM nonce is nearly used up: the stream must end
     int64_t t0;
     unsigned sent_frames, sent_packets, sent_audio, dropped;
+    // What viewers report back (RTCP), read by serve() and logged every 5 s
+    rtcp_stats rtcp_v;
+    unsigned rtcp_in, rtcp_bad;
     char err[200];
 } conn;
 
@@ -215,6 +218,7 @@ static void send_rtp(conn *c, int pt, uint32_t ssrc, uint16_t seq, uint32_t ts, 
 // every second; viewers on a Wi-Fi console saw hiccups. Video now leaves in batches of
 // PACE_BATCH packets at no more than PACE_BITS_PER_S, with mlock released between batches so
 // sound keeps flowing. ponytail: fixed cap, the knob to tune if Wi-Fi still drops bursts.
+#define KEY_EVERY_MS 3000 // a keyframe at least this often (and whenever a viewer asks)
 #define PACE_BATCH 8
 #define PACE_BITS_PER_S 40000000LL
 
@@ -269,6 +273,27 @@ static int send_frame_rtp(conn *c, const uint8_t *f, size_t n, uint32_t ts)
     h264_packetize(f, n, RTP_MTU, emit_video, &v);
     next_us = v.next_us;
     return !v.gone;
+}
+
+// serve()'s thread only. Discord's media server sends receiver reports, NACKs, PLIs and REMB
+// to our UDP socket; nothing else reads it after IP discovery. Counted for the log; returns
+// whether a viewer asked for a keyframe (PLI or FIR) in what was read.
+static int read_rtcp(conn *c)
+{
+    const unsigned asked = c->rtcp_v.pli + c->rtcp_v.fir;
+    uint8_t in[1500], plain[1500];
+    for (int i = 0; i < 64; i++) {
+        ssize_t n = recv(c->udp, in, sizeof in, MSG_DONTWAIT);
+        if (n <= 0)
+            break;
+        if (n < 8 || in[1] < 200 || in[1] > 206) // RTP or anything else: not a report
+            continue;
+        c->rtcp_in++;
+        size_t m = voice_gcm_open_rtcp(c->key, in, (size_t)n, plain, sizeof plain);
+        if (!m || rtcp_parse(plain, m, c->video_ssrc, &c->rtcp_v))
+            c->rtcp_bad++;
+    }
+    return c->rtcp_v.pli + c->rtcp_v.fir != asked;
 }
 
 static void on_video(const uint8_t *au, size_t n, int keyframe)
@@ -839,7 +864,7 @@ static int serve(conn *c)
     if (identify(c) != 0)
         return -1;
     c->hb_acked = 1;
-    int64_t next_key = 0, next_log = mono_ms() + 5000;
+    int64_t next_key = 0, next_log = mono_ms() + 5000, last_asked = 0;
     for (;;) {
         if (!still_wanted(c))
             return 0;
@@ -857,9 +882,14 @@ static int serve(conn *c)
                 return -1;
             c->next_hb = now + c->hb_ms;
         }
-        if (c->media_ok && now >= next_key) { // late viewers need a keyframe each second
+        // A viewer who lost the picture asks (PLI/FIR); otherwise one every KEY_EVERY_MS for late
+        // joiners. Each keyframe is several times a normal frame, so not every second any more.
+        const int asked = read_rtcp(c);
+        if (c->media_ok && (now >= next_key || (asked && now - last_asked >= 500))) {
             bc_request_keyframe();
-            next_key = now + 1000;
+            next_key = now + KEY_EVERY_MS;
+            if (asked)
+                last_asked = now;
         }
         if (now >= next_log) {
             pthread_mutex_lock(&mlock);
@@ -867,6 +897,16 @@ static int serve(conn *c)
                 c->sent_frames, c->sent_audio, c->sent_packets, c->dropped, c->media_ok, c->dave_version,
                 c->dave_ready, c->n_users);
             pthread_mutex_unlock(&mlock);
+            const rtcp_stats *r = &c->rtcp_v;
+            if (c->rtcp_in) // jitter: 90 kHz video clock
+                LOG("stream: viewers report (5 s, %u RTCP, %u unreadable): %u reports, lost up to %u%%, total %d, "
+                    "jitter up to %u ms, %u packets asked again, %u PLI, %u FIR, estimate %u kbit/s",
+                    c->rtcp_in, c->rtcp_bad, r->reports, r->max_fraction * 100 / 256, (int)r->cumulative,
+                    (unsigned)(r->max_jitter / 90), r->nack_packets, r->pli, r->fir, (unsigned)(r->remb_bps / 1000));
+            const int32_t total = r->cumulative; // a running total: kept across windows
+            memset(&c->rtcp_v, 0, sizeof c->rtcp_v);
+            c->rtcp_v.cumulative = total;
+            c->rtcp_in = c->rtcp_bad = 0;
             next_log = now + 5000;
         }
         int m = ws_recv(&c->ws, 200);

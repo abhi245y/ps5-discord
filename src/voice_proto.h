@@ -18,6 +18,23 @@ size_t voice_gcm_seal(const uint8_t key[32], uint32_t counter, const uint8_t *pk
 // Open: the inverse, out gets the plain packet (len - 20 bytes). 0 on bad tag or size.
 size_t voice_gcm_open(const uint8_t key[32], const uint8_t *pkt, size_t len, uint8_t *out, size_t cap);
 
+// RTCP from the media server (rtpsize): the first 8 bytes (header, sender SSRC) are the clear
+// additional data. Returns the plain length, 0 on bad tag or size.
+size_t voice_gcm_open_rtcp(const uint8_t key[32], const uint8_t *pkt, size_t len, uint8_t *out, size_t cap);
+
+// What viewers report about one sent SSRC, summed over the RTCP packets given to rtcp_parse.
+typedef struct {
+    unsigned reports;        // receiver report blocks about this SSRC
+    unsigned max_fraction;   // largest fraction lost in a block, out of 256
+    int32_t cumulative;      // the latest cumulative packets lost
+    uint32_t max_jitter;     // largest interarrival jitter, in RTP timestamp units
+    unsigned nack_packets;   // packets asked for again (generic NACK)
+    unsigned pli, fir;       // picture loss and full intra requests
+    uint32_t remb_bps;       // the latest receiver estimated maximum bitrate, 0 if none
+} rtcp_stats;
+// Adds one plain (compound) RTCP packet's reports about `ssrc` to st. Returns -1 if malformed.
+int rtcp_parse(const uint8_t *p, size_t len, uint32_t ssrc, rtcp_stats *st);
+
 // IP discovery: 74-byte request (type 1, length 70, ssrc), and parsing of the reply
 // (type 2) for our external address and port. Returns 0 on success.
 size_t voice_ip_discovery_request(uint8_t out[74], uint32_t ssrc);

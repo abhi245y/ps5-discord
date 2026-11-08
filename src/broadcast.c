@@ -76,11 +76,18 @@ static const struct {
 } profiles[] = {{1280, 720, 30}, {1280, 720, 60}, {1920, 1080, 30}, {1920, 1080, 60}};
 static _Atomic int profile;
 
-// The wireless bitrates are what the Remote Play backend asks for (chiaki's presets): 10 Mbit/s at
-// 720p, 15 at 1080p, whatever the rate. The encoder takes it once, before it starts.
-static int bitrate_for(int h)
+// The wireless encoder's bitrate, taken once before it starts (it cannot change mid-stream).
+// Recommended per profile (2026-11-09): chiaki's 10/15 Mbit/s froze a viewer of a Wi-Fi console
+// at 1080p; Discord's own experiments cap 1080p30 at 3.5-5 Mbit/s. prefs golive_bitrate n > 0 is
+// n + 1 Mbit/s, kept within what stream.c tells Discord (max_bitrate: 10 at 720p, 20 at 1080p).
+// The app's settings (kRecommendedMbps) show the same numbers.
+static const int recommended_mbps[] = {4, 6, 6, 8};
+static int bitrate_for(int prof)
 {
-    return h >= 1080 ? 15000000 : 10000000;
+    const int custom = prefs_get("golive_bitrate");
+    const int cap = profiles[prof].h >= 1080 ? 20 : 10;
+    const int mbps = custom > 0 ? custom + 1 : recommended_mbps[prof];
+    return (mbps > cap ? cap : mbps) * 1000000;
 }
 
 enum { WIRELESS = 1, REMOTE_PLAY = 2 };
@@ -182,7 +189,7 @@ static const char *run_wireless(void)
     const capture_params p = {.width = profiles[profile].w,
                               .height = profiles[profile].h,
                               .fps = profiles[profile].fps,
-                              .bitrate = bitrate_for(profiles[profile].h),
+                              .bitrate = bitrate_for(profile),
                               .keep_going = wireless_wanted,
                               .video = wireless_video,
                               .audio = wireless_audio,

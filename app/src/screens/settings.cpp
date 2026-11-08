@@ -77,6 +77,31 @@ struct Row
 constexpr const char *kQualities[] = {"720p · 30 fps", "720p · 60 fps", "1080p · 30 fps", "1080p · 60 fps"};
 // Prefs::golive_backend: how Go Live gets the picture.
 constexpr const char *kCaptures[] = {"Auto", "Wireless", "USB controller"};
+// Prefs::golive_bitrate: 0 follows the quality (the core's broadcast.c recommended_mbps), level n
+// is n + 1 Mbit/s. Custom stops at what the stream tells Discord it may send: 10 Mbit/s at 720p,
+// 20 at 1080p (src/stream.c max_bitrate).
+constexpr const char *kBitrates[] = {"Recommended", "2 Mbit/s",  "3 Mbit/s",  "4 Mbit/s",  "5 Mbit/s",
+                                     "6 Mbit/s",    "7 Mbit/s",  "8 Mbit/s",  "9 Mbit/s",  "10 Mbit/s",
+                                     "11 Mbit/s",   "12 Mbit/s", "13 Mbit/s", "14 Mbit/s", "15 Mbit/s",
+                                     "16 Mbit/s",   "17 Mbit/s", "18 Mbit/s", "19 Mbit/s", "20 Mbit/s"};
+constexpr int kRecommendedMbps[] = {4, 6, 6, 8}; // per golive_quality, as the core's broadcast.c
+
+Row bitrate_row(int quality, int level)
+{
+    const int q = std::clamp(quality, 0, 3);
+    const int count = q >= 2 ? 20 : 10; // up to 20 or 10 Mbit/s
+    Row r{Kind::choice, "Bitrate", "", "", 0};
+    r.level = std::clamp(level, 0, count - 1);
+    r.value = kBitrates[r.level];
+    const std::string rec = std::to_string(kRecommendedMbps[q]) + " Mbit/s";
+    r.desc = r.level ? "Recommended for this quality: " + rec + ". Lower it if viewers stutter."
+                     : rec + " for this quality. Lower it if viewers stutter.";
+    r.act = Act::pref;
+    r.key = "golive_bitrate";
+    r.options = kBitrates;
+    r.count = count;
+    return r;
+}
 // Prefs::notify_server and quiet_hours (the core's notify.c has the same hours).
 constexpr const char *kServerMessages[] = {"Off", "As in Discord", "Every message"};
 // Prefs::bt_handsfree: the headset in calls (overlay/src/app/discord_app.inc says the same).
@@ -115,7 +140,8 @@ struct Section
 
 constexpr Section kSections[] = {
     {"Account", "Who is signed in on this console."},
-    {"Voice & audio", "Your microphone, the call's sound and Go Live."},
+    {"Voice & audio", "Your microphone and the call's sound."},
+    {"Go Live", "Streaming your game to the call."},
     {"Headset", "A Bluetooth headset for the game and calls."},
     {"Overlay", "Your call over your games, without leaving them."},
     {"Notifications", "What shows a banner while you are elsewhere."},
@@ -126,6 +152,32 @@ constexpr Section kSections[] = {
 constexpr int kSectionCount = sizeof kSections / sizeof *kSections;
 
 std::string day_text(std::int64_t unix_s, int utc_offset_minutes);
+
+// Remote Play pairing: what the USB controller capture needs.
+Row go_live_pair(const discord::Voice &v, const discord::Snapshot &s)
+{
+    Row pair;
+    pair.title = "Pairing";
+    pair.act = Act::pair;
+    pair.kind = Kind::value;
+    const discord::RemotePlayUser *used = nullptr;
+    for (const discord::RemotePlayUser &u : v.rp_users)
+        if (u.id == v.rp_use)
+            used = &u;
+    if (used)
+    {
+        pair.value = "Go Live as " + used->name;
+        pair.desc = "Paired with " + (used->console.empty() ? std::string("this console") : used->console) +
+                    (used->since > 0 ? " since " + day_text(used->since, s.utc_offset_minutes) : std::string()) +
+                    ". Select to manage.";
+    }
+    else
+    {
+        pair.value = "Not paired";
+        pair.desc = "The USB controller capture needs a console user paired once.";
+    }
+    return pair;
+}
 
 std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Settings &app, const std::string &version)
 {
@@ -142,26 +194,6 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
              0, false, false, Act::quit},
         };
     case 1: {
-        Row pair;
-        pair.title = "Go Live pairing";
-        pair.act = Act::pair;
-        pair.kind = Kind::value;
-        const discord::RemotePlayUser *used = nullptr;
-        for (const discord::RemotePlayUser &u : v.rp_users)
-            if (u.id == v.rp_use)
-                used = &u;
-        if (used)
-        {
-            pair.value = "Go Live as " + used->name;
-            pair.desc = "Paired with " + (used->console.empty() ? std::string("this console") : used->console) +
-                        (used->since > 0 ? " since " + day_text(used->since, s.utc_offset_minutes) : std::string()) +
-                        ". Select to manage.";
-        }
-        else
-        {
-            pair.value = "Not paired";
-            pair.desc = "Pair a console user once so Go Live can show your game.";
-        }
         Row mic{Kind::slider, "Mic gain", "How loud you are in calls. Join one to see your level here.", "",
                 s.prefs.mic_gain, false, false, Act::pref};
         mic.key = "mic_gain";
@@ -172,17 +204,19 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
                   s.prefs.call_volume, false, false, Act::pref};
         heard.key = "call_volume";
         heard.percent = 20;
-        return {
-            mic,
-            heard,
-            pair,
-            choice_row("Go Live quality", "From the next Go Live on. Above 720p · 30 fps may need Nitro.",
-                       "golive_quality", kQualities, s.prefs.golive_quality),
-            choice_row("Capture", "Auto: USB controller if plugged in and paired, else wireless.",
-                       "golive_backend", kCaptures, s.prefs.golive_backend),
-        };
+        return {mic, heard};
     }
     case 2: {
+        return {
+            choice_row("Quality", "From the next Go Live on. Above 720p · 30 fps may need Nitro.",
+                       "golive_quality", kQualities, s.prefs.golive_quality),
+            bitrate_row(s.prefs.golive_quality, s.prefs.golive_bitrate),
+            choice_row("Capture", "Auto: USB controller if plugged in and paired, else wireless.",
+                       "golive_backend", kCaptures, s.prefs.golive_backend),
+            go_live_pair(v, s),
+        };
+    }
+    case 3: {
         const discord::Bluetooth &b = s.bt;
         if (b.state.empty() || b.state == "unavailable")
             return {{Kind::info, "Bluetooth", "Not in this build.", ""}};
@@ -215,7 +249,7 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
                 choice_row("Call mode", "Low latency uses hands-free: less delay, phone-quality sound.",
                            "bt_handsfree", kCallModes, s.prefs.bt_handsfree ? 1 : 0)};
     }
-    case 3: {
+    case 4: {
         const std::string &st = s.overlay_state;
         if (st.empty())
             return {{Kind::info, "In-game overlay", "Not in this build.", ""}};
@@ -244,7 +278,7 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
             reload,
         };
     }
-    case 4:
+    case 5:
         return {
             toggle_row("Direct messages and mentions", "DMs and @mentions. Chats muted in Discord stay quiet.", "notify_dm", s.prefs.notify_dm),
             choice_row("Server messages", "As in Discord follows each server's notification setting.",
@@ -256,7 +290,7 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
             choice_row("Quiet hours", "No sounds and no PS5 alerts; banners in the app still show.", "quiet_hours",
                        kQuiet, s.prefs.quiet_hours),
         };
-    case 5:
+    case 6:
         return {
             {Kind::slider, "Interface sounds", "Moving around, selecting and going back.", "", app.ui_volume, false, false,
              Act::ui_volume},
@@ -267,7 +301,7 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
             {Kind::toggle, "Swap Cross and Circle", "Circle selects, Cross goes back.", "", 0, app.swap_confirm, false,
              Act::swap},
         };
-    case 6:
+    case 7:
         return {
             toggle_row("Show what I'm playing", "Your PS5 game on Discord. Covers: prosperopatches.com",
                        "share_game", s.prefs.share_game),
@@ -327,7 +361,7 @@ bool focusable(const Row &r)
 
 // ---- drawing pieces ------------------------------------------------------------
 
-constexpr float kSecX = kMargin, kSecY = 140.0f, kSecW = 500.0f, kSecH = 92.0f, kSecGap = 12.0f;
+constexpr float kSecX = kMargin, kSecY = 140.0f, kSecW = 500.0f, kSecH = 84.0f, kSecGap = 12.0f; // nine fit above 994
 constexpr float kPanelX = 620.0f, kPanelY = 124.0f, kPanelW = 1920.0f - kMargin - kPanelX, kPanelH = 870.0f;
 constexpr float kRowX = kPanelX + 32.0f, kRowW = kPanelW - 64.0f, kRowY = 282.0f, kRowH = 96.0f, kRowGap = 12.0f;
 
@@ -342,24 +376,30 @@ void section_icon(DrawList &list, int section, float cx, float cy, Color c)
     case 1:
         speaking_bars(list, cx, cy, 28.0f, c);
         break;
-    case 2:
+    case 2: // a screen, live
+        list.rounded_rect({cx - 18.0f, cy - 13.0f, 36.0f, 24.0f}, 5.0f, c);
+        list.rounded_rect({cx - 14.0f, cy - 9.0f, 28.0f, 16.0f}, 3.0f, Color::rgb(0x2a2e36));
+        list.circle(cx, cy - 1.0f, 4.0f, c);
+        list.rounded_rect({cx - 9.0f, cy + 14.0f, 18.0f, 4.0f}, 2.0f, c);
+        break;
+    case 3:
         headphones(list, cx, cy, c);
         break;
-    case 3: // two layers: the overlay over the game
+    case 4: // two layers: the overlay over the game
         list.rounded_rect({cx - 16.0f, cy - 6.0f, 26.0f, 20.0f}, 5.0f, c);
         list.rounded_rect({cx - 8.0f, cy - 16.0f, 26.0f, 20.0f}, 5.0f, Color::rgb(0x2a2e36));
         list.rounded_rect({cx - 6.0f, cy - 14.0f, 22.0f, 16.0f}, 4.0f, c);
         break;
-    case 4: // a bell
+    case 5: // a bell
         list.rounded_rect({cx - 12.0f, cy - 14.0f, 24.0f, 24.0f}, 10.0f, c);
         list.rounded_rect({cx - 16.0f, cy + 6.0f, 32.0f, 6.0f}, 3.0f, c);
         list.circle(cx, cy + 16.0f, 4.0f, c);
         break;
-    case 5: // a brush
+    case 6: // a brush
         list.line(cx + 12.0f, cy - 14.0f, cx - 4.0f, cy + 4.0f, 6.0f, c);
         list.circle(cx - 8.0f, cy + 9.0f, 7.0f, c);
         break;
-    case 6: // a shield
+    case 7: // a shield
         list.rounded_rect({cx - 13.0f, cy - 15.0f, 26.0f, 22.0f}, 5.0f, c);
         list.line(cx - 13.0f, cy + 4.0f, cx, cy + 17.0f, 6.0f, c);
         list.line(cx + 13.0f, cy + 4.0f, cx, cy + 17.0f, 6.0f, c);
