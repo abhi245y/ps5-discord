@@ -262,7 +262,7 @@ static int run_helper(const struct start_req *req, struct seen *s, int *rc_out, 
         }
         fake_core_fd = fd;
         if (send_start_msg) send_start(fd, req);
-        unsigned want_videos = scenario == RECOVER_OK ? 6 : 8;
+        unsigned want_videos = scenario == RECOVER_OK ? 6 : scenario == RECOVER_SECOND_FAULT ? 1000 : 8; // fault ends it
         for (;;) {
             r = read_exact(fd, h, sizeof h, scenario == NO_IDR || scenario == MODE_TRANSITION ? 4000 : 3000);
             if (r <= 0) break;
@@ -455,15 +455,15 @@ int main(void)
         cases++;
     }
 
-    // Recovery exactly as RECOVERY.md: only 0x81950009, three equal nonzero mode readings, a clean
-    // teardown, one fresh session with its own SPS/PPS, then no more.
+    // Recovery as RECOVERY.md: only 0x81950009, three equal nonzero mode readings, a clean
+    // teardown, a fresh session with its own SPS/PPS; at most RECOVERY_MAX reopens a minute.
     for (scenario = RECOVER_OK; scenario <= RECOVER_LAST; scenario++) {
         profile = profiles[0];
         reset_fake();
         struct seen s; int rc;
         run_helper(&profile, &s, &rc, 1, 1);
         const int reopens = scenario == RECOVER_OK || scenario == RECOVER_EARLY_MODE || scenario == RECOVER_REOPEN_FAIL || scenario == RECOVER_SECOND_FAULT;
-        const unsigned expected = reopens ? 2 : 1;
+        const unsigned expected = scenario == RECOVER_SECOND_FAULT ? RECOVERY_MAX + 1 : reopens ? 2 : 1;
         assert(s.hello);
         assert(attachments == expected && detached == expected && calls[OPEN_VIDEO] == expected);
         assert(calls[TERMINATE] == (scenario == RECOVER_TRANSPORT ? 0 : expected));
@@ -479,7 +479,8 @@ int main(void)
             if (scenario == RECOVER_ZERO_MODE || scenario == RECOVER_BAD_CLEANUP || scenario == RECOVER_TRANSPORT ||
                 scenario == RECOVER_120HZ) assert(s.states[CAP_LIVE] == 1);
             if (scenario == RECOVER_REOPEN_FAIL) assert(s.states[CAP_LIVE] == 1 && s.states[CAP_RECOVERING] == 1);
-            if (scenario == RECOVER_SECOND_FAULT) assert(s.states[CAP_RECOVERING] == 1 && s.states[CAP_LIVE] == 2); // no third session
+            if (scenario == RECOVER_SECOND_FAULT) // every reopen faults again: RECOVERY_MAX reopens, then the error
+                assert(s.states[CAP_RECOVERING] == RECOVERY_MAX && s.states[CAP_LIVE] == RECOVERY_MAX + 1);
             if (scenario == RECOVER_120HZ) assert(strstr(s.error, "120 Hz"));
         }
         cases++;

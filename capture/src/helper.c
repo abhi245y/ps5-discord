@@ -64,6 +64,10 @@ int sceKernelSetProcessName(const char *name); // the SDK's kernel header does n
 #ifndef MODE_POLL_MS
 #define MODE_POLL_MS 1000u
 #endif
+#ifndef RECOVERY_MAX
+#define RECOVERY_MAX 4
+#define RECOVERY_WINDOW_MS 60000
+#endif
 #ifndef NO_PICTURE_MS
 #define NO_PICTURE_MS CAP_PICTURE_MS
 #endif
@@ -453,6 +457,8 @@ static enum session_end capture_session(const struct start_req *req, int may_rec
     struct capture c = {.startup_deadline = now_ms() + START_WAIT_MS};
     uint8_t *frame = NULL;
     int first_idr = 0;
+    int64_t window_gap = 0;
+    size_t window_max = 0, window_idr = 0;
     enum session_end end = SESS_FAILED;
     uint8_t headers[0x200], annexb[512];
     size_t annexb_len = 0;
@@ -622,11 +628,19 @@ static enum session_end capture_session(const struct start_req *req, int may_rec
             why("The encoder gave unsupported picture timing."); goto done;
         }
         if (net_send_inplace(frame, CAP_VIDEO, idr ? CAP_KEY : 0, (uint32_t)au_len)) break;
-        last_picture = now_ms();
+        const uint64_t got = (uint64_t)now_ms();
+        if (segment.frames && (int64_t)(got - last_picture) > window_gap) window_gap = (int64_t)(got - last_picture);
+        if (au_len > window_max) window_max = au_len;
+        if (idr && au_len > window_idr) window_idr = au_len;
+        last_picture = got;
         segment.frames++;
-        segment.last_video_ms = now_ms() - segment.begin_ms;
-        if (segment.frames <= 3 || segment.frames % (req->fps * 10) == 0)
-            log_line("frames=%u last=%zu bytes", segment.frames, (size_t)n);
+        segment.last_video_ms = got - segment.begin_ms;
+        if (segment.frames <= 3 || segment.frames % (req->fps * 10) == 0) {
+            // Viewer-side hiccups (2026-11-09): the largest gap and frames of the last 10 s.
+            log_line("frames=%u last=%zu bytes; 10 s: max gap %lld ms, largest %zu, largest IDR %zu", segment.frames,
+                     (size_t)n, (long long)window_gap, window_max, window_idr);
+            window_gap = 0; window_max = window_idr = 0;
+        }
     }
     end = SESS_STOPPED;
 done:
@@ -670,13 +684,23 @@ static int helper_run(void)
     }
     log_line("start: %ux%u@%u bitrate=%u", req.width, req.height, req.fps, req.bitrate);
     net_state(CAP_STARTING, "");
-    int rc = 1, recovered = 0;
+    // Console 2026-11-09: launching a game changes the HDMI output twice about 3 s apart; with
+    // one recovery per Go Live the second change ended the stream. Each reopened session must
+    // deliver frames before it may recover again (capture_session), and at most RECOVERY_MAX
+    // reopens fall within any RECOVERY_WINDOW_MS, so a broken encoder still ends with an error.
+    int rc = 1;
+    int64_t reopened[RECOVERY_MAX] = {0}; // when each recent recovery started, oldest replaced first
+    unsigned next_slot = 0;
     for (;;) {
-        enum session_end e = capture_session(&req, !recovered);
+        int recent = 0;
+        for (unsigned i = 0; i < RECOVERY_MAX; i++)
+            recent += reopened[i] && now_ms() - reopened[i] < RECOVERY_WINDOW_MS;
+        enum session_end e = capture_session(&req, recent < RECOVERY_MAX);
         if (e == SESS_STOPPED) { rc = 0; break; }
         if (e == SESS_RECOVERABLE && !net_dead && !quit && !stop_requested) {
-            recovered = 1;
-            log_line("recovery: one fresh session (mode 0x%x, gap since the last frame)", segment.stable_mode);
+            reopened[next_slot] = now_ms(); next_slot = (next_slot + 1) % RECOVERY_MAX;
+            log_line("recovery %d of %d in a minute: fresh session (mode 0x%x)", recent + 1, RECOVERY_MAX,
+                     segment.stable_mode);
             continue;
         }
         net_state(CAP_ERROR, segment.why[0] ? segment.why : "Capture failed.");
@@ -782,6 +806,7 @@ int main(void)
     if (mkdir(CAP_DIR, 0700) && errno != EEXIST) return 1;
     int lock_fd = open(LOCK_PATH, O_CREAT | O_RDWR, 0600);
     if (lock_fd < 0 || flock(lock_fd, LOCK_EX | LOCK_NB)) return 1; // one helper at a time
+    (void)rename(LOG_PATH, LOG_PATH ".prev"); // the session before, kept for diagnosis
     log_file = fopen(LOG_PATH, "w");
     progress = mmap(NULL, sizeof *progress, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
     if (progress == MAP_FAILED) return 1;

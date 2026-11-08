@@ -44,8 +44,10 @@ only file shared with the core is `src/capture_proto.h` (MIT).
   scratch bytes are saved on the first write to each range; unrelated bytes are never replayed
   from an old whole-page snapshot. Temporary tracing credentials are journaled and verified too.
 * Recovery (RECOVERY.md of the PoC): only video-read error 0x81950009; poll the output mode until
-  three equal nonzero readings (100 ms, 5 s), clean teardown, one fresh session, SPS/PPS read
-  again, IDR requested. A second failure ends with an error state.
+  three equal nonzero readings (100 ms, 5 s), clean teardown, a fresh session, SPS/PPS read
+  again, IDR requested. A game launch changes the output twice about 3 s apart (console,
+  2026-11-09), so each reopened session that delivers frames may recover again, up to four
+  reopens a minute; beyond that the session ends with an error state.
 * Mode guard: output mode 0x40 (the one Glint treats as 120 Hz) is refused at startup and polled
   once a second while streaming. Up to two API query misses are tolerated; transport failures
   remain fatal. Other mode changes are logged while reads continue, preserving
