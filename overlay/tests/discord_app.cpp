@@ -379,7 +379,7 @@ int main(){
     // The timer: a fixed box as wide as its format's widest text (probe measured two frames on),
     // right-aligned, ending at the cards' edge; the seconds change nothing; both on one baseline.
     assert(w(title)->valign==1&&w(timer)->valign==1&&w(timer)->r.y==kTitleY+12&&w(title)->r.y==kTitleY);
-    assert(!std::strcmp(w(timer_probe)->text,"8:88")&&w(timer)->r.x+w(timer)->r.w==kRowX+kRowW);
+    assert(!std::strcmp(w(timer_probe)->text,"8:88")&&w(timer)->r.x+w(timer)->r.w==kRowX+kRowW+7);
     for(int i=0;i<3;i++)on_tick(++frame,b); // the probe is read two frames after the panel opened
     assert(w(timer)->r.w==15*4+8&&w(clock)->r.x==w(timer)->r.x-34); // 15 px a byte in this fake
     {const float tx=w(timer)->r.x,cx=w(clock)->r.x,cy=w(clock)->r.y;
@@ -388,7 +388,7 @@ int main(){
      on_text("3|c|o|1||0|Raid Night|10:00|720p|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~t",b); // a new format
      assert(!std::strcmp(w(timer_probe)->text,"88:88"));
      for(int i=0;i<3;i++)on_tick(++frame,b);
-     assert(w(timer)->r.w==15*5+8&&w(timer)->r.x+w(timer)->r.w==kRowX+kRowW&&w(clock)->r.x<cx);
+     assert(w(timer)->r.w==15*5+8&&w(timer)->r.x+w(timer)->r.w==kRowX+kRowW+7&&w(clock)->r.x<cx);
      assert(cy>kTitleY&&cy+26<kTitleY+12+kTitleH); // the clock inside the title line
      on_text(kCall,b);for(int i=0;i<3;i++)on_tick(++frame,b);assert(w(timer)->r.x==tx);}
     // A tab switch: the page's rows show a frame later; the highlight slides over 8 frames.

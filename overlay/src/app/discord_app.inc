@@ -768,7 +768,8 @@ float render_pages(Builder& b){
 
 // The timer's box ends at the cards' edge; the clock sits before it, centred on the digits.
 void place_timer(Builder& b){
-    const float w=timer_w+8,right=kRowX+kRowW;
+    // A right-aligned label keeps ~7 px after its text (the same photo): the box ends past the cards' edge by that.
+    const float w=timer_w+8,right=kRowX+kRowW+7;
     // Measured on the console (a straight-on photo, the 132 px card as the ruler): at +2 the
     // digits' baseline was 10 px above the title's, the clock's middle 12 px below the digits'.
     b.set_rect(timer,{right-w,kTitleY+12,w,kTitleH});
@@ -930,7 +931,7 @@ bool build(Builder& b){
     if(clock)b.set_tint(clock,kDim);
     timer=label(b,{kRowX+kRowW-130,kTitleY+12,130,kTitleH},25,3,kDim,2); // right-aligned; placed by place_timer
     timer_probe=label(b,{kRowX,kTitleY,300,kTitleH},25,3,Color{1,1,1,0}); // inkless: measures the widest timer text
-    b.set_text_valign(timer,1); // on the title's baseline (the title's is set with its mode; box bottoms 2 px apart)
+    b.set_text_valign(title,1);b.set_text_valign(timer,1); // accepted on 13.00, no visible effect: kept so every load matches the measured state
     for(int i=0;i<kRows;i++){
         const float y=kRowY+kRowStep*i;
         row_bg[i]=image(b,{kRowX,y,kRowW,kRowH},"row");
