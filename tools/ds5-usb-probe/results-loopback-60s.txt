@@ -1,0 +1,98 @@
+start: 60-second full-duplex loopback; built-in mic, automatic headphone output; haptics zero
+gain: mic 20, headphone volume 7f loopback 1/2 limit 16384, speaker loopback 1/16
+selected /dev/ugen2.2 VID:PID 054c:0ce6
+mic: interface 2 alt-index 1 endpoint 82 packet 196
+output: interface 1 alt-index 1 endpoint 01 packet 392
+HID index 3 IN 84 OUT 03
+slot 0 endpoint 82 opened: packet 196 frames 16
+slot 1 endpoint 82 opened: packet 196 frames 16
+slot 2 endpoint 01 opened: packet 392 frames 16
+slot 3 endpoint 01 opened: packet 392 frames 16
+slot 4 endpoint 84 opened: packet 64 frames 1
+slot 5 endpoint 03 opened: packet 64 frames 1
+initial HID status byte54=18 headphones 0 mic-muted 0
+route requested: speaker mic live (built-in mic forced)
+initial route applied: speaker mic live
+notification rc 0: Mic loopback started for 60 seconds. Speak normally. Watch prompts for headphone test. PS stops test.
+t=1s mic 62 OUT 62 HID 501 route speaker mute 0 ring 1512 underruns 0 overruns 0 peak IN/OUT 973/60
+t=2s mic 124 OUT 124 HID 1001 route speaker mute 0 ring 1512 underruns 0 overruns 0 peak IN/OUT 973/60
+t=3s mic 187 OUT 187 HID 1501 route speaker mute 0 ring 1512 underruns 0 overruns 0 peak IN/OUT 2017/126
+t=4s mic 250 OUT 250 HID 2001 route speaker mute 0 ring 1512 underruns 0 overruns 0 peak IN/OUT 2017/126
+t=5s mic 313 OUT 313 HID 2501 route speaker mute 0 ring 1512 underruns 0 overruns 0 peak IN/OUT 2017/126
+jack observed: status 19 headphones 1
+route requested: headphones mic live (built-in mic forced)
+notification rc 0: Mic loopback: headphones connected - audio moved to headphones.
+route applied: headphones mic live
+t=6s mic 375 OUT 375 HID 3001 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 2017/285
+jack observed: status 18 headphones 0
+route requested: speaker mic live (built-in mic forced)
+notification rc 0: Mic loopback: headphones removed - audio moved to controller speaker.
+route applied: speaker mic live
+t=7s mic 438 OUT 438 HID 3501 route speaker mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 2017/285
+jack observed: status 19 headphones 1
+route requested: headphones mic live (built-in mic forced)
+notification rc 0: Mic loopback: headphones connected - audio moved to headphones.
+route applied: headphones mic live
+t=8s mic 500 OUT 500 HID 4001 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 2017/406
+t=9s mic 563 OUT 563 HID 4502 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 2017/406
+notification rc 0: Loopback test: unplug headphones now. Keep speaking into controller mic.
+t=10s mic 626 OUT 626 HID 5003 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 2017/546
+t=11s mic 688 OUT 688 HID 5504 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 3271/1410
+t=12s mic 751 OUT 751 HID 6004 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 4510/2255
+t=13s mic 814 OUT 814 HID 6504 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 4510/2255
+t=14s mic 877 OUT 877 HID 7004 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 6287/3143
+t=15s mic 939 OUT 939 HID 7504 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 6287/3143
+t=16s mic 1002 OUT 1002 HID 8005 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 7494/3747
+t=17s mic 1065 OUT 1065 HID 8505 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 7494/3747
+t=18s mic 1127 OUT 1127 HID 9005 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 8479/4239
+t=19s mic 1190 OUT 1190 HID 9505 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 9186/4593
+t=20s mic 1253 OUT 1253 HID 10005 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 9186/4593
+t=21s mic 1315 OUT 1315 HID 10506 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 9186/4593
+t=22s mic 1378 OUT 1378 HID 11006 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 9186/4593
+t=23s mic 1441 OUT 1441 HID 11506 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 9186/4593
+t=24s mic 1504 OUT 1504 HID 12006 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 30204/15102
+t=25s mic 1566 OUT 1566 HID 12507 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 30204/15102
+t=26s mic 1629 OUT 1629 HID 13007 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 30204/15102
+t=27s mic 1692 OUT 1692 HID 13508 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 30204/15102
+t=28s mic 1754 OUT 1754 HID 14009 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 30204/15102
+t=29s mic 1817 OUT 1817 HID 14509 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 30204/15102
+t=30s mic 1880 OUT 1880 HID 15009 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 30204/15102
+t=31s mic 1943 OUT 1943 HID 15509 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 30204/15102
+t=32s mic 2005 OUT 2005 HID 16009 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 30204/15102
+t=33s mic 2068 OUT 2068 HID 16510 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 30204/15102
+t=34s mic 2131 OUT 2131 HID 17010 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 30204/15102
+t=35s mic 2193 OUT 2193 HID 17510 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 30204/15102
+t=36s mic 2256 OUT 2256 HID 18010 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 30204/15102
+t=37s mic 2319 OUT 2319 HID 18510 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 30204/15102
+t=38s mic 2382 OUT 2382 HID 19010 route headphones mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 30204/15102
+jack observed: status 18 headphones 0
+route requested: speaker mic live (built-in mic forced)
+notification rc 0: Mic loopback: headphones removed - audio moved to controller speaker.
+route applied: speaker mic live
+t=39s mic 2444 OUT 2444 HID 19510 route speaker mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 30204/15102
+t=40s mic 2507 OUT 2507 HID 20010 route speaker mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 30204/15102
+t=41s mic 2570 OUT 2570 HID 20510 route speaker mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 30204/15102
+t=42s mic 2632 OUT 2632 HID 21011 route speaker mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 32117/15102
+t=43s mic 2695 OUT 2695 HID 21512 route speaker mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 32768/15102
+t=44s mic 2758 OUT 2758 HID 22012 route speaker mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 32768/15102
+t=45s mic 2821 OUT 2821 HID 22512 route speaker mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 32768/15102
+t=46s mic 2883 OUT 2883 HID 23013 route speaker mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 32768/15102
+t=47s mic 2946 OUT 2946 HID 23513 route speaker mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 32768/15102
+t=48s mic 3009 OUT 3009 HID 24013 route speaker mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 32768/15102
+t=49s mic 3072 OUT 3072 HID 24514 route speaker mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 32768/15102
+t=50s mic 3134 OUT 3134 HID 25014 route speaker mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 32768/15102
+t=51s mic 3197 OUT 3197 HID 25514 route speaker mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 32768/15102
+t=52s mic 3260 OUT 3260 HID 26014 route speaker mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 32768/15102
+t=53s mic 3322 OUT 3322 HID 26514 route speaker mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 32768/15102
+t=54s mic 3385 OUT 3385 HID 27015 route speaker mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 32768/15102
+t=55s mic 3448 OUT 3448 HID 27516 route speaker mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 32768/15102
+t=56s mic 3510 OUT 3510 HID 28016 route speaker mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 32768/15102
+t=57s mic 3573 OUT 3573 HID 28516 route speaker mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 32768/15102
+t=58s mic 3636 OUT 3636 HID 29016 route speaker mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 32768/15102
+t=59s mic 3699 OUT 3699 HID 29516 route speaker mute 0 ring 3072 underruns 0 overruns 0 peak IN/OUT 32768/15102
+summary: IN 2879208 frames OUT 2879232 frames, mic transfers 3749 OUT transfers 3749 HID 29919 handoffs 4 wall 60000 ms
+levels: input RMS 3164.6 peak 32768 nonzero 2667988 output peak 15102; routed headphone/speaker 1506048/1374720 frames
+input full-scale stereo frames 1699
+re-enumerate rc 0 errno 0
+notification rc 0: Mic loopback finished. Press PS to reconnect controller.
+done: result 0

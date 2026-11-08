@@ -1,0 +1,34 @@
+start: explicit 10-second mic recording; USB audio only; no HID output commands
+/dev/ugen0.2: descriptor 0 VID:PID 1286:2059
+/dev/ugen1.2: descriptor 0 VID:PID 0bda:9210
+/dev/ugen2.2: descriptor 0 VID:PID 054c:0ce6
+selected /dev/ugen2.2
+interface 0 alt 0 class 1 subclass 1 protocol 0 endpoints 0
+interface 1 alt 0 class 1 subclass 2 protocol 0 endpoints 0
+interface 1 alt 1 class 1 subclass 2 protocol 0 endpoints 1
+endpoint 01 attributes 09 max-packet 392 interval 4
+interface 2 alt 0 class 1 subclass 2 protocol 0 endpoints 0
+interface 2 alt 1 class 1 subclass 2 protocol 0 endpoints 1
+endpoint 82 attributes 05 max-packet 196 interval 4
+interface 3 alt 0 class 3 subclass 0 protocol 0 endpoints 2
+endpoint 84 attributes 03 max-packet 64 interval 6
+endpoint 03 attributes 03 max-packet 64 interval 6
+mic: interface 2 (index 2), alt 1 (index 1), endpoint 82, packet 196, control index 0
+detaching audio collection at index 0 (system USB audio pauses)
+slot 0 opened: frames 16 packet 196 buffer 16464
+slot 1 opened: frames 16 packet 196 buffer 16464
+recording now; speak/tap near controller mic; physical mute state is unchanged
+t=1s transfers 63 empty USB frames 0: 48384 PCM frames, L rms 309.7 peak 4073, R rms 544.5 peak 4840
+t=2s transfers 126 empty USB frames 0: 48384 PCM frames, L rms 28.6 peak 227, R rms 216.0 peak 1517
+t=3s transfers 189 empty USB frames 0: 48384 PCM frames, L rms 29.5 peak 164, R rms 207.3 peak 1030
+t=4s transfers 252 empty USB frames 0: 48384 PCM frames, L rms 29.5 peak 150, R rms 190.4 peak 721
+t=5s transfers 315 empty USB frames 0: 48384 PCM frames, L rms 28.8 peak 129, R rms 187.9 peak 724
+t=6s transfers 378 empty USB frames 0: 48384 PCM frames, L rms 28.1 peak 106, R rms 181.8 peak 716
+t=7s transfers 441 empty USB frames 0: 48384 PCM frames, L rms 33.8 peak 162, R rms 187.9 peak 703
+t=8s transfers 504 empty USB frames 0: 48384 PCM frames, L rms 28.9 peak 145, R rms 176.6 peak 718
+t=9s transfers 567 empty USB frames 0: 48384 PCM frames, L rms 28.6 peak 145, R rms 193.3 peak 911
+total: 480000 PCM frames, L rms 113.3 peak 4073, R rms 262.5 peak 4840
+capture finished: wall 10004 ms, transfers 625, empty frames 0
+re-enumerate: rc 0 errno 0; press PS/replug if controller stays disconnected
+WAV /data/ps5-discord-probe/ds5mic.wav: saved (1920000 bytes, 10.000 seconds of received PCM)
+done: result 0, captured 1920000 bytes

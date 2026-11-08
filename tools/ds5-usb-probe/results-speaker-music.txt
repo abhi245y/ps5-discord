@@ -1,0 +1,154 @@
+start: song playback from /data/ps5-discord-probe/song-mono.raw; 6794496 PCM frames, 141.552 seconds; haptic channels zero
+selected /dev/ugen2.2 VID:PID 054c:0ce6
+audio: interface 1 index 1 alt 1 index 1 endpoint 01 packet 392 interval 4
+HID: index 3 endpoint 03; audio control index 0
+audio and HID detached; controller input pauses until handback
+slot 0 opened: packet 392 frames 16 buffer 6272
+slot 1 opened: packet 392 frames 16 buffer 6272
+slot 2 opened: packet 64 frames 1 buffer 64
+speaker routing accepted: HID report 0x02, flags a0/80, volume 64, route 30, pre-gain 02
+notification rc 0: DualSense music started - Auld Lang Syne, sung by Frank C. Stanley (1910).
+t=1s completed 63 queued 49920 PCM frames
+t=2s completed 126 queued 98304 PCM frames
+t=3s completed 189 queued 146688 PCM frames
+t=4s completed 252 queued 195072 PCM frames
+t=5s completed 315 queued 243456 PCM frames
+t=6s completed 378 queued 291840 PCM frames
+t=7s completed 441 queued 340224 PCM frames
+t=8s completed 504 queued 388608 PCM frames
+t=9s completed 567 queued 436992 PCM frames
+t=10s completed 630 queued 485376 PCM frames
+t=11s completed 693 queued 533760 PCM frames
+t=12s completed 756 queued 582144 PCM frames
+t=13s completed 819 queued 630528 PCM frames
+t=14s completed 882 queued 678912 PCM frames
+t=15s completed 945 queued 727296 PCM frames
+t=16s completed 1008 queued 775680 PCM frames
+t=17s completed 1071 queued 824064 PCM frames
+t=18s completed 1134 queued 872448 PCM frames
+t=19s completed 1197 queued 920832 PCM frames
+t=20s completed 1260 queued 969216 PCM frames
+t=21s completed 1323 queued 1017600 PCM frames
+t=22s completed 1386 queued 1065984 PCM frames
+t=23s completed 1449 queued 1114368 PCM frames
+t=24s completed 1512 queued 1162752 PCM frames
+t=25s completed 1575 queued 1211136 PCM frames
+t=26s completed 1638 queued 1259520 PCM frames
+t=27s completed 1701 queued 1307904 PCM frames
+t=28s completed 1764 queued 1356288 PCM frames
+t=29s completed 1827 queued 1404672 PCM frames
+t=30s completed 1890 queued 1453056 PCM frames
+t=31s completed 1953 queued 1501440 PCM frames
+t=32s completed 2016 queued 1549824 PCM frames
+t=33s completed 2079 queued 1598208 PCM frames
+t=34s completed 2142 queued 1646592 PCM frames
+t=35s completed 2205 queued 1694976 PCM frames
+t=36s completed 2268 queued 1743360 PCM frames
+t=37s completed 2331 queued 1791744 PCM frames
+t=38s completed 2394 queued 1840128 PCM frames
+t=39s completed 2457 queued 1888512 PCM frames
+t=40s completed 2520 queued 1936896 PCM frames
+t=41s completed 2583 queued 1985280 PCM frames
+t=42s completed 2646 queued 2033664 PCM frames
+t=43s completed 2709 queued 2082048 PCM frames
+t=44s completed 2772 queued 2130432 PCM frames
+t=45s completed 2835 queued 2178816 PCM frames
+t=46s completed 2898 queued 2227200 PCM frames
+t=47s completed 2961 queued 2275584 PCM frames
+t=48s completed 3024 queued 2323968 PCM frames
+t=49s completed 3087 queued 2372352 PCM frames
+t=50s completed 3150 queued 2420736 PCM frames
+t=51s completed 3213 queued 2469120 PCM frames
+t=52s completed 3276 queued 2517504 PCM frames
+t=53s completed 3339 queued 2565888 PCM frames
+t=54s completed 3402 queued 2614272 PCM frames
+t=55s completed 3465 queued 2662656 PCM frames
+t=56s completed 3528 queued 2711040 PCM frames
+t=57s completed 3591 queued 2759424 PCM frames
+t=58s completed 3654 queued 2807808 PCM frames
+t=59s completed 3717 queued 2856192 PCM frames
+t=60s completed 3780 queued 2904576 PCM frames
+t=61s completed 3843 queued 2952960 PCM frames
+t=62s completed 3906 queued 3001344 PCM frames
+t=63s completed 3969 queued 3049728 PCM frames
+t=64s completed 4032 queued 3098112 PCM frames
+t=65s completed 4095 queued 3146496 PCM frames
+t=66s completed 4158 queued 3194880 PCM frames
+t=67s completed 4221 queued 3243264 PCM frames
+t=68s completed 4284 queued 3291648 PCM frames
+t=69s completed 4347 queued 3340032 PCM frames
+t=70s completed 4410 queued 3388416 PCM frames
+t=71s completed 4473 queued 3436800 PCM frames
+t=72s completed 4536 queued 3485184 PCM frames
+t=73s completed 4599 queued 3533568 PCM frames
+t=74s completed 4662 queued 3581952 PCM frames
+t=75s completed 4725 queued 3630336 PCM frames
+t=76s completed 4788 queued 3678720 PCM frames
+t=77s completed 4851 queued 3727104 PCM frames
+t=78s completed 4914 queued 3775488 PCM frames
+t=79s completed 4977 queued 3823872 PCM frames
+t=80s completed 5040 queued 3872256 PCM frames
+t=81s completed 5103 queued 3920640 PCM frames
+t=82s completed 5166 queued 3969024 PCM frames
+t=83s completed 5229 queued 4017408 PCM frames
+t=84s completed 5292 queued 4065792 PCM frames
+t=85s completed 5355 queued 4114176 PCM frames
+t=86s completed 5418 queued 4162560 PCM frames
+t=87s completed 5481 queued 4210944 PCM frames
+t=88s completed 5544 queued 4259328 PCM frames
+t=89s completed 5607 queued 4307712 PCM frames
+t=90s completed 5670 queued 4356096 PCM frames
+t=91s completed 5733 queued 4404480 PCM frames
+t=92s completed 5796 queued 4452864 PCM frames
+t=93s completed 5859 queued 4501248 PCM frames
+t=94s completed 5922 queued 4549632 PCM frames
+t=95s completed 5985 queued 4598016 PCM frames
+t=96s completed 6048 queued 4646400 PCM frames
+t=97s completed 6111 queued 4694784 PCM frames
+t=98s completed 6174 queued 4743168 PCM frames
+t=99s completed 6237 queued 4791552 PCM frames
+t=100s completed 6300 queued 4839936 PCM frames
+t=101s completed 6363 queued 4888320 PCM frames
+t=102s completed 6426 queued 4936704 PCM frames
+t=103s completed 6489 queued 4985088 PCM frames
+t=104s completed 6552 queued 5033472 PCM frames
+t=105s completed 6615 queued 5081856 PCM frames
+t=106s completed 6678 queued 5130240 PCM frames
+t=107s completed 6741 queued 5178624 PCM frames
+t=108s completed 6804 queued 5227008 PCM frames
+t=109s completed 6867 queued 5275392 PCM frames
+t=110s completed 6930 queued 5323776 PCM frames
+t=111s completed 6993 queued 5372160 PCM frames
+t=112s completed 7056 queued 5420544 PCM frames
+t=113s completed 7119 queued 5468928 PCM frames
+t=114s completed 7182 queued 5517312 PCM frames
+t=115s completed 7245 queued 5565696 PCM frames
+t=116s completed 7308 queued 5614080 PCM frames
+t=117s completed 7371 queued 5662464 PCM frames
+t=118s completed 7434 queued 5710848 PCM frames
+t=119s completed 7497 queued 5759232 PCM frames
+t=120s completed 7560 queued 5807616 PCM frames
+t=121s completed 7623 queued 5856000 PCM frames
+t=122s completed 7686 queued 5904384 PCM frames
+t=123s completed 7749 queued 5952768 PCM frames
+t=124s completed 7812 queued 6001152 PCM frames
+t=126s completed 7875 queued 6049536 PCM frames
+t=127s completed 7938 queued 6097920 PCM frames
+t=128s completed 8001 queued 6146304 PCM frames
+t=129s completed 8064 queued 6194688 PCM frames
+t=130s completed 8127 queued 6243072 PCM frames
+t=131s completed 8190 queued 6291456 PCM frames
+t=132s completed 8253 queued 6339840 PCM frames
+t=133s completed 8316 queued 6388224 PCM frames
+t=134s completed 8379 queued 6436608 PCM frames
+t=135s completed 8442 queued 6484992 PCM frames
+t=136s completed 8505 queued 6533376 PCM frames
+t=137s completed 8568 queued 6581760 PCM frames
+t=138s completed 8631 queued 6630144 PCM frames
+t=139s completed 8694 queued 6678528 PCM frames
+t=140s completed 8757 queued 6726912 PCM frames
+t=141s completed 8820 queued 6775296 PCM frames
+playback ended: 8847 transfers, 6794496 PCM frames, wall 141552 ms
+re-enumerate rc 0 errno 0
+notification rc 0: DualSense music finished. Press PS to reconnect if needed.
+done: result 0

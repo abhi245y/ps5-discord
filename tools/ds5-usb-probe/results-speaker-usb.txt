@@ -1,0 +1,21 @@
+start: 8-second speaker playback; four quiet beeps; haptic PCM channels zero
+selected /dev/ugen2.2 VID:PID 054c:0ce6
+audio: interface 1 index 1 alt 1 index 1 endpoint 01 packet 392 interval 4
+HID: index 3 endpoint 03; audio control index 0
+audio and HID detached; controller input pauses until handback
+slot 0 opened: packet 392 frames 16 buffer 6272
+slot 1 opened: packet 392 frames 16 buffer 6272
+slot 2 opened: packet 64 frames 1 buffer 64
+speaker routing accepted: HID report 0x02, flags a0/80, volume 50, route 30, pre-gain 02
+notification rc 0: DualSense speaker test started - listen for four quiet beeps.
+t=1s completed 63 queued 49920 PCM frames
+t=2s completed 126 queued 98304 PCM frames
+t=3s completed 189 queued 146688 PCM frames
+t=4s completed 252 queued 195072 PCM frames
+t=5s completed 315 queued 243456 PCM frames
+t=6s completed 378 queued 291840 PCM frames
+t=7s completed 441 queued 340224 PCM frames
+playback ended: 500 transfers, 384000 PCM frames, wall 8000 ms
+re-enumerate rc 0 errno 0
+notification rc 0: DualSense speaker test finished. Press PS to reconnect if needed.
+done: result 0

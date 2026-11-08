@@ -1,0 +1,56 @@
+start: explicit 30-second mic recording; USB audio only; no HID output commands
+/dev/ugen0.2: descriptor 0 VID:PID 1286:2059
+/dev/ugen1.2: descriptor 0 VID:PID 0bda:9210
+/dev/ugen2.2: descriptor 0 VID:PID 054c:0ce6
+selected /dev/ugen2.2
+interface 0 alt 0 class 1 subclass 1 protocol 0 endpoints 0
+interface 1 alt 0 class 1 subclass 2 protocol 0 endpoints 0
+interface 1 alt 1 class 1 subclass 2 protocol 0 endpoints 1
+endpoint 01 attributes 09 max-packet 392 interval 4
+interface 2 alt 0 class 1 subclass 2 protocol 0 endpoints 0
+interface 2 alt 1 class 1 subclass 2 protocol 0 endpoints 1
+endpoint 82 attributes 05 max-packet 196 interval 4
+interface 3 alt 0 class 3 subclass 0 protocol 0 endpoints 2
+endpoint 84 attributes 03 max-packet 64 interval 6
+endpoint 03 attributes 03 max-packet 64 interval 6
+mic: interface 2 (index 2), alt 1 (index 1), endpoint 82, packet 196, control index 0
+detaching audio collection at index 0 (system USB audio pauses)
+slot 0 opened: frames 16 packet 196 buffer 16464
+slot 1 opened: frames 16 packet 196 buffer 16464
+recording now; speak/tap near controller mic; physical mute state is unchanged
+notification rc 0: DualSense mic capture started - recording for 30 seconds. Speak now.
+t=1s transfers 63 empty USB frames 0: 48384 PCM frames, L rms 23.2 peak 138, R rms 179.1 peak 797
+t=2s transfers 126 empty USB frames 0: 48384 PCM frames, L rms 18.3 peak 153, R rms 345.6 peak 2418
+t=3s transfers 189 empty USB frames 0: 48384 PCM frames, L rms 70.3 peak 1023, R rms 360.7 peak 3713
+t=4s transfers 252 empty USB frames 0: 48384 PCM frames, L rms 7340.7 peak 31812, R rms 7605.6 peak 32768
+t=5s transfers 315 empty USB frames 0: 48384 PCM frames, L rms 2604.9 peak 26684, R rms 1654.0 peak 15831
+t=6s transfers 378 empty USB frames 0: 48384 PCM frames, L rms 2803.7 peak 18874, R rms 1703.4 peak 12320
+t=7s transfers 441 empty USB frames 0: 48384 PCM frames, L rms 1180.8 peak 7861, R rms 858.4 peak 15078
+t=8s transfers 504 empty USB frames 0: 48384 PCM frames, L rms 1764.7 peak 16681, R rms 1238.9 peak 13770
+t=9s transfers 567 empty USB frames 0: 48384 PCM frames, L rms 891.2 peak 6264, R rms 1881.0 peak 32768
+t=10s transfers 630 empty USB frames 0: 48384 PCM frames, L rms 1192.9 peak 16110, R rms 1071.3 peak 12196
+t=11s transfers 693 empty USB frames 0: 48384 PCM frames, L rms 724.6 peak 6553, R rms 606.0 peak 4605
+t=12s transfers 756 empty USB frames 0: 48384 PCM frames, L rms 158.8 peak 1447, R rms 423.5 peak 2547
+t=13s transfers 819 empty USB frames 0: 48384 PCM frames, L rms 515.6 peak 3687, R rms 659.3 peak 3656
+t=14s transfers 882 empty USB frames 0: 48384 PCM frames, L rms 582.4 peak 3233, R rms 622.0 peak 11887
+t=15s transfers 945 empty USB frames 0: 48384 PCM frames, L rms 336.7 peak 2828, R rms 552.3 peak 3624
+t=16s transfers 1008 empty USB frames 0: 48384 PCM frames, L rms 13.1 peak 77, R rms 305.1 peak 4657
+t=17s transfers 1071 empty USB frames 0: 48384 PCM frames, L rms 1103.4 peak 7143, R rms 882.2 peak 5593
+t=18s transfers 1134 empty USB frames 0: 48384 PCM frames, L rms 660.2 peak 5435, R rms 544.8 peak 4034
+t=19s transfers 1197 empty USB frames 0: 48384 PCM frames, L rms 390.8 peak 3125, R rms 334.8 peak 2186
+t=20s transfers 1260 empty USB frames 0: 48384 PCM frames, L rms 495.1 peak 3447, R rms 482.0 peak 3313
+t=21s transfers 1323 empty USB frames 0: 48384 PCM frames, L rms 585.2 peak 4975, R rms 469.4 peak 3524
+t=22s transfers 1386 empty USB frames 0: 48384 PCM frames, L rms 526.8 peak 5447, R rms 506.9 peak 4745
+t=23s transfers 1449 empty USB frames 0: 48384 PCM frames, L rms 833.1 peak 7000, R rms 741.3 peak 5480
+t=24s transfers 1512 empty USB frames 0: 48384 PCM frames, L rms 53.1 peak 1010, R rms 264.7 peak 2573
+t=25s transfers 1575 empty USB frames 0: 48384 PCM frames, L rms 753.7 peak 6269, R rms 603.9 peak 4525
+t=26s transfers 1638 empty USB frames 0: 48384 PCM frames, L rms 183.6 peak 1733, R rms 325.8 peak 2671
+t=27s transfers 1701 empty USB frames 0: 48384 PCM frames, L rms 538.0 peak 4004, R rms 566.5 peak 3908
+t=28s transfers 1764 empty USB frames 0: 48384 PCM frames, L rms 300.4 peak 2908, R rms 402.2 peak 2539
+t=29s transfers 1827 empty USB frames 0: 48384 PCM frames, L rms 354.0 peak 3964, R rms 409.6 peak 4525
+total: 1439232 PCM frames, L rms 1692.2 peak 31812, R rms 1615.8 peak 32768
+capture finished: wall 30006 ms, transfers 1874, empty frames 0
+re-enumerate: rc 0 errno 0; press PS/replug if controller stays disconnected
+WAV /data/ps5-discord-probe/ds5mic.wav: saved (5756928 bytes, 29.984 seconds of received PCM)
+done: result 0, captured 5756928 bytes
+notification rc 0: DualSense mic capture finished - recording saved. Press PS to reconnect if needed.
