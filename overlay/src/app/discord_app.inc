@@ -162,8 +162,6 @@ int option=0;     // the focused choice
 int stick=0;      // the stick's last direction: -1 left, 1 right, 0 at rest
 int page=0;       // the tab: 0 Call, 1 Chat, 2 Mentions
 constexpr int kPages=3,kMsgRows=4;
-constexpr std::int64_t kTabGate=26; // frames: a held L1/R1 repeats (after 350 ms, then every 60): not a new press
-std::int64_t tab_at=-1000;          // the frame of the last L1/R1 press, repeats included
 int scroll=0;     // Chat: how many messages newer than the last row shown
 int men_sel=0,men_top=0; char men_id[24]=""; // Mentions: the selected one (kept by id) and the first row shown
 char last_focus[24]="";
@@ -337,11 +335,15 @@ void place(Builder& b,float tiles_top,float content_end){
     const Rect call_g[4]={{1347,hy+1,37,37},{1472,hy+1,37,37},{1600,hy+5,78,28},{0,0,1,1}};
     const Rect call_w[4]={{1392,hy+5,76,40},{1517,hy+5,66,40},{1686,hy+5,86,40},{0,0,1,1}};
     // Chat and Mentions (d-chat, e-mentions): the action, the tabs, then Close at the right.
-    // Square (back to the default chat) sits at the right of the Chat header, not in the row.
-    const Rect list_g[4]={{1347,hy+1,37,37},{1722,hy+1,37,37},{1528,hy+5,82,28},{kDockX+kDockW-37-150,124+12,37,37}};
-    const Rect list_w[4]={{1392,hy+5,90,40},{1767,hy+5,100,40},{1618,hy+5,70,40},{kDockX+kDockW-37-108,124+16,108,40}}; // 124: kHeadY
-    const bool lists=!settings&&page>0;
-    for(int i=0;i<4;i++){b.set_rect(hint_icon[i],lists?list_g[i]:call_g[i]);b.set_rect(hint_text[i],lists?list_w[i]:call_w[i]);}
+    // With Square (back to the default chat) on Chat: Type, Call chat, Tabs, Close, closer together.
+    const Rect back_g[4]={{1347,hy+1,37,37},{1745,hy+1,37,37},{1599,hy+5,82,28},{1450,hy+1,37,37}};
+    const Rect back_w[4]={{1390,hy+5,50,40},{1788,hy+5,62,40},{1687,hy+5,48,40},{1493,hy+5,96,40}};
+    const Rect list_g[4]={{1347,hy+1,37,37},{1722,hy+1,37,37},{1528,hy+5,82,28},{0,0,1,1}};
+    const Rect list_w[4]={{1392,hy+5,90,40},{1767,hy+5,100,40},{1618,hy+5,70,40},{0,0,1,1}};
+    const bool lists=!settings&&page>0,back=lists&&page==1&&chat.focus[0];
+    for(int i=0;i<4;i++){
+        b.set_rect(hint_icon[i],back?back_g[i]:lists?list_g[i]:call_g[i]);
+        b.set_rect(hint_text[i],back?back_w[i]:lists?list_w[i]:call_w[i]);}
 }
 
 void set_avatar(Builder& b,void* w,const Person& who){
@@ -691,7 +693,7 @@ float render_pages(Builder& b){
             else art(b,head_icon,"hash_icon");
         }
         b.set_rect(head_icon,{kRowX+6,kHeadY,64,64});
-        const float room=kRowW-88-(chat.focus[0]?160:0); // the way back takes the header's right
+        const float room=kRowW-88;
         b.set_rect(head_title,{kRowX+88,kHeadY-2,room,38});
         b.set_rect(head_sub,{kRowX+88,kHeadY+36,room,28});
         b.set_rect(in_field,{kRowX,kInputY,kRowW,kInputH});
@@ -807,7 +809,8 @@ void render(Builder& b){
     if(std::strcmp(st.timer,timer_shown)){ // the clock goes right before the text (measured; estimated if not)
         std::snprintf(timer_shown,sizeof timer_shown,"%s",st.timer);b.set_text(timer,st.timer);
         float w=b.text_width(timer);if(w<=0)w=14.5f*float(std::strlen(st.timer));
-        b.set_rect(clock,{kDockX+kDockW-37-w-34,127,26,26});}
+        b.set_rect(timer,{kRowX+kRowW-w,118,w+8,44}); // a right-aligned label pads its end: left-aligned, placed
+        b.set_rect(clock,{kRowX+kRowW-w-34,127,26,26});}
     for(int i=0;i<kRows;i++){
         const bool used=in_call&&i<st.count;
         if(used){
@@ -863,7 +866,7 @@ void render(Builder& b){
 
 void reset(){
     st=State{};chat.n=chat.nmen=chat.unseen=0;chat.kind='-';chat.chan[0]=chat.title[0]=chat.sub[0]=chat.icon[0]=chat.focus[0]=0;
-    page=scroll=men_sel=men_top=0;men_id[0]=last_focus[0]=pend_chan[0]=0;pend_until=0;tab_at=-1000;
+    page=scroll=men_sel=men_top=0;men_id[0]=last_focus[0]=pend_chan[0]=0;pend_until=0;
     tabs_bg=tab_on=tab_badge=tab_count=head_icon=head_title=head_sub=men_focus=in_field=in_text=in_kb=empty_text=nullptr;
     for(void*& w:page_word)w=nullptr;
     for(MsgRow& r:mrow)r=MsgRow{};
@@ -895,7 +898,7 @@ bool build(Builder& b){
     title=label(b,{kDockX+37,118,kDockW-74-170,44},32,1,kWhite); // the call page's: under the tabs, with the timer at its right
     clock=image(b,{kDockX+kDockW-37-34-110,127,26,26},"clock");
     if(clock)b.set_tint(clock,kDim);
-    timer=label(b,{kDockX+kDockW-37-130,118,130,44},25,3,kDim,2); // right-aligned on the title's line
+    timer=label(b,{kRowX+kRowW-130,118,130,44},25,3,kDim); // placed by its width: ends at the cards' edge
     for(int i=0;i<kRows;i++){
         const float y=kRowY+kRowStep*i;
         row_bg[i]=image(b,{kRowX,y,kRowW,kRowH},"row");
@@ -1188,15 +1191,15 @@ void men_pad(std::uint32_t down,Builder& b){
 
 void on_pad(std::uint32_t down,float lx,float ly,Builder& b){
     if(!open)return;
+    const bool repeated=down&kPadRepeat;down&=~kPadRepeat; // the engine's repeat of a held button
     if(kb){kb_pad(down,lx,ly,b);return;}
     if(down&kOptionsButton){settings=!settings;tab=row=0;expanded=false;render(b);return;}
     if(settings){settings_pad(down,b);return;}
     if(down&kCircle){on_gesture(Gesture::Chord,b);return;}
-    if(down&(kL1|kR1)){ // a held button repeats: only the first press counts (any press within the gate extends it)
-        const bool repeat=std::int64_t(frame_now)-tab_at<kTabGate;
-        tab_at=std::int64_t(frame_now);
+    if(down&(kL1|kR1)){ // a held L1/R1 does not cycle the tabs: only new presses switch
         const int by=((down&kR1)?1:0)-((down&kL1)?1:0);
-        if(by&&!repeat){set_page((page+by+kPages)%kPages,b);return;}}
+        if(by&&!repeated){set_page((page+by+kPages)%kPages,b);return;}
+        if(repeated)return;}
     if(page==1){chat_pad(down,b);return;}
     if(page==2){men_pad(down,b);return;}
     const int dir=lx<-kStickMove?-1:lx>kStickMove?1:0;

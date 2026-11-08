@@ -670,7 +670,7 @@ PadData pad_hook(int device){
          for(int i=0;i<12;i++){const std::uint32_t bit=1u<<i;if(!(repeat&bit))continue;
              if(!(buttons&bit)){held[d][i]=0;continue;}
              if(!held[d][i]){held[d][i]=last[d][i]=now;continue;}
-             if(now-held[d][i]>=350&&now-last[d][i]>=60){last[d][i]=now;down|=bit;}}}
+             if(now-held[d][i]>=350&&now-last[d][i]>=60){last[d][i]=now;down|=bit|oui::app::kPadRepeat;}}}
         if(down){
             last_input_ms.store(now_ms(),std::memory_order_relaxed);
             pending_down.fetch_or(down,std::memory_order_acq_rel);

@@ -339,7 +339,10 @@ int main(){
     // Another chat than the call's (a mention's Open chat): Square goes back, its hint at the header's right.
     on_chat("H\tc\t556\t#other\tSomewhere\t\t0\t901\t1\n",b);page=1;render(b);
     assert(w(hint_icon[3])->visible&&!std::strcmp(w(hint_text[3])->text,"Call chat")&&ends(w(hint_icon[3])->path,"glyph_square.png"));
-    assert(w(hint_icon[3])->r.y<300&&w(head_title)->r.w<kRowW-88); // in the header, which gives it room
+    assert(w(hint_icon[3])->r.y==w(hint_icon[0])->r.y&&w(hint_icon[3])->r.x>w(hint_text[0])->r.x); // in the hint row, after Type
+    for(int i=0;i<4;i++)for(int j=0;j<4;j++)if(i!=j) // the four hints do not overlap
+        assert(w(hint_text[i])->r.x+w(hint_text[i])->r.w<=w(hint_icon[j])->r.x||w(hint_icon[j])->r.x+w(hint_icon[j])->r.w<=w(hint_icon[i])->r.x||w(hint_icon[j])->r.x<w(hint_icon[i])->r.x);
+    assert(w(hint_text[1])->r.x+w(hint_text[1])->r.w<=kDockX+kDockW-37+1); // Close still inside the panel
     sent[0]=0;pad(0x10);assert(!std::strcmp(sent,"chat back")&&!w(hint_icon[3])->visible);
     on_chat("H\tc\t555\t#raid-night\tNight Shift\t\t0\t\t2\n",b);assert(!w(hint_icon[3])->visible);
     on_gesture(oui::Gesture::Chord,b);assert(!kb&&!capturing);
@@ -379,13 +382,13 @@ int main(){
     step(40);padx(0x400);assert(page==2); // L1 from Call wraps to Mentions
     step(40);padx(0x400);assert(page==1);
     step(40);padx(0x400);step(0);assert(page==0);
-    // Held R1: the press at frame 0, the repeat after 350 ms (21 frames), then every 4 frames: one switch.
+    // Held R1: the press switches once; the engine's repeats (kPadRepeat) do not.
     step(40);padx(0x800);assert(page==1);
-    for(int i=0;i<8;i++){step(i?4:22);padx(0x800);}
+    for(int i=0;i<8;i++){step(4);padx(0x800|kPadRepeat);}
     assert(page==1);
-    step(10);padx(0x800);assert(page==1); // still inside the gate: the repeats extend it
-    step(30);padx(0x800);assert(page==2); // a new press after a pause
-    step(30);padx(0x800);assert(page==0);
+    padx(0x800);assert(page==2); // quick new presses always switch (no gate)
+    padx(0x800);assert(page==0);
+    padx(0x8|kPadRepeat);assert(page==0&&focus==1);padx(0x2);assert(focus==0); // repeats still move the focus
     // Not while the settings are open: L1/R1 are the settings' tabs there.
     step(40);padx(0x100);assert(settings&&!strip_on());
     padx(0x800);assert(page==0&&tab==1);padx(0x40);assert(!settings&&page==0&&strip_on()&&tab==1);

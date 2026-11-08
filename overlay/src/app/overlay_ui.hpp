@@ -102,6 +102,9 @@ void on_chat(const char* feed,Builder& b);
 // While capture is on: the buttons newly pressed since the last call (GamePadButtons
 // bits, L3/R3 excluded: they are the chord) and the left stick (-1..1), every frame.
 void on_pad(std::uint32_t down,float lx,float ly,Builder& b);
+// In on_pad's down: set when a press in it is the engine's repeat of a held button (D-pad,
+// Square, L1, R1: after 350 ms, every 60 ms), not a new press.
+constexpr std::uint32_t kPadRepeat=0x80000000u;
 // Every rendered frame after build (UI thread). Keep it cheap.
 void on_tick(std::uint64_t frame,Builder& b);
 // Reset internal state; used by the host test harness.
