@@ -21,9 +21,16 @@ All notable changes to this project are documented here. The format follows
   An unreadable handle after OpenVideo reports uncertain cleanup ownership.
 - Clean builds and app packaging build and require the capture helper and its license; root host
   CI runs helper lifecycle and SPS sanitizer tests alongside socket fault tests.
+- Injector restoration: the supervisor owns tracing and completes whole worker requests, so a
+  worker crash preserves its private recovery journal. Detach requires verified restoration of
+  owned state; failed recovery retains the tracer and retries. Scratch cleanup restores only
+  written ranges. Restoration pins the actual LWP, preserves AVX state, and requeues asynchronous
+  signals before detach; target exit and credential rollback failures have explicit paths.
+- Recovery deadlines also bound immediately-ready stops. Clean detach avoids syscall-boundary
+  checks, transient signal-info failures can recover, and AIO/kernel signal payloads retain metadata.
 
-The injector restore/supervisor finding remains open on `wip/capture-inject-restore`; these changes
-have not been deployed and do not complete wireless capture's hardware acceptance.
+These changes have not been deployed and do not complete wireless capture's hardware acceptance.
+The original injector WIP remains preserved on `wip/capture-inject-restore`.
 
 ## [0.6.0-alpha.2] - 2026-10-31
 

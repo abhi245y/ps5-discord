@@ -12,13 +12,17 @@
 #define MODE_WAIT_MS 700u
 #define MODE_POLL_MS 2u
 #define START_WAIT_MS 600u
+#define WATCHDOG_SOFT_MS 50u
+#define WATCHDOG_HARD_MS 100u
+#define TERM_GRACE_MS 50u
+#define RECOVERY_POLL_US 10000u
 #include "../src/helper.c"
 #undef main
 #include <assert.h>
 
 enum scenario { OK, VIDEO_OPEN_FAIL, VIDEO_START_FAIL, BAD_HEADERS, VIDEO_OVERSIZE, TRANSPORT_FAIL, CALLBACK_FAIL,
                 NO_IDR, MODE_120HZ, CLOSE_FAIL, MODE_TRANSITION, MODE_CHANGED, CORE_CLOSES, BAD_PROFILE,
-                HANDLE_READ_FAIL, STOP_SETUP, EOF_SETUP, STOP_HEADERS, SLOW_SETUP, MODE_OTHER, MODE_ZERO, STOP_ATTACH, EOF_ATTACH, STOP_MODE, EOF_MODE, MODE_QUERY_ONCE, MODE_QUERY_FAIL,
+                HANDLE_READ_FAIL, STOP_SETUP, EOF_SETUP, STOP_HEADERS, SLOW_SETUP, MODE_OTHER, MODE_ZERO, STOP_ATTACH, EOF_ATTACH, STOP_MODE, EOF_MODE, MODE_QUERY_ONCE, MODE_QUERY_FAIL, RESTORED_ABORT,
                 SCENARIO_COUNT,
                 RECOVER_OK, RECOVER_ZERO_MODE, RECOVER_REOPEN_FAIL, RECOVER_SECOND_FAULT, RECOVER_BAD_CLEANUP,
                 RECOVER_TRANSPORT, RECOVER_120HZ, RECOVER_EARLY_MODE, RECOVER_LAST = RECOVER_EARLY_MODE };
@@ -33,6 +37,7 @@ static const uint8_t real_sps[] = {
 };
 static struct start_req profile;
 static int fake_core_fd = -1;
+static int end_holds, end_attempts;
 static void send_simple(int fd, uint8_t type);
 
 int sl_inject_begin(const char *name, sl_inject *ctx)
@@ -42,11 +47,13 @@ int sl_inject_begin(const char *name, sl_inject *ctx)
     ctx->attached = 1; ctx->target_pid = 123;
     attachments++; reads_in_session = 0; saw_video_start = saw_bitrate = 0;
     ctx->scratch = (intptr_t)scratch; ctx->scratch_len = sizeof scratch;
+    memcpy(ctx->scratch_backup, scratch, sizeof scratch); ctx->scratch_saved = 1;
     if (scenario == STOP_ATTACH) send_simple(fake_core_fd, CAP_STOP);
     if (scenario == EOF_ATTACH) shutdown(fake_core_fd, SHUT_WR);
     return 0;
 }
-int sl_inject_end(sl_inject *ctx) { assert(ctx->attached); ctx->attached = 0; detached++; return 0; }
+int sl_inject_end(sl_inject *ctx) { if (!ctx->attached) return 0; end_attempts++; if (end_holds > 0) { end_holds--; return SL_END_HELD; } memcpy(scratch, ctx->scratch_backup, sizeof scratch); ctx->attached = 0; detached++; return 0; }
+int sl_inject_safe_to_exit(const sl_inject *ctx) { return !ctx->attached; }
 intptr_t sl_resolve_in(pid_t pid, const char *module, const char *name)
 {
     assert(pid == 123 && module);
@@ -63,6 +70,9 @@ int sl_inject_read_at(sl_inject *ctx, intptr_t address, void *out, size_t n)
     if (scenario == HANDLE_READ_FAIL && address == (intptr_t)scratch && n == 8) return -1;
     memcpy(out, (void *)address, n); return 0;
 }
+int sl_inject_ensure_stopped(sl_inject *ctx) { return ctx->attached && !ctx->running ? 0 : -1; }
+int sl_inject_read_code_at(sl_inject *ctx, intptr_t address, void *out, size_t n)
+{ return sl_inject_read_at(ctx, address, out, n); }
 int sl_inject_write_at(sl_inject *ctx, intptr_t address, const void *input, size_t n)
 {
     assert(ctx->attached && !ctx->running);
@@ -143,6 +153,7 @@ int64_t inj_call_fast(sl_inject *ctx, intptr_t fn, const uint64_t a[6], int save
         assert(a[0] == video_handle && a[1] == (uint64_t)(uintptr_t)video_mem && a[2] == FRAME_CAP && a[4] == 0);
         usleep(1000);
         reads_in_session++;
+        if (scenario == RESTORED_ABORT) { ctx->quarantined = ctx->aborted_restored = 1; return SL_CALL_ERROR; }
         if (scenario == TRANSPORT_FAIL) { ctx->quarantined = 1; return SL_CALL_ERROR; }
         if (recovery_scenario() && attachments == 1 && reads_in_session == 3) {
             error_fired = 1;
@@ -161,6 +172,13 @@ int64_t inj_call_fast(sl_inject *ctx, intptr_t fn, const uint64_t a[6], int save
     default: break;
     }
     return 0;
+}
+
+int64_t sl_inject_cleanup_call(sl_inject *ctx, intptr_t fn, const uint64_t args[6])
+{
+    int q = ctx->quarantined; ctx->quarantined = 0;
+    int64_t rc = inj_call_fast(ctx, fn, args, 1);
+    ctx->quarantined |= q; return rc;
 }
 
 // ---- the fake core -------------------------------------------------------------------------
@@ -307,15 +325,55 @@ static const struct start_req profiles[] = {
     {4, 0, 15000000, 1920, 1080, 30}, {4, 1, 15000000, 1920, 1080, 60},
 };
 
+static int supervisor_cases(void)
+{
+    for (int phase = 0; phase < 4; phase++) {
+        assert(!sl_broker_open(&supervisor));
+        end_holds = end_attempts = 0;
+        if (phase != 0) {
+            memset(&supervisor.context, 0, sizeof supervisor.context);
+            supervisor.context.attached = 1;
+            memcpy(supervisor.context.scratch_backup, scratch, sizeof scratch);
+            end_holds = phase == 3 ? 1 : 0;
+        }
+        progress = mmap(NULL, sizeof *progress, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
+        assert(progress != MAP_FAILED);
+        memset(progress, 0, sizeof *progress); atomic_init(&progress->heartbeat_ms, now_ms());
+        log_file = fopen(LOG_PATH, "w"); assert(log_file);
+        int lock_fd = open(LOCK_PATH, O_CREAT | O_RDWR, 0600); assert(lock_fd >= 0);
+        pid_t child = fork(); assert(child >= 0);
+        if (!child) {
+            sl_broker_worker(&supervisor);
+            signal(SIGTERM, SIG_IGN);
+            if (phase == 0 || phase == 3) _exit(phase == 3);
+            if (phase == 2) {
+                sl_inject view = {0};
+                (void)sl_broker_request(&view, (enum sl_rpc_op)999, 0, NULL, 0, NULL, 0, NULL);
+                _exit(1);
+            }
+            for (;;) pause(); // stopped by the real supervisor watchdog
+        }
+        sl_broker_parent(&supervisor); quit = 0;
+        struct supervision request = {child, lock_fd};
+        int result = (int)(intptr_t)supervise(&request);
+        assert(result == (phase == 0 ? 0 : 1));
+        assert(!supervisor.context.attached && !progress && !supervisor.shared);
+        assert(end_attempts == (phase == 0 ? 0 : phase == 3 ? 2 : 1));
+        int status; assert(waitpid(child, &status, WNOHANG) == -1 && errno == ECHILD);
+        log_file = NULL;
+    }
+    return 4;
+}
+
 int main(void)
 {
     char dir[] = "/tmp/capture-helper-XXXXXX";
     assert(mkdtemp(dir) && !chdir(dir));
     log_file = fopen(LOG_PATH, "w");
-    assert(watchdog_state(0) == 0 && watchdog_state(14999) == 0);
-    assert(watchdog_state(15000) == 1 && watchdog_state(24999) == 1 && watchdog_state(25000) == 2);
+    assert(watchdog_state(0) == 0 && watchdog_state(WATCHDOG_SOFT_MS - 1) == 0);
+    assert(watchdog_state(WATCHDOG_SOFT_MS) == 1 && watchdog_state(WATCHDOG_HARD_MS - 1) == 1 && watchdog_state(WATCHDOG_HARD_MS) == 2);
     // no total duration: a run of any length with progress never trips
-    assert(watchdog_state(100) == 0);
+    assert(watchdog_state(1) == 0);
     int cases = 0;
 
     // Every profile: the selector/fps flag/bitrate/size/rate budget reach the encoder, the bitrate
@@ -378,6 +436,10 @@ int main(void)
             assert(!s.states[CAP_LIVE] && !s.videos && vstop == 1 && vclose == 1 && !freed);
         if (scenario == HANDLE_READ_FAIL) assert(rc == 1 && !calls[START] && vclose == 0);
         if (scenario == MODE_CHANGED) assert(strstr(s.error, "120 Hz") && vstop == 1 && vclose == 1);
+        if (scenario == RESTORED_ABORT) {
+            assert(vstop == 1 && vclose == 1 && freed == 1 && calls[TERMINATE] == 1);
+            assert(!strstr(s.error, "cleanup failed"));
+        }
         if (scenario == MODE_QUERY_FAIL) assert(strstr(s.error, "could not be checked"));
         if (scenario == MODE_QUERY_ONCE) assert(rc == 0 && s.videos >= 8);
         if (scenario == MODE_OTHER || scenario == MODE_ZERO) assert(rc == 0 && s.videos >= 8 && !s.states[CAP_ERROR]);
@@ -435,7 +497,8 @@ int main(void)
         assert(rc == 1 && attachments == 0 && s.hello);
         cases += 2;
     }
-    fclose(log_file);
+    fclose(log_file); log_file = NULL;
+    cases += supervisor_cases();
     unlink(CONN_FILE); unlink(LOCK_PATH); unlink(LOG_PATH);
     assert(!chdir("/") && !rmdir(dir));
     printf("PASS: %d helper lifecycle/recovery cases (4 profiles, failures, recovery, mode guard); no hardware calls performed\n", cases);

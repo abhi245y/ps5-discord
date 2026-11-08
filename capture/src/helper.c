@@ -32,6 +32,7 @@
 
 #include "capture_proto.h"
 #include "inject.h"
+#include "inject_broker.h"
 #include "h264_timing.h"
 #ifdef SL_PS5
 int sceKernelSetProcessName(const char *name); // the SDK's kernel header does not declare it
@@ -83,9 +84,10 @@ static const char *const symbols[FUNCTION_COUNT] = {
     "sceResourceArbitratorChangeState", "sceResourceArbitratorClearCallback", "getpid", "malloc", "free"
 };
 
-struct progress { volatile sig_atomic_t function, target; _Atomic uint64_t heartbeat_ms; };
+struct progress { _Atomic int function, target; _Atomic uint64_t heartbeat_ms; };
 static struct progress *progress;
-static volatile sig_atomic_t quit;
+static _Atomic int quit;
+_Static_assert(ATOMIC_INT_LOCK_FREE == 2, "signal cancellation must be lock-free");
 static FILE *log_file;
 
 static uint64_t now_ms(void)
@@ -299,7 +301,6 @@ struct capture {
     int startup_done, video_unknown;
     int initialized, callback, video_open, video_start_attempted, cleanup, failed, cleanup_failed;
     uint32_t output_mode, final_mode;
-    uint8_t *scratch_copy;
 };
 
 // One result per session; the supervisor never conflates capture and cleanup.
@@ -319,11 +320,12 @@ static int64_t remote(struct capture *c, enum function id, const uint64_t args[6
         if (quit || net_dead || stop_requested || (!c->startup_done && now_ms() >= c->startup_deadline))
             return SL_CALL_ERROR;
     }
-    if (c->ctx.quarantined) { c->failed = 1; return SL_CALL_ERROR; }
+    if (c->ctx.quarantined && !(c->cleanup && c->ctx.aborted_restored)) { c->failed = 1; return SL_CALL_ERROR; }
     if (progress) progress->function = id + 1;
     if (id != READ_VIDEO && (id != MODE || !c->startup_done)) log_line("calling %s", symbols[id]);
-    // Preserve the borrowed thread's x87/SSE state across media calls.
-    int64_t rc = inj_call_fast(&c->ctx, c->fn[id], args, 1);
+    // Preserve the pinned borrowed LWP's general and extended CPU state across media calls.
+    int64_t rc = c->cleanup ? sl_inject_cleanup_call(&c->ctx, c->fn[id], args) :
+                            inj_call_fast(&c->ctx, c->fn[id], args, 1);
     if (progress) progress->function = 0;
     beat();
     if (id != READ_VIDEO && (id != MODE || !c->startup_done)) log_line("%s returned 0x%llx", symbols[id], (unsigned long long)rc);
@@ -410,7 +412,7 @@ static int wait_stable_mode(struct capture *c, uint32_t *stable, unsigned budget
 static void cleanup(struct capture *c)
 {
     c->cleanup = 1;
-    if (!c->ctx.quarantined) {
+    if (!c->ctx.quarantined || c->ctx.aborted_restored) {
         if (c->video_open) {
             if (c->video_start_attempted && !good(REMOTE(c, STOP, c->video))) c->failed = c->cleanup_failed = 1;
             if (!good(REMOTE(c, CLOSE, c->video))) c->failed = c->cleanup_failed = 1;
@@ -435,13 +437,6 @@ static void cleanup(struct capture *c)
         c->failed = c->cleanup_failed = 1;
         log_line("OpenVideo succeeded but ownership is uncertain; Terminate is not a verified Close");
     }
-    if (c->scratch_copy && c->ctx.attached) {
-        if (c->ctx.running || sl_inject_write_at(&c->ctx, c->ctx.scratch, c->scratch_copy, 0x4000)) {
-            log_line("scratch restoration failed");
-            c->failed = c->cleanup_failed = 1;
-        }
-    }
-    free(c->scratch_copy);
     if (sl_inject_end(&c->ctx)) { log_line("detach failed"); c->failed = c->cleanup_failed = 1; }
 }
 
@@ -469,11 +464,6 @@ static enum session_end capture_session(const struct start_req *req, int may_rec
     }
     if (progress) progress->target = c.ctx.target_pid;
     if (c.ctx.scratch <= 0 || c.ctx.scratch_len < 0x4000 || bind_functions(&c)) { why("Capture could not start."); goto done; }
-    c.scratch_copy = malloc(0x4000);
-    if (!c.scratch_copy) goto done;
-    if (sl_inject_read_at(&c.ctx, c.ctx.scratch, c.scratch_copy, 0x4000)) {
-        free(c.scratch_copy); c.scratch_copy = NULL; goto done;
-    }
     if (!good(REMOTE(&c, INITIALIZE))) { why("Capture could not start."); goto done; }
     c.initialized = 1;
     uint32_t mode = 0;
@@ -636,10 +626,10 @@ done:
     free(frame);
     cleanup(&c);
     segment.final_mode = c.final_mode;
-    segment.cleanup_ok = !c.cleanup_failed && !c.ctx.quarantined;
+    segment.cleanup_ok = !c.cleanup_failed && (!c.ctx.quarantined || c.ctx.aborted_restored);
     if (!segment.cleanup_ok)
         snprintf(segment.why, sizeof segment.why, "Capture cleanup failed. The console may need a restart.");
-    segment.transport_failed = c.ctx.quarantined;
+    segment.transport_failed = c.ctx.quarantined && !c.ctx.aborted_restored;
     // A stop (the core's, or its disappearance, or ours) is the normal end whatever stopped
     // the setup; only a failed cleanup makes it a failure.
     if (end == SESS_STOPPED || quit || net_dead || stop_requested)
@@ -695,15 +685,88 @@ static int helper_run(void)
 
 // Idle time, not total time: Go Live has no duration. After 15 s without progress the worker
 // is asked to clean up; after 25 s only it is killed.
+#ifndef WATCHDOG_SOFT_MS
+#define WATCHDOG_SOFT_MS 15000u
+#define WATCHDOG_HARD_MS 25000u
+#define TERM_GRACE_MS 10000u
+#define RECOVERY_POLL_US 1000000u
+#endif
 static int watchdog_state(uint64_t idle)
 {
-    return idle >= 25000 ? 2 : idle >= 15000 ? 1 : 0;
+    return idle >= WATCHDOG_HARD_MS ? 2 : idle >= WATCHDOG_SOFT_MS ? 1 : 0;
+}
+
+static sl_broker supervisor;
+struct supervision { pid_t child; int lock_fd; };
+static void *supervise(void *arg)
+{
+    const struct supervision *s = arg;
+    pid_t child = s->child;
+    int lock_fd = s->lock_fd;
+    int status = 0, term_sent = 0, worker_failed = 0;
+    uint64_t term_deadline = 0;
+    for (;;) {
+        pid_t rc = waitpid(child, &status, WNOHANG);
+        if (rc == child) break;
+        if (rc < 0 && errno != EINTR) {
+            kill(child, SIGKILL);
+            while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+            worker_failed = 1; break;
+        }
+        int watchdog = watchdog_state(now_ms() - atomic_load(&progress->heartbeat_ms));
+        if (!term_sent && (quit || watchdog >= 1)) {
+            log_line("watchdog requesting graceful cleanup");
+            kill(child, SIGTERM); term_sent = 1; term_deadline = now_ms() + TERM_GRACE_MS;
+        }
+        if (watchdog == 2 || (term_sent && now_ms() >= term_deadline)) {
+            int id = progress->function;
+            log_line("watchdog killing ONLY the owned worker; target=%d stage=%s; reboot may be needed",
+                     progress->target, id > 0 && id <= FUNCTION_COUNT ? symbols[id - 1] : "local work");
+            kill(child, SIGKILL);
+            while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+            break;
+        }
+        int broker_rc = sl_broker_poll(&supervisor, 25);
+        if (broker_rc < 0) {
+            // The worker may have died mid-request, or violated framing. Reap it before
+            // recovering the private context; never run worker cleanup concurrently.
+            kill(child, SIGKILL);
+            while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+            worker_failed = broker_rc == -2; break;
+        }
+    }
+    log_line("worker status=0x%x", status);
+    if (supervisor.context.attached) {
+        worker_failed = 1;
+        log_line("supervisor recovering owned target after worker exit; encoder cleanup unconfirmed, reboot may be needed");
+    }
+    uint64_t last_hold_log = 0;
+    for (;;) {
+        int recovered = sl_broker_recover(&supervisor);
+        if (recovered == 0 || recovered == SL_END_GONE) break;
+        worker_failed = 1;
+        if (!last_hold_log || now_ms() - last_hold_log >= 30000) {
+            log_line("restoration incomplete at %s; supervisor retaining tracer and retrying; reboot may be needed",
+                     supervisor.context.stage ? supervisor.context.stage : "unknown");
+            last_hold_log = now_ms();
+        }
+        usleep(RECOVERY_POLL_US);
+    }
+    while (sl_broker_close(&supervisor)) {
+        worker_failed = 1;
+        log_line("supervisor close refused; retaining recovery ownership");
+        (void)sl_broker_recover(&supervisor);
+        usleep(RECOVERY_POLL_US);
+    }
+    munmap(progress, sizeof *progress); progress = NULL;
+    close(lock_fd);
+    if (log_file) fclose(log_file);
+    return (void *)(intptr_t)(!worker_failed && WIFEXITED(status) ? WEXITSTATUS(status) : 1);
 }
 
 #ifndef CAPTURE_NO_MAIN
 static void on_signal(int sig) { (void)sig; quit = 1; }
 static void *worker(void *unused) { (void)unused; return (void *)(intptr_t)helper_run(); }
-
 int main(void)
 {
 #ifdef SL_PS5
@@ -717,10 +780,14 @@ int main(void)
     if (progress == MAP_FAILED) return 1;
     memset(progress, 0, sizeof *progress);
     signal(SIGTERM, on_signal); signal(SIGINT, on_signal); signal(SIGPIPE, SIG_IGN);
+    atomic_init(&progress->function, 0);
+    atomic_init(&progress->target, 0);
     atomic_init(&progress->heartbeat_ms, now_ms());
+    if (sl_broker_open(&supervisor)) return 1;
     pid_t child = fork();
     if (child < 0) return 1;
     if (!child) {
+        sl_broker_worker(&supervisor);
         pthread_attr_t attr;
         pthread_t thread;
         if (pthread_attr_init(&attr)) _exit(1);
@@ -732,30 +799,28 @@ int main(void)
         if (pthread_join(thread, &result)) _exit(1);
         _exit((int)(intptr_t)result);
     }
-    int status = 0, term_sent = 0;
-    for (;;) {
-        pid_t rc = waitpid(child, &status, WNOHANG);
-        if (rc == child) break;
-        if (rc < 0 && errno != EINTR) { kill(child, SIGKILL); return 1; }
-        int watchdog = watchdog_state(now_ms() - atomic_load(&progress->heartbeat_ms));
-        if (!term_sent && (quit || watchdog >= 1)) {
-            log_line("watchdog requesting graceful cleanup");
-            kill(child, SIGTERM); term_sent = 1;
-        }
-        if (watchdog == 2) {
-            int id = progress->function;
-            log_line("watchdog killing ONLY the owned worker; target=%d stage=%s; reboot may be needed",
-                     progress->target, id > 0 && id <= FUNCTION_COUNT ? symbols[id - 1] : "local work");
-            kill(child, SIGKILL);
-            while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
-            break;
-        }
-        usleep(50000);
+    sl_broker_parent(&supervisor);
+    // Native injector/kernel helpers run on the same generous stack as the capture worker.
+    // Threads share tracing ownership; main never exits before this supervisor thread joins.
+    struct supervision s = {child, lock_fd};
+    pthread_attr_t attr;
+    pthread_t thread;
+    if (pthread_attr_init(&attr)) {
+        kill(child, SIGKILL);
+        while (waitpid(child, NULL, 0) < 0 && errno == EINTR) {}
+        sl_broker_close(&supervisor); close(lock_fd); return 1;
     }
-    log_line("worker status=0x%x", status);
-    munmap(progress, sizeof *progress);
-    close(lock_fd);
-    if (log_file) fclose(log_file);
-    return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+    int rc = pthread_attr_setstacksize(&attr, 2u * 1024u * 1024u);
+    if (!rc) rc = pthread_create(&thread, &attr, supervise, &s);
+    pthread_attr_destroy(&attr);
+    if (rc) {
+        kill(child, SIGKILL);
+        while (waitpid(child, NULL, 0) < 0 && errno == EINTR) {}
+        sl_broker_close(&supervisor); close(lock_fd); return 1;
+    }
+    void *result = NULL;
+    // A valid, joinable supervisor thread cannot be discarded while it may own the tracee.
+    if (pthread_join(thread, &result)) for (;;) pause();
+    return (int)(intptr_t)result;
 }
 #endif

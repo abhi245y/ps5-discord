@@ -10,21 +10,26 @@ CFLAGS := -std=gnu11 -Wall -Wextra -Werror -I../src -Isrc
 .PHONY: all test clean
 all: build/discord-capture.elf
 
-build/discord-capture.elf: src/helper.c src/inject.c src/h264_timing.c src/h264_timing.h src/inject.h ../src/capture_proto.h
+build/discord-capture.elf: src/helper.c src/inject.c src/inject_broker.c src/inject_broker.h src/h264_timing.c src/h264_timing.h src/inject.h src/inject_broker.h ../src/capture_proto.h
 	@mkdir -p build
-	$(CC_PS5) $(CFLAGS) -O2 -g -DSL_PS5 -o $@ src/helper.c src/inject.c src/h264_timing.c
+	$(CC_PS5) $(CFLAGS) -O2 -g -DSL_PS5 -o $@ src/helper.c src/inject.c src/inject_broker.c src/h264_timing.c
 
-build/helper-test: tests/helper_test.c src/helper.c src/h264_timing.c src/h264_timing.h src/inject.h ../src/capture_proto.h
+build/helper-test: tests/helper_test.c src/helper.c src/inject_broker.c src/h264_timing.c src/h264_timing.h src/inject.h src/inject_broker.h ../src/capture_proto.h
 	@mkdir -p build
-	$(CC) $(CFLAGS) -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread -o $@ tests/helper_test.c src/h264_timing.c
+	$(CC) $(CFLAGS) -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread -o $@ tests/helper_test.c src/h264_timing.c src/inject_broker.c
 
 build/h264-test: tests/h264_test.c src/h264_timing.c src/h264_timing.h ../tests/data/capture-1080p60-headers.h264
 	@mkdir -p build
 	$(CC) $(CFLAGS) -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -o $@ tests/h264_test.c src/h264_timing.c
 
-test: build/helper-test build/h264-test
+build/inject-test: tests/inject_test.c src/inject.c src/inject.h src/inject_broker.c src/inject_broker.h $(wildcard tests/fake/*/*.h)
+	@mkdir -p build
+	$(CC) $(CFLAGS) -Itests/fake -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -o $@ tests/inject_test.c
+
+test: build/helper-test build/h264-test build/inject-test
 	./build/helper-test
 	./build/h264-test
+	./build/inject-test
 
 clean:
 	rm -rf build
