@@ -119,5 +119,9 @@ If a payload-bearing signal coincides with an ambiguous syscall boundary while o
 remains, recovery holds rather than consuming its kernel siginfo or restoring registers before
 syscall return. That stop cannot advance during retries, so this liveness limit may require a
 console restart; the host test verifies persistent ownership rather than claiming recovery.
+On the console the opcode read at a stopped system thread fails (execute-only code, seen
+2026-11-09). With nothing of ours installed the stop is then borrowed unchecked, as the PoC did;
+a stop on our own trap needs no read. A call that hangs inside the target still needs the read
+to restore, so it holds the tracer: that case may require a console restart.
 Once the journal and scratch are clean, detach requires only a collected stop
 and the original signal metadata, without a syscall-boundary check or process resume.

@@ -698,9 +698,6 @@ int main(void)
     setup(&c); t.fail_lwp_at = 1;
     assert(sl_inject_begin("SceRemotePlay", &c) == -1 && !strncmp(c.stage, "pin-lwpinfo e5 ", 15) && !t.attached);
     t.fail_lwp_at = 0; cases++;
-    setup(&c); t.fail_code_read = 1;
-    assert(sl_inject_begin("SceRemotePlay", &c) == -1 && !strncmp(c.stage, "stop-code-read e5 ", 18) && t.detached);
-    t.fail_code_read = 0; cases++;
 
     // Clean end needs no A boundary: deliver B's signal once without resuming the process.
     const int b_codes[] = {SI_USER, SI_QUEUE};
@@ -748,10 +745,13 @@ int main(void)
     assert(t.delivered_code == SI_TIMER && t.delivered_value == 0x334455);
     assert_original_state(); cases++;
 
-    // A native opcode-read capability failure must fail attach and release the clean target.
+    // Execute-only system code (the console): an opcode read that fails with nothing of ours
+    // installed borrows the stop unchecked, as the PoC did; calls work, since a stop on our own
+    // trap needs no code read, and everything is restored.
     setup(&c); t.fail_code_read = 1;
-    assert(sl_inject_begin("SceRemotePlay", &c) == -1 && t.detached && !c.attached && t.code_reads == 1);
-    assert(!t.setregs_calls && !t.continue_calls); assert_original_state(); cases++;
+    assert(!sl_inject_begin("SceRemotePlay", &c) && c.attached && t.code_reads == 1 && !t.continue_calls);
+    assert(CALL(c) == result_value && CALL(c) == result_value);
+    assert(!sl_inject_end(&c)); assert_original_state(); t.fail_code_read = 0; cases++;
 
     // Dirty state still requires the boundary and readback; clean-detach bypass cannot release it.
     setup(&c); t.behavior = HANGS; t.stop_works = 0;

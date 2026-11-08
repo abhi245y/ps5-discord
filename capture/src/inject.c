@@ -556,8 +556,15 @@ static int acquire_stop(sl_inject *ctx, int need_boundary)
                 ctx->last_rip = regs.r_rip;
                 struct ptrace_io_desc io = {.piod_op = PIOD_READ_I, .piod_offs = (void *)(regs.r_rip - 2),
                     .piod_addr = opcode, .piod_len = sizeof opcode};
-                if (inj_ptrace(PT_IO, ctx->target_pid, &io, 0) || io.piod_len != sizeof opcode)
-                    STOP_FAIL("stop-code-read e%d len%zu", errno, (size_t)io.piod_len);
+                if (inj_ptrace(PT_IO, ctx->target_pid, &io, 0) || io.piod_len != sizeof opcode) {
+                    int e = errno;
+                    // Console 2026-11-09 (g77555b0): this read fails at SceRemotePlay's stopped
+                    // RIP (system code is execute-only), so the opcode check can never pass there.
+                    // With none of our registers installed, borrow the stop unchecked, as the
+                    // hardware-tested PoC (Glint) always did. A hung injected call still holds.
+                    if (!injected_registers(ctx)) { ctx->boundary_ready = 1; return 0; }
+                    STOP_FAIL("stop-code-read e%d len%zu", e, (size_t)io.piod_len);
+                }
                 if (!((opcode[0] == 0x0f && opcode[1] == 0x05) ||
                       (opcode[0] == 0xcd && opcode[1] == 0x80))) {
                     ctx->boundary_ready = 1; return 0;
@@ -863,6 +870,7 @@ int64_t inj_call_fast(sl_inject *ctx, intptr_t fn, const uint64_t args[6], int s
         if (sig == SL_SIGTRAP && stopped.pl_lwpid == j->tid && cur.r_rip == (int64_t)j->trap + 1) {
             result = cur.r_rax;
             ok = 1;
+            ctx->boundary_ready = 1; // A sits on our own trap, not in a syscall: no code read needed
             break;
         }
         if (restarts >= SL_CALL_MAX_RESTARTS) break;
