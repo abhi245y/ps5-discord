@@ -820,7 +820,7 @@ int main(void)
     if (child < 0) return 1;
     if (!child) {
 #ifdef SL_PS5
-        sceKernelSetProcessName("discord-capture-worker.elf"); // the parent stays the supervisor
+        sceKernelSetProcessName(CAP_WORKER_NAME); // the parent stays the supervisor
 #endif
         sl_broker_worker(&supervisor);
         pthread_attr_t attr;
