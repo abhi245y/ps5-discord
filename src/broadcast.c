@@ -98,9 +98,12 @@ void bc_profile(int *w, int *h, int *fps)
 {
     if (running_now && backend == WIRELESS && capture_actual_profile(w, h, fps))
         return;
-    *w = profiles[profile].w;
-    *h = profiles[profile].h;
-    *fps = profiles[profile].fps;
+    // Not live: the quality the next Go Live will use (the overlay's call page shows it).
+    int p = running_now ? profile : prefs_get("golive_quality");
+    p = p < 0 ? 0 : p > 3 ? 3 : p;
+    *w = profiles[p].w;
+    *h = profiles[p].h;
+    *fps = profiles[p].fps;
 }
 
 // ---- which backend ---------------------------------------------------------------------------

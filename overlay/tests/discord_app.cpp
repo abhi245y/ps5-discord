@@ -133,9 +133,7 @@ int main(){
     assert(w(drop_bg)->visible&&shows("1080p \xc2\xb7 60 fps")&&w(drop_on)->r.y==w(drop_bg)->r.y+6);
     assert(!w(nitro_note[0])->visible); // 720p · 30 fps: nothing to say
     on_pad(0x8,0,0,b);assert(shows("Needs Nitro or a boosted server")&&shows("Without them it may lag or fail for viewers"));
-    sent[0]=0;on_pad(0x80,0,0,b); // the first Select only asks
-    assert(!sent[0]&&w(drop_bg)->visible&&shows("Select again to use it"));
-    on_pad(0x80,0,0,b);
+    sent[0]=0;on_pad(0x80,0,0,b); // one Select picks it (the note already said what it needs)
     assert(!std::strcmp(sent,"set golive_quality 1")&&!w(drop_bg)->visible&&shows("720p \xc2\xb7 60 fps"));
     assert(!w(nitro_note[0])->visible);
     on_pad(0x800,0,0,b); // R1: Voice

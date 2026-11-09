@@ -207,7 +207,6 @@ void* slider_track[2]={}; void* slider_fill[2]={}; void* slider_knob[2]={};
 void* set_focus=nullptr; void* drop_bg=nullptr; void* drop_on=nullptr; void* drop_check=nullptr;
 void* drop_word[kOptions]={};
 void* nitro_note[2]={}; // under Quality's choices: above 720p · 30 fps is Nitro's
-int armed=-1;           // the Quality choice Select was pressed on once (it asks twice)
 
 const char* const kCommands[kTiles]={"mute","deafen","golive","leave"};
 
@@ -400,8 +399,8 @@ bool can_open(int s){ // a row whose choices open
 // The rows a tab shows now: Call mode only while AirPods are connected.
 int rows_in(const Tab& t){return t.count-(t.rows[t.count-1]==kCallMode&&!st.airpods);}
 
-// The highlighted Quality choice needs Nitro (or a boosted server); like the app, only
-// asked when going up from 720p · 30 fps.
+// The highlighted Quality choice needs Nitro (or a boosted server): a note, shown when going
+// up from 720p · 30 fps.
 bool nitro_choice(){return expanded&&kTabs[tab].rows[row]==0&&option>0&&st.set[0]==0;}
 constexpr float kNoteH=76;
 
@@ -484,8 +483,8 @@ void render_settings(Builder& b){
         const float ny=dy+12+kOptionH*count+12;
         b.set_rect(nitro_note[0],{kRowX+22,ny,kRowW-44,30});
         b.set_rect(nitro_note[1],{kRowX+22,ny+32,kRowW-44,30});
-        b.set_text(nitro_note[1],armed==option?"Select again to use it":"Without them it may lag or fail for viewers");
-        b.set_text_style(nitro_note[1],19,0,armed==option?kCoral:kDim,0);}
+        b.set_text(nitro_note[1],"Without them it may lag or fail for viewers");
+        b.set_text_style(nitro_note[1],19,0,kDim,0);}
     show(b,nitro_note[0],note);show(b,nitro_note[1],note);
 }
 
@@ -910,7 +909,7 @@ void reset(){
     for(int i=0;i<kSettingRows;i++)set_bg[i]=set_name[i]=set_value[i]=set_chevron[i]=set_toggle[i]=nullptr;
     for(int i=0;i<2;i++)slider_track[i]=slider_fill[i]=slider_knob[i]=nullptr;
     for(int j=0;j<kOptions;j++)drop_word[j]=nullptr;
-    nitro_note[0]=nitro_note[1]=nullptr;armed=-1;
+    nitro_note[0]=nitro_note[1]=nullptr;
     kb=false;kb_text[0]=0;kb_len=kb_chars=kb_caret=0;kb_shift=kb_page=0;kb_row=1;kb_col=0;kb_x=0.5f;kb_sx=kb_sy=0;
     kb_field=kb_input=kb_pages=kb_hl=kb_measure=kb_bar=nullptr;kb_blink=kb_hold=0;kb_shown[0]=0;kb_style=-1;
     dock=dock_mid=dock_end=title=clock=timer=timer_probe=tile_sub=tile_focus=rule=nullptr;std::snprintf(timer_shown,sizeof timer_shown,"\x01");probe_wait=0;timer_w=0;
@@ -1137,10 +1136,9 @@ void settings_pad(std::uint32_t down,Builder& b){
     if(expanded){
         const char* names[kOptions];int current=0;
         const int count=choices(s,names,current);
-        const int was_armed=armed;armed=-1;
+        // Above 720p · 30 fps the note under the choices says what it needs; one Select picks.
         if(down&kCircle)expanded=false;
         else if(move&&count)option=((option+move)%count+count)%count;
-        else if((down&kCross)&&nitro_choice()&&was_armed!=option){armed=option;render(b);return;} // asks once more
         else if(down&kCross){
             if(s>=0)apply(s,kSettings[s].min+option,b);
             else{

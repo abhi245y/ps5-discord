@@ -819,6 +819,9 @@ int main(void)
     pid_t child = fork();
     if (child < 0) return 1;
     if (!child) {
+#ifdef SL_PS5
+        sceKernelSetProcessName("discord-capture-worker.elf"); // the parent stays the supervisor
+#endif
         sl_broker_worker(&supervisor);
         pthread_attr_t attr;
         pthread_t thread;
