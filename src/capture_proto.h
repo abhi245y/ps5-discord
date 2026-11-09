@@ -23,6 +23,15 @@
 #define CAP_LOCK_FILE "/data/ps5-discord/capture.lock"
 #define CAP_PROCESS_NAME "discord-capture-supervisor.elf" // the parent; its worker: CAP_WORKER_NAME
 #define CAP_WORKER_NAME "discord-capture-worker.elf"
+
+// Frame pacing diagnosis (2026-11-09, 720p30 judder at the viewer): where a gap between two
+// frames falls against the frame period T. Buckets: <0.5T, <0.9T, <=1.1T, <=1.5T, <=2.5T, more.
+#define CAP_GAP_BUCKETS 6
+static inline int cap_gap_bucket(long long gap_us, long long period_us)
+{
+    const long long tenths = period_us > 0 ? gap_us * 10 / period_us : 0;
+    return tenths < 5 ? 0 : tenths < 9 ? 1 : tenths <= 11 ? 2 : tenths <= 15 ? 3 : tenths <= 25 ? 4 : 5;
+}
 #define CAP_ELF_NAME "discord-capture.elf" // in the app's assets
 // Deadline nesting shared by the separate core and helper. Remote cleanup may make up to
 // ten bounded calls (including their stop/restore waits), so recovery reserves 30 seconds.

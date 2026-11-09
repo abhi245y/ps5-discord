@@ -457,8 +457,9 @@ static enum session_end capture_session(const struct start_req *req, int may_rec
     struct capture c = {.startup_deadline = now_ms() + START_WAIT_MS};
     uint8_t *frame = NULL;
     int first_idr = 0;
-    int64_t window_gap = 0;
+    int64_t window_gap = 0, last_read_us = 0;
     size_t window_max = 0, window_idr = 0;
+    unsigned gaps[CAP_GAP_BUCKETS] = {0};
     enum session_end end = SESS_FAILED;
     uint8_t headers[0x200], annexb[512];
     size_t annexb_len = 0;
@@ -627,6 +628,12 @@ static enum session_end capture_session(const struct start_req *req, int may_rec
         if (has_nal(au, au_len, 7) && capture_h264_timing(au, &au_len, FRAME_CAP, req->fps)) {
             why("The encoder gave unsupported picture timing."); goto done;
         }
+        {   // when each frame came out of the encoder, against the frame period
+            struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+            const int64_t us = (int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
+            if (last_read_us) gaps[cap_gap_bucket(us - last_read_us, 1000000 / (long long)req->fps)]++;
+            last_read_us = us;
+        }
         if (net_send_inplace(frame, CAP_VIDEO, idr ? CAP_KEY : 0, (uint32_t)au_len)) break;
         const uint64_t got = (uint64_t)now_ms();
         if (segment.frames && (int64_t)(got - last_picture) > window_gap) window_gap = (int64_t)(got - last_picture);
@@ -637,9 +644,12 @@ static enum session_end capture_session(const struct start_req *req, int may_rec
         segment.last_video_ms = got - segment.begin_ms;
         if (segment.frames <= 3 || segment.frames % (req->fps * 10) == 0) {
             // Viewer-side hiccups (2026-11-09): the largest gap and frames of the last 10 s.
-            log_line("frames=%u last=%zu bytes; 10 s: max gap %lld ms, largest %zu, largest IDR %zu", segment.frames,
-                     (size_t)n, (long long)window_gap, window_max, window_idr);
+            log_line("frames=%u last=%zu bytes; 10 s: max gap %lld ms, largest %zu, largest IDR %zu; "
+                     "gaps vs period <.5 %u <.9 %u ~1 %u <1.5 %u <2.5 %u more %u", segment.frames,
+                     (size_t)n, (long long)window_gap, window_max, window_idr, gaps[0], gaps[1], gaps[2], gaps[3],
+                     gaps[4], gaps[5]);
             window_gap = 0; window_max = window_idr = 0;
+            memset(gaps, 0, sizeof gaps);
         }
     }
     end = SESS_STOPPED;

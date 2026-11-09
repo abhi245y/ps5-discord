@@ -25,6 +25,7 @@
 
 #include <dave/dave.h>
 #include "broadcast.h"
+#include "capture_proto.h"
 #include "log.h"
 #include "tls.h"
 #include "voice.h"
@@ -64,6 +65,10 @@ typedef struct {
     _Atomic int spent; // the 32-bit GCM nonce is nearly used up: the stream must end
     int64_t t0;
     unsigned sent_frames, sent_packets, sent_audio, dropped;
+    // Frame pacing diagnosis (capture_proto.h cap_gap_bucket): gaps between frames handed to
+    // on_video, gaps between the RTP timestamps sent, the longest send (us), per 5 s
+    unsigned in_gaps[CAP_GAP_BUCKETS], ts_gaps[CAP_GAP_BUCKETS];
+    int64_t last_in_us, last_ts_us, longest_send_us;
     // What viewers report back (RTCP), read by serve() and logged every 5 s
     rtcp_stats rtcp_v;
     unsigned rtcp_in, rtcp_bad;
@@ -299,6 +304,7 @@ static int read_rtcp(conn *c)
 static void on_video(const uint8_t *au, size_t n, int keyframe)
 {
     (void)keyframe;
+    const int64_t arrived_us = mono_us();
     // Which NAL types the access unit holds; AUDs (9) are left out of what is sent.
     int has_slice = 0, has_idr = 0, has_ps = 0;
     size_t pos = 0, len, nals = 0, payload = 0;
@@ -359,8 +365,22 @@ static void on_video(const uint8_t *au, size_t n, int keyframe)
         }
     }
     const uint8_t *send_buf = c->dave_version > 0 ? out : frame;
-    if (send_buf && send_frame_rtp(c, send_buf, out_len, (uint32_t)((mono_ms() - c->t0) * 90)))
-        c->sent_frames++;
+    int w = 0, h = 0, fps = 0;
+    bc_profile(&w, &h, &fps);
+    const int64_t period = fps > 0 ? 1000000 / fps : 33333, stamp_us = mono_us();
+    if (c->last_in_us)
+        c->in_gaps[cap_gap_bucket(arrived_us - c->last_in_us, period)]++;
+    c->last_in_us = arrived_us;
+    if (send_buf) {
+        if (c->last_ts_us)
+            c->ts_gaps[cap_gap_bucket(stamp_us - c->last_ts_us, period)]++;
+        c->last_ts_us = stamp_us;
+        if (send_frame_rtp(c, send_buf, out_len, (uint32_t)((mono_ms() - c->t0) * 90))) {
+            c->sent_frames++;
+            if (mono_us() - stamp_us > c->longest_send_us)
+                c->longest_send_us = mono_us() - stamp_us;
+        }
+    }
     pthread_mutex_unlock(&mlock);
     free(frame);
     free(out);
@@ -896,6 +916,17 @@ static int serve(conn *c)
             LOG("stream: sent %u frames, %u audio, %u packets, %u dropped; media %d, DAVE %d ready %d, %d users",
                 c->sent_frames, c->sent_audio, c->sent_packets, c->dropped, c->media_ok, c->dave_version,
                 c->dave_ready, c->n_users);
+            pthread_mutex_unlock(&mlock);
+            pthread_mutex_lock(&mlock); // on_video writes these
+            if (c->sent_frames)
+                LOG("stream: frame gaps vs period (5 s) in <.5 %u <.9 %u ~1 %u <1.5 %u <2.5 %u more %u; "
+                    "stamped <.5 %u <.9 %u ~1 %u <1.5 %u <2.5 %u more %u; longest send %lld us",
+                    c->in_gaps[0], c->in_gaps[1], c->in_gaps[2], c->in_gaps[3], c->in_gaps[4], c->in_gaps[5],
+                    c->ts_gaps[0], c->ts_gaps[1], c->ts_gaps[2], c->ts_gaps[3], c->ts_gaps[4], c->ts_gaps[5],
+                    (long long)c->longest_send_us);
+            memset(c->in_gaps, 0, sizeof c->in_gaps);
+            memset(c->ts_gaps, 0, sizeof c->ts_gaps);
+            c->longest_send_us = 0;
             pthread_mutex_unlock(&mlock);
             const rtcp_stats *r = &c->rtcp_v;
             if (c->rtcp_in) // jitter: 90 kHz video clock
