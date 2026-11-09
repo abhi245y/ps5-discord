@@ -656,7 +656,7 @@ done:
     if (end == SESS_STOPPED || quit || net_dead || stop_requested)
         return segment.cleanup_ok ? SESS_STOPPED : SESS_FAILED;
     if (segment.api_error == 0x81950009u && may_recover && segment.cleanup_ok && !segment.transport_failed &&
-        segment.stable_mode && segment.stable_mode != 0x40 && segment.frames)
+        segment.stable_mode && (segment.stable_mode != 0x40 || ALLOW_MODE_40) && segment.frames)
         return SESS_RECOVERABLE;
     if (segment.stable_mode == 0x40 && !ALLOW_MODE_40)
         snprintf(segment.why, sizeof segment.why, "Go Live can't capture while the console outputs 120 Hz.");
@@ -683,6 +683,8 @@ static int helper_run(void)
         return 1;
     }
     log_line("start: %ux%u@%u bitrate=%u", req.width, req.height, req.fps, req.bitrate);
+    if (ALLOW_MODE_40)
+        log_line("test build: the 120 Hz output mode (0x40) is allowed");
     net_state(CAP_STARTING, "");
     // Console 2026-11-09: launching a game changes the HDMI output twice about 3 s apart; with
     // one recovery per Go Live the second change ended the stream. Each reopened session must
