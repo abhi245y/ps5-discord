@@ -97,6 +97,19 @@ static uint32_t be32(const uint8_t *p)
 // (draft-alvestrand-rmcat-remb) about `ssrc`.
 int rtcp_parse(const uint8_t *p, size_t len, uint32_t ssrc, rtcp_stats *st)
 {
+    size_t n_nacks;
+    return rtcp_parse_nacks(p, len, ssrc, st, NULL, 0, &n_nacks);
+}
+
+int rtcp_parse_nacks(const uint8_t *p, size_t len, uint32_t ssrc, rtcp_stats *st,
+                     uint16_t *nacks, size_t cap, size_t *n_nacks)
+{
+    size_t used = 0;
+    *n_nacks = 0;
+    if (!nacks)
+        cap = 0;
+    if (cap > RTCP_NACK_MAX)
+        cap = RTCP_NACK_MAX;
     while (len >= 4) {
         if ((p[0] >> 6) != 2)
             return -1;
@@ -104,9 +117,17 @@ int rtcp_parse(const uint8_t *p, size_t len, uint32_t ssrc, rtcp_stats *st)
         const size_t n = 4 * ((size_t)(p[2] << 8 | p[3]) + 1);
         if (n > len)
             return -1;
-        if ((pt == 200 || pt == 201) && n >= 8) { // SR: 20 bytes of sender info before the blocks
+        size_t end = n;
+        if (p[0] & 0x20) { // padding belongs to the last compound member, never to its FCI
+            if (n != len || !p[n - 1] || p[n - 1] > n - 4)
+                return -1;
+            end -= p[n - 1];
+        }
+        if (pt == 205 && count == 1 && (end < 12 || (end - 12) % 4))
+            return -1;
+        if ((pt == 200 || pt == 201) && end >= 8) { // SR: 20 bytes of sender info before the blocks
             size_t at = pt == 200 ? 28 : 8;
-            for (unsigned i = 0; i < count && at + 24 <= n; i++, at += 24) {
+            for (unsigned i = 0; i < count && at + 24 <= end; i++, at += 24) {
                 const uint8_t *b = p + at;
                 if (be32(b) != ssrc)
                     continue;
@@ -118,20 +139,28 @@ int rtcp_parse(const uint8_t *p, size_t len, uint32_t ssrc, rtcp_stats *st)
                 if (be32(b + 12) > st->max_jitter)
                     st->max_jitter = be32(b + 12);
             }
-        } else if (pt == 205 && count == 1 && n >= 12 && be32(p + 8) == ssrc) {
-            for (size_t at = 12; at + 4 <= n; at += 4) { // PID, then a bitmask of the 16 after it
-                unsigned blp = (unsigned)(p[at + 2] << 8 | p[at + 3]);
+        } else if (pt == 205 && count == 1 && end >= 12 && be32(p + 8) == ssrc) {
+            for (size_t at = 12; at + 4 <= end; at += 4) { // PID, then a bitmask of the 16 after it
+                const uint16_t pid = (uint16_t)(p[at] << 8 | p[at + 1]);
+                const unsigned blp = (unsigned)(p[at + 2] << 8 | p[at + 3]);
                 st->nack_packets++;
-                for (; blp; blp &= blp - 1)
+                if (used < cap)
+                    nacks[used++] = pid;
+                for (unsigned bit = 0; bit < 16; bit++) {
+                    if (!(blp & (1u << bit)))
+                        continue;
                     st->nack_packets++;
+                    if (used < cap)
+                        nacks[used++] = (uint16_t)(pid + bit + 1);
+                }
             }
-        } else if (pt == 206 && n >= 12) {
+        } else if (pt == 206 && end >= 12) {
             if (count == 1 && be32(p + 8) == ssrc)
                 st->pli++;
             else if (count == 4)
-                for (size_t at = 12; at + 8 <= n; at += 8)
+                for (size_t at = 12; at + 8 <= end; at += 8)
                     st->fir += be32(p + at) == ssrc;
-            else if (count == 15 && n >= 20 && !memcmp(p + 12, "REMB", 4)) {
+            else if (count == 15 && end >= 20 && !memcmp(p + 12, "REMB", 4)) {
                 const uint8_t *r = p + 16; // number of SSRCs, then 6-bit exponent, 18-bit mantissa
                 uint64_t bps = (uint64_t)(((uint32_t)(r[1] & 3) << 16) | (uint32_t)r[2] << 8 | r[3]) << (r[1] >> 2);
                 st->remb_bps = bps > 0xffffffffu ? 0xffffffffu : (uint32_t)bps;
@@ -140,7 +169,46 @@ int rtcp_parse(const uint8_t *p, size_t len, uint32_t ssrc, rtcp_stats *st)
         p += n;
         len -= n;
     }
-    return len ? -1 : 0;
+    if (len)
+        return -1;
+    *n_nacks = used;
+    return 0;
+}
+
+int voice_rtx_store(voice_rtx_cache *cache, uint16_t seq, uint32_t ts, int marker,
+                     const uint8_t *payload, size_t len)
+{
+    voice_rtx_packet *p = &cache->packets[seq % VOICE_RTX_PACKETS];
+    if (!len || len > sizeof p->payload)
+        return 0;
+    memcpy(p->payload, payload, len);
+    p->len = (uint16_t)len;
+    p->seq = seq;
+    p->ts = ts;
+    p->marker = marker != 0;
+    p->last_rtx_ms = -1;
+    return 1;
+}
+
+voice_rtx_packet *voice_rtx_find(voice_rtx_cache *cache, uint16_t seq)
+{
+    voice_rtx_packet *p = &cache->packets[seq % VOICE_RTX_PACKETS];
+    return p->len && p->seq == seq ? p : NULL;
+}
+
+size_t voice_rtx_build(const voice_rtx_packet *packet, uint8_t pt, uint32_t ssrc, uint16_t seq,
+                       uint8_t *out, size_t cap)
+{
+    if (!packet->len || packet->len > sizeof packet->payload || cap < 14u + packet->len)
+        return 0;
+    out[0] = 0x80;
+    out[1] = (uint8_t)((pt & 0x7f) | (packet->marker ? 0x80 : 0));
+    out[2] = seq >> 8, out[3] = seq;
+    out[4] = packet->ts >> 24, out[5] = packet->ts >> 16, out[6] = packet->ts >> 8, out[7] = packet->ts;
+    out[8] = ssrc >> 24, out[9] = ssrc >> 16, out[10] = ssrc >> 8, out[11] = ssrc;
+    out[12] = packet->seq >> 8, out[13] = packet->seq;
+    memcpy(out + 14, packet->payload, packet->len);
+    return 14u + packet->len;
 }
 
 size_t voice_ip_discovery_request(uint8_t out[74], uint32_t ssrc)

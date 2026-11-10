@@ -37,7 +37,7 @@
 #define PT_OPUS 120
 #define PT_H264 101
 #define PT_H264_RTX 102
-#define RTP_MTU 1200     // largest RTP payload
+#define RTP_MTU VOICE_VIDEO_MTU // largest NAL or FU-A fragment data
 // The playout-delay header extension the reference clients put on video: with it Discord's
 // stream server drops every video packet (2026-10-28, error 2012 on viewers).
 #define VIDEO_EXT 0
@@ -60,11 +60,14 @@ typedef struct {
     int n_users;
     // the media half (mlock)
     int media_ok, need_idr; // need_idr: viewers start from a keyframe, so P-frames wait
-    uint16_t seq_a, seq_v;
+    uint16_t seq_a, seq_v, seq_rtx;
     uint32_t ts_a, counter;
     _Atomic int spent; // the 32-bit GCM nonce is nearly used up: the stream must end
     int64_t t0;
     unsigned sent_frames, sent_packets, sent_audio, dropped;
+    voice_rtx_cache rtx;
+    int64_t rtx_window_ms;
+    unsigned rtx_window_video, rtx_window_attempts;
     // Frame pacing diagnosis (capture_proto.h cap_gap_bucket): gaps between frames handed to
     // on_video, gaps between the RTP timestamps sent, the longest send (us), per 5 s
     unsigned in_gaps[CAP_GAP_BUCKETS], ts_gaps[CAP_GAP_BUCKETS];
@@ -72,6 +75,7 @@ typedef struct {
     // What viewers report back (RTCP), read by serve() and logged every 5 s
     rtcp_stats rtcp_v;
     unsigned rtcp_in, rtcp_bad;
+    unsigned rtx_sent, rtx_missed;
     char err[200];
 } conn;
 
@@ -185,14 +189,42 @@ cJSON *stream_take_gateway(void)
 
 // ---- media: frames from the broadcast -------------------------------------------
 
+// mlock held. RTX shares the nonce space with both original media streams.
+static int send_packet(conn *c, const uint8_t *plain, size_t n)
+{
+    uint8_t out[12 + 8 + RTP_MTU + 2 + 32];
+    if (c->counter >= 0xFFFF0000u) { // a 32-bit nonce must never repeat (about 24 days of stream)
+        c->dropped++;
+        c->spent = 1; // serve() ends the stream with a reason
+        return 0;
+    }
+    size_t len = voice_gcm_seal(c->key, c->counter++, plain, n, out, sizeof out);
+    // Never wait here: this is also Remote Play's video thread, and a full buffer is a lost packet.
+    if (len && send(c->udp, out, len, MSG_DONTWAIT) == (ssize_t)len) {
+        c->sent_packets++;
+        return 1;
+    }
+    c->dropped++;
+    return 0;
+}
+
+// mlock held. Independent of logging, so a delayed log cannot extend the RTX budget.
+static void rtx_window(conn *c, int64_t now)
+{
+    if (now - c->rtx_window_ms >= 5000) {
+        c->rtx_window_ms = now;
+        c->rtx_window_video = c->rtx_window_attempts = 0;
+    }
+}
+
 // mlock held. One RTP packet: header (+ the playout-delay extension on video), payload,
-// sealed with the connection's transport key.
+// sealed with the connection's transport key. Cache the payload after DAVE, before transport encryption.
 static void send_rtp(conn *c, int pt, uint32_t ssrc, uint16_t seq, uint32_t ts, int marker, int ext,
                      const uint8_t *p, size_t n)
 {
-    uint8_t plain[12 + 8 + RTP_MTU + 2], out[sizeof plain + 32];
+    uint8_t plain[12 + 8 + RTP_MTU + 2];
     size_t h = 12;
-    if (h + 8 + n > sizeof plain)
+    if (n > sizeof plain - h - 8)
         return;
     plain[0] = ext ? 0x90 : 0x80;
     plain[1] = (uint8_t)(pt | (marker ? 0x80 : 0));
@@ -206,17 +238,13 @@ static void send_rtp(conn *c, int pt, uint32_t ssrc, uint16_t seq, uint32_t ts, 
         h += 8;
     }
     memcpy(plain + h, p, n);
-    if (c->counter >= 0xFFFF0000u) { // a 32-bit nonce must never repeat (about 24 days of stream)
-        c->dropped++;
-        c->spent = 1; // serve() ends the stream with a reason
-        return;
+    // Cached before the send: a packet the socket refused left a gap a NACK can still fill.
+    if (pt == PT_H264)
+        voice_rtx_store(&c->rtx, seq, ts, marker, p, n);
+    if (send_packet(c, plain, h + n) && pt == PT_H264) {
+        rtx_window(c, mono_ms());
+        c->rtx_window_video++;
     }
-    size_t len = voice_gcm_seal(c->key, c->counter++, plain, h + n, out, sizeof out);
-    // Never wait here: this is Remote Play's video thread, and a full buffer is a lost packet.
-    if (len && send(c->udp, out, len, MSG_DONTWAIT) == (ssize_t)len)
-        c->sent_packets++;
-    else
-        c->dropped++;
 }
 
 // Pacing (2026-11-09): a keyframe is 120-450 KB, 100-370 packets, and was sent in one burst
@@ -282,8 +310,50 @@ static int send_frame_rtp(conn *c, const uint8_t *f, size_t n, uint32_t ts)
     return !v.gone;
 }
 
+// serve()'s thread only. No cached packet pointer survives the lock.
+static void retransmit(conn *c, const uint16_t *nacks, size_t n)
+{
+    pthread_mutex_lock(&mlock);
+    if (media == c && c->media_ok && c->rtx_ssrc) {
+        const int64_t now = mono_ms();
+        rtx_window(c, now);
+        unsigned in_batch = 0;
+        for (size_t i = 0; i < n; i++) {
+            // Paced like the video itself (PACE_BATCH at PACE_BITS_PER_S), mlock released between
+            // batches so sound and frames keep flowing; the conn may end meanwhile.
+            if (in_batch == PACE_BATCH) {
+                in_batch = 0;
+                pthread_mutex_unlock(&mlock);
+                usleep((useconds_t)(PACE_BATCH * (RTP_MTU + 40) * 8 * 1000000LL / PACE_BITS_PER_S));
+                pthread_mutex_lock(&mlock);
+                if (media != c || !c->media_ok)
+                    break;
+            }
+            voice_rtx_packet *p = voice_rtx_find(&c->rtx, nacks[i]);
+            if (!p) {
+                c->rtx_missed++;
+                continue;
+            }
+            if ((p->last_rtx_ms >= 0 && now - p->last_rtx_ms < 100) ||
+                c->rtx_window_attempts >= c->rtx_window_video / 4)
+                continue;
+            uint8_t plain[14 + RTP_MTU + 2];
+            size_t len = voice_rtx_build(p, PT_H264_RTX, c->rtx_ssrc, c->seq_rtx, plain, sizeof plain);
+            if (!len)
+                continue;
+            c->seq_rtx++;
+            p->last_rtx_ms = now;
+            c->rtx_window_attempts++; // failed sends consume the budget too
+            in_batch++;
+            if (send_packet(c, plain, len))
+                c->rtx_sent++;
+        }
+    }
+    pthread_mutex_unlock(&mlock);
+}
+
 // serve()'s thread only. Discord's media server sends receiver reports, NACKs, PLIs and REMB
-// to our UDP socket; nothing else reads it after IP discovery. Counted for the log; returns
+// to our UDP socket; nothing else reads it after IP discovery. Retransmits NACKs and returns
 // whether a viewer asked for a keyframe (PLI or FIR) in what was read.
 static int read_rtcp(conn *c)
 {
@@ -297,8 +367,12 @@ static int read_rtcp(conn *c)
             continue;
         c->rtcp_in++;
         size_t m = voice_gcm_open_rtcp(c->key, in, (size_t)n, plain, sizeof plain);
-        if (!m || rtcp_parse(plain, m, c->video_ssrc, &c->rtcp_v))
+        uint16_t nacks[RTCP_NACK_MAX];
+        size_t n_nacks;
+        if (!m || rtcp_parse_nacks(plain, m, c->video_ssrc, &c->rtcp_v, nacks, RTCP_NACK_MAX, &n_nacks))
             c->rtcp_bad++;
+        else if (n_nacks)
+            retransmit(c, nacks, n_nacks);
     }
     return c->rtcp_v.pli + c->rtcp_v.fir != asked;
 }
@@ -933,13 +1007,16 @@ static int serve(conn *c)
             const rtcp_stats *r = &c->rtcp_v;
             if (c->rtcp_in) // jitter: 90 kHz video clock
                 LOG("stream: viewers report (5 s, %u RTCP, %u unreadable): %u reports, lost up to %u%%, total %d, "
-                    "jitter up to %u ms, %u packets asked again, %u PLI, %u FIR, estimate %u kbit/s",
+                    "jitter up to %u ms, %u packets asked again, %u RTX, %u ring misses, "
+                    "%u PLI, %u FIR, estimate %u kbit/s",
                     c->rtcp_in, c->rtcp_bad, r->reports, r->max_fraction * 100 / 256, (int)r->cumulative,
-                    (unsigned)(r->max_jitter / 90), r->nack_packets, r->pli, r->fir, (unsigned)(r->remb_bps / 1000));
+                    (unsigned)(r->max_jitter / 90), r->nack_packets, c->rtx_sent, c->rtx_missed,
+                    r->pli, r->fir, (unsigned)(r->remb_bps / 1000));
             const int32_t total = r->cumulative; // a running total: kept across windows
             memset(&c->rtcp_v, 0, sizeof c->rtcp_v);
             c->rtcp_v.cumulative = total;
             c->rtcp_in = c->rtcp_bad = 0;
+            c->rtx_sent = c->rtx_missed = 0;
             next_log = now + 5000;
         }
         int m = ws_recv(&c->ws, 200);

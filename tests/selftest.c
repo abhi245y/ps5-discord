@@ -295,11 +295,125 @@ static void test_rtcp(void)
     assert(rtcp_parse(p, sizeof p, ours, &st) == 0);
     assert(st.reports == 1 && st.max_fraction == 64 && st.cumulative == -2 && st.max_jitter == 300);
     assert(st.nack_packets == 3 && st.pli == 1 && st.fir == 0 && st.remb_bps == 256 << 2);
+    uint16_t nacks[RTCP_NACK_MAX + 1];
+    size_t n_nacks = 99;
+    rtcp_stats extracted = {0};
+    assert(rtcp_parse_nacks(p, sizeof p, ours, &extracted, nacks, RTCP_NACK_MAX, &n_nacks) == 0);
+    assert(n_nacks == 3 && nacks[0] == 16 && nacks[1] == 17 && nacks[2] == 19);
+    assert(extracted.nack_packets == st.nack_packets && extracted.reports == st.reports && extracted.pli == st.pli);
     rtcp_stats other = {0};
     assert(rtcp_parse(p, sizeof p, 1234, &other) == 0 && !other.reports && !other.nack_packets && !other.pli);
+    assert(rtcp_parse_nacks(p, sizeof p, 1234, &other, nacks, RTCP_NACK_MAX, &n_nacks) == 0 && !n_nacks);
     assert(rtcp_parse(p, sizeof p - 3, ours, &other) == -1); // truncated
+    assert(rtcp_parse_nacks(p, sizeof p - 3, ours, &other, nacks, RTCP_NACK_MAX, &n_nacks) == -1);
+    assert(n_nacks == 0); // a valid NACK before a malformed compound tail must not trigger RTX
+
+    uint8_t wrap[] = {0x81, 205, 0, 3, 0, 0, 0, 1, 0, 0, 0x22, 0x38, 0xff, 0xff, 0x80, 0x03};
+    rtcp_stats wrapped = {0};
+    assert(rtcp_parse_nacks(wrap, sizeof wrap, ours, &wrapped, nacks, RTCP_NACK_MAX, &n_nacks) == 0);
+    assert(n_nacks == 4 && nacks[0] == 65535 && nacks[1] == 0 && nacks[2] == 1 && nacks[3] == 15);
+    assert(wrapped.nack_packets == 4);
+    nacks[1] = 0xdead;
+    assert(rtcp_parse_nacks(wrap, sizeof wrap, ours, &wrapped, nacks, 1, &n_nacks) == 0);
+    assert(n_nacks == 1 && nacks[0] == 65535 && nacks[1] == 0xdead && wrapped.nack_packets == 8);
+    nacks[0] = 0xdead;
+    assert(rtcp_parse_nacks(wrap, sizeof wrap, ours, &wrapped, nacks, 0, &n_nacks) == 0);
+    assert(n_nacks == 0 && nacks[0] == 0xdead && wrapped.nack_packets == 12);
+    assert(rtcp_parse_nacks(wrap, sizeof wrap, ours, &wrapped, NULL, RTCP_NACK_MAX, &n_nacks) == 0);
+    assert(n_nacks == 0 && wrapped.nack_packets == 16);
+
+    uint8_t many[12 + 17 * 4] = {0x81, 205, 0, sizeof many / 4 - 1, 0, 0, 0, 1, 0, 0, 0x22, 0x38};
+    for (unsigned i = 0; i < 17; i++) {
+        unsigned pid = i * 32;
+        many[12 + 4 * i] = (uint8_t)(pid >> 8);
+        many[13 + 4 * i] = (uint8_t)pid;
+        many[14 + 4 * i] = many[15 + 4 * i] = 0xff;
+    }
+    rtcp_stats bounded = {0};
+    nacks[RTCP_NACK_MAX] = 0xdead;
+    assert(rtcp_parse_nacks(many, sizeof many, ours, &bounded, nacks, RTCP_NACK_MAX + 1, &n_nacks) == 0);
+    assert(n_nacks == RTCP_NACK_MAX && nacks[RTCP_NACK_MAX] == 0xdead && bounded.nack_packets == 17 * 17);
+    for (size_t i = 0; i < n_nacks; i++)
+        assert(nacks[i] == (i / 17) * 32 + i % 17);
+
+    uint8_t padded[20];
+    memcpy(padded, wrap, sizeof wrap);
+    padded[0] |= 0x20;
+    padded[3] = 4;
+    memset(padded + 16, 0, 4);
+    padded[19] = 4;
+    rtcp_stats padding = {0};
+    assert(rtcp_parse_nacks(padded, sizeof padded, ours, &padding, nacks, RTCP_NACK_MAX, &n_nacks) == 0);
+    assert(n_nacks == 4 && padding.nack_packets == 4); // padding cannot become another PID
+    padded[19] = 0;
+    assert(rtcp_parse_nacks(padded, sizeof padded, ours, &padding, nacks, RTCP_NACK_MAX, &n_nacks) == -1);
+    padded[19] = 1;
+    assert(rtcp_parse_nacks(padded, sizeof padded, ours, &padding, nacks, RTCP_NACK_MAX, &n_nacks) == -1);
+    assert(n_nacks == 0); // incomplete FCI after removing padding
+    assert(rtcp_parse_nacks(wrap, 4, ours, &padding, nacks, RTCP_NACK_MAX, &n_nacks) == -1);
+    uint8_t short_nack[] = {0x81, 205, 0, 1, 0, 0, 0, 1};
+    assert(rtcp_parse_nacks(short_nack, sizeof short_nack, ours, &padding, nacks, RTCP_NACK_MAX, &n_nacks) == -1);
+    assert(n_nacks == 0); // no media SSRC or FCI
     uint8_t key[32] = {7}, opened[128], plain[16] = {0x80, 201, 0, 1, 0, 0, 0, 9, 1, 2, 3, 4, 5, 6, 7, 8};
     assert(voice_gcm_open_rtcp(key, plain, sizeof plain, opened, sizeof opened) == 0); // no room for tag and counter
+}
+
+static void test_rtx(void)
+{
+    voice_rtx_cache *cache = calloc(1, sizeof *cache);
+    assert(cache);
+    assert(!voice_rtx_find(cache, 0) && !voice_rtx_find(cache, 65535));
+    uint8_t payload[] = {0x7c, 0x85, 0xaa, 0xbb};
+    assert(voice_rtx_store(cache, 65535, 0x11223344, 1, payload, sizeof payload) == 1);
+    payload[0] = 0; // the source frame may be freed before its NACK arrives
+    voice_rtx_packet *p = voice_rtx_find(cache, 65535);
+    assert(p && p->len == sizeof payload && p->last_rtx_ms == -1 && p->payload[0] == 0x7c);
+    const uint8_t want[] = {0x80, 0xe6, 0x12, 0x34, 0x11, 0x22, 0x33, 0x44,
+                            0x55, 0x66, 0x77, 0x88, 0xff, 0xff, 0x7c, 0x85, 0xaa, 0xbb};
+    uint8_t out[14 + VOICE_VIDEO_MTU + 2];
+    assert(voice_rtx_build(p, 102, 0x55667788, 0x1234, out, sizeof out) == sizeof want);
+    assert(!memcmp(out, want, sizeof want));
+    out[0] = 0x5a;
+    assert(voice_rtx_build(p, 102, 0x55667788, 0x1234, out, sizeof want - 1) == 0 && out[0] == 0x5a);
+    p->marker = 0;
+    assert(voice_rtx_build(p, 102, 0x55667788, 0, out, sizeof out) == sizeof want);
+    assert(out[1] == 102 && out[2] == 0 && out[3] == 0 && out[12] == 0xff && out[13] == 0xff);
+
+    uint8_t full[VOICE_VIDEO_MTU + 2];
+    for (size_t i = 0; i < sizeof full; i++)
+        full[i] = (uint8_t)i;
+    assert(voice_rtx_store(cache, 0, 99, 0, full, sizeof full) == 1);
+    p = voice_rtx_find(cache, 0);
+    assert(p && p->seq == 0 && p->ts == 99 && !p->marker);
+    assert(voice_rtx_build(p, 102, 1, 65535, out, sizeof out) == sizeof out);
+    assert(out[2] == 0xff && out[3] == 0xff && out[12] == 0 && out[13] == 0);
+    assert(!memcmp(out + 14, full, sizeof full));
+    uint8_t key[32] = {9}, sealed[sizeof out + 20], opened[sizeof out];
+    assert(voice_gcm_seal(key, 7, out, sizeof out, sealed, sizeof sealed) == sizeof sealed);
+    assert(voice_gcm_open(key, sealed, sizeof sealed, opened, sizeof opened) == sizeof opened);
+    assert(!memcmp(out, opened, sizeof out));
+    assert(voice_rtx_store(cache, 0, 100, 1, full, sizeof full + 1) == 0 && p->ts == 99);
+    assert(voice_rtx_store(cache, 0, 100, 1, full, 0) == 0 && p->ts == 99);
+    p->len = sizeof full + 1;
+    assert(voice_rtx_build(p, 102, 1, 0, out, sizeof out) == 0);
+    p->len = 0;
+    assert(voice_rtx_build(p, 102, 1, 0, out, sizeof out) == 0);
+
+    // Fill across sequence wrap, then overwrite exactly the oldest slot.
+    for (unsigned i = 0; i < VOICE_RTX_PACKETS; i++)
+        assert(voice_rtx_store(cache, (uint16_t)(65000 + i), i, i & 1, payload, sizeof payload) == 1);
+    for (unsigned i = 0; i < VOICE_RTX_PACKETS; i++) {
+        p = voice_rtx_find(cache, (uint16_t)(65000 + i));
+        assert(p && p->ts == i && p->marker == (int)(i & 1) && p->last_rtx_ms == -1);
+    }
+    p = voice_rtx_find(cache, 65000);
+    p->last_rtx_ms = 123;
+    uint16_t newest = (uint16_t)(65000 + VOICE_RTX_PACKETS);
+    assert(voice_rtx_store(cache, newest, 1024, 1, payload, sizeof payload) == 1);
+    assert(!voice_rtx_find(cache, 65000));
+    p = voice_rtx_find(cache, newest);
+    assert(p && p->ts == 1024 && p->last_rtx_ms == -1);
+    free(cache);
 }
 
 static void test_ip_discovery(void)
@@ -1233,6 +1347,7 @@ int main(void)
     test_zstream();
     test_gcm();
     test_rtcp();
+    test_rtx();
     test_ip_discovery();
     test_voice_json();
     test_bin_frame();

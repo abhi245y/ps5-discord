@@ -34,6 +34,33 @@ typedef struct {
 } rtcp_stats;
 // Adds one plain (compound) RTCP packet's reports about `ssrc` to st. Returns -1 if malformed.
 int rtcp_parse(const uint8_t *p, size_t len, uint32_t ssrc, rtcp_stats *st);
+#define RTCP_NACK_MAX 256
+// Also extracts PID + BLP sequences for ssrc, up to min(cap, RTCP_NACK_MAX). All NACKs
+// still count in st. *n_nacks is zero on malformed input; ignore the output then.
+int rtcp_parse_nacks(const uint8_t *p, size_t len, uint32_t ssrc, rtcp_stats *st,
+                     uint16_t *nacks, size_t cap, size_t *n_nacks);
+
+#define VOICE_VIDEO_MTU 1200
+#define VOICE_RTX_PACKETS 1024
+typedef struct {
+    uint8_t payload[VOICE_VIDEO_MTU + 2]; // FU-A adds two bytes to the fragment's data
+    uint16_t len, seq;
+    uint32_t ts;
+    int marker;
+    int64_t last_rtx_ms; // -1 until the first attempt, so time zero also works
+} voice_rtx_packet;
+// Zero-initialize with its connection; sequence-indexed slots make NACK lookup constant time.
+typedef struct {
+    voice_rtx_packet packets[VOICE_RTX_PACKETS];
+} voice_rtx_cache;
+// Stores a copy, returning 0 if the payload is empty or too large, 1 otherwise.
+int voice_rtx_store(voice_rtx_cache *cache, uint16_t seq, uint32_t ts, int marker,
+                     const uint8_t *payload, size_t len);
+voice_rtx_packet *voice_rtx_find(voice_rtx_cache *cache, uint16_t seq);
+// RFC 4588 plain RTP: independent sequence/SSRC, original timestamp/marker, OSN then payload.
+// Returns the packet length, or 0 if cap is too small or the cached packet is invalid.
+size_t voice_rtx_build(const voice_rtx_packet *packet, uint8_t pt, uint32_t ssrc, uint16_t seq,
+                       uint8_t *out, size_t cap);
 
 // IP discovery: 74-byte request (type 1, length 70, ssrc), and parsing of the reply
 // (type 2) for our external address and port. Returns 0 on success.
