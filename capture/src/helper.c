@@ -27,6 +27,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -259,6 +260,10 @@ static int net_connect(void)
         net_close();
         return -1;
     }
+    // Console 2026-11-09: frames left the encoder every 33 ms but reached the core in pairs
+    // (Nagle holding each frame's tail until the previous one was acknowledged). Send at once.
+    int one = 1;
+    (void)setsockopt(net_fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
     return net_send(CAP_HELLO, 0, hello, sizeof hello);
 }
 

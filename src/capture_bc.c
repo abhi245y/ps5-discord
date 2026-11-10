@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <poll.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -324,6 +325,8 @@ const char *capture_run(const capture_params *p)
             int c = accept(listener, NULL, NULL);
             if (c < 0) break;
             if (cap_nonblock(c)) { close(c); continue; }
+            int one = 1; // commands (keyframe, stop) go out at once too, as the helper's frames do
+            (void)setsockopt(c, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
             unsigned slot = 0;
             for (unsigned i = 0; i < HELLO_SLOTS; i++) {
                 if (candidates[i].fd < 0) { slot = i; break; }
