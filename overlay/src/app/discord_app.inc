@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // The Discord call overlay, laid out from the approved mockups (docs/overlay-plan.md,
-// .impeccable/mocks/overlay/a-dock.png and c-glance.png; their 1672 px measures x 1.148):
-//  - the talking card (C): top right while the panel is closed: LIVE with time and viewers
-//    (or the call's name), who is talking with their avatar, your mic, how to open the panel.
-//    The core decides when it shows (Settings: off, while someone talks, always).
+// .impeccable/mocks/overlay/a-dock.png and c-glance.png; their 1672 px measures x 1.148).
+// LIVE pill and trimmed card: tmp/mockups/live-pill-demo.html, at 1920x1080:
+//  - the independent LIVE pill: flush in its chosen corner while live and the panel is
+//    closed, with broadcast icon, duration, viewers and mic status (28 px high).
+//  - the talking-only card (C): up to three talkers, avatars, rings, names and bars;
+//    no empty card. Its own corner has 31/34 px edge insets. When both share a corner,
+//    the card sits 14 px inward from the pill. Bottom cards grow upward.
 //  - the call panel (A): holding Options or L3+R3 opens it on the right edge: the call and
 //    its timer, up to four people (avatar, talking ring and bars, muted marks), the four
 //    actions as tiles (Mute, Deafen, Go Live, Leave) and the button hints. D-pad left/right
@@ -65,7 +68,8 @@ constexpr float kRowX=1347,kRowW=519,kRowH=132,kRowY=184,kRowStep=143,kAvatar=10
 constexpr float kTileW=122,kTileH=140,kTileStep=132;
 constexpr int kRows=4,kTiles=4;
 // C: the talking card.
-constexpr float kCardX=1574,kCardY=34,kCardW=315;
+constexpr float kCardX=1574,kCardY=34,kCardW=315,kCardPadding=28;
+constexpr float kPillH=28,kPillSegment=30.8f,kPillEnd=8,kPillIcon=19.6f;
 constexpr int kTalkRows=3;
 
 // The mini settings, in the core line's order (src/overlay.c compose). Values index names
@@ -73,6 +77,7 @@ constexpr int kTalkRows=3;
 struct Setting { const char* title; const char* key; int min,max; const char* const* names; int scale; const char* unit; };
 constexpr const char* kQualities[]={"720p \xc2\xb7 30 fps","720p \xc2\xb7 60 fps","1080p \xc2\xb7 30 fps","1080p \xc2\xb7 60 fps"};
 constexpr const char* kCardModes[]={"Off","While someone talks","Always"};
+constexpr const char* kCorners[]={"Top left","Top right","Bottom left","Bottom right"};
 constexpr const char* kPlaces[]={"Top right","Top left","Bottom right","Bottom left","Middle right","Middle left"};
 constexpr const char* kOnOff[]={"Off","On"};
 constexpr const char* kServer[]={"Off","As in Discord","Every message"};
@@ -84,24 +89,27 @@ constexpr Setting kSettings[]={
     {"Mic gain","mic_gain",0,10,nullptr,20,"%"},
     {"Call volume","call_volume",0,10,nullptr,20,"%"},
     {"Show","overlay_glance",0,2,kCardModes,0,nullptr},
-    {"Position","overlay_pos",0,5,kPlaces,0,nullptr},
+    {"Position","overlay_pos",0,5,kPlaces,0,nullptr}, // legacy wire slot; no longer shown
     {"Hold Options","overlay_hold",0,12,nullptr,0,"s"}, // 0.3 s + tenths
     {"DMs and mentions","notify_dm",0,1,kOnOff,0,nullptr},
     {"Server messages","notify_server",0,2,kServer,0,nullptr},
     {"PS5 alerts while playing","notify_system",0,1,kOnOff,0,nullptr},
     {"Quiet hours","quiet_hours",0,4,kQuiet,0,nullptr},
     {"Call mode","bt_handsfree",0,1,kCallModes,0,nullptr},
+    {"Pill corner","overlay_pill_corner",0,3,kCorners,0,nullptr},
+    {"Card corner","overlay_card_corner",0,3,kCorners,0,nullptr},
 };
 constexpr int kSettingCount=int(sizeof kSettings/sizeof *kSettings);
 constexpr int kHeadset=-1;   // the headset row: the paired headsets and Disconnect
 constexpr int kBluetooth=-2; // Bluetooth on or off (the adapter)
+constexpr int kPillCorner=11,kCardCorner=12;
 constexpr int kCallMode=10;  // AirPods only: other headsets are always hands-free in calls
 // The tabs and their rows (kSettings indexes).
 struct Tab { const char* name; float w; int rows[4]; int count; };
 constexpr Tab kTabs[]={
     {"Go Live",92,{0},1},
     {"Voice",76,{1,2},2},
-    {"Card",66,{3,4,5},3},
+    {"Card",66,{3,kPillCorner,kCardCorner,5},4},
     {"Alerts",76,{6,7,8,9},4},
     {"Headset",96,{kBluetooth,kHeadset,kCallMode},3}, // Call mode only with AirPods (rows_in)
 };
@@ -133,7 +141,7 @@ struct State {
     bool glance=false;
     char live[16]="", call[64]="", timer[16]="", quality[32]="";
     int viewers=0;
-    int set[kSettingCount]={0,5,5,1,0,3,1,1,1,0,0};
+    int set[kSettingCount]={0,5,5,1,0,3,1,1,1,0,0,1,1};
     bool bt_on=false,airpods=false; // airpods: Call mode applies (others are hands-free in calls)
     char connected[18]="";
     char dev_addr[4][18]={}, dev_name[4][40]={};
@@ -195,10 +203,15 @@ int reveal=0;           // frames until the new page's content shows
 float pill_x=-1,pill_from=0; int slide_t=99; // the highlight's x now, where the slide began, its frame
 constexpr int kSlide=8;
 // The talking card.
-void* card=nullptr; void* pill=nullptr; void* card_head=nullptr; void* card_call=nullptr;
+void* card=nullptr;
+// LIVE pill: fixed-size end caps preserve the 7.5 px inner radius as text slots grow.
+void *live_segment=nullptr,*live_body=nullptr,*live_end=nullptr,*live_icon=nullptr;
+void *live_time=nullptr,*live_eye=nullptr,*live_count=nullptr,*live_rule=nullptr,*live_mic=nullptr;
+void *live_time_probe=nullptr,*live_count_probe=nullptr;
+int live_time_len=0,live_count_len=0,live_probe_wait=0;
+float live_time_w=37.8f,live_count_w=16.8f;
 void* talk_avatar[kTalkRows]={}; void* talk_ring[kTalkRows]={}; void* talk_name[kTalkRows]={};
 void* talk_bars[kTalkRows]={};
-void* you_ring=nullptr; void* you_mic=nullptr; void* you_text=nullptr; void* card_rule=nullptr; void* card_hint=nullptr;
 // The mini settings.
 void* tab_pill[kTabCount]={}; void* tab_word[kTabCount]={}; void* chip_l1=nullptr; void* chip_r1=nullptr;
 void* set_bg[kSettingRows]={}; void* set_name[kSettingRows]={}; void* set_value[kSettingRows]={};
@@ -233,10 +246,6 @@ void* label(Builder& b,const Rect& r,float size,int weight,const Color& c,int al
 }
 
 void show(Builder& b,void* w,bool on){if(w)b.set_visible(w,on);}
-
-const char* mic_text(char me){
-    return me=='d'?"You \xc2\xb7 deafened":me=='m'?"You \xc2\xb7 muted":"You \xc2\xb7 mic on";
-}
 
 }  // namespace
 
@@ -775,54 +784,78 @@ void place_timer(Builder& b){
     b.set_rect(clock,{right-w-34,kTitleY+16,26,26});
 }
 
+// PUI measures lazily. Probe the widest digits once per format, keep stable slots as
+// seconds/viewers change, and use the demo's compact widths until layout is ready.
+void place_live(Builder& b){
+    const int corner=st.set[kPillCorner];
+    const float width=kPillSegment+5.6f+live_time_w+5.6f+15.4f+3.36f+live_count_w+
+                      5.6f+0.7f+5.6f+kPillIcon+6.72f;
+    const float x=corner%2?1920-width:0,y=corner<2?0:1080-kPillH;
+    char name[32];
+    std::snprintf(name,sizeof name,"live_segment_%d",corner);art(b,live_segment,name);
+    std::snprintf(name,sizeof name,"live_end_%d",corner);art(b,live_end,name);
+    b.set_rect(live_segment,{x,y,kPillSegment,kPillH});
+    b.set_rect(live_body,{x+kPillSegment,y,width-kPillSegment-kPillEnd,kPillH});
+    b.set_rect(live_end,{x+width-kPillEnd,y,kPillEnd,kPillH});
+    b.set_rect(live_icon,{x+(kPillSegment-kPillIcon)/2,y+(kPillH-kPillIcon)/2,kPillIcon,kPillIcon});
+    float at=x+kPillSegment+5.6f;
+    b.set_rect(live_time,{at,y,live_time_w,kPillH});at+=live_time_w+5.6f;
+    b.set_rect(live_eye,{at,y+6.3f,15.4f,15.4f});at+=15.4f+3.36f;
+    b.set_rect(live_count,{at,y,live_count_w,kPillH});at+=live_count_w+5.6f;
+    b.set_rect(live_rule,{at,y+8.4f,0.7f,11.2f});at+=0.7f+5.6f;
+    b.set_rect(live_mic,{at,y+(kPillH-kPillIcon)/2,kPillIcon,kPillIcon});
+}
+
 void render(Builder& b){
     const bool in_call=st.state=='c'||st.state=='j';
-    char text[128];
 
-    // C: the talking card.
+    // Independent LIVE pill; card mode never gates it. Both hide under the panel.
+    const bool live_on=!open&&st.state!='x'&&st.live[0];
+    b.set_text(live_time,st.live);
+    char viewers[16];std::snprintf(viewers,sizeof viewers,"%d",st.viewers);
+    b.set_text(live_count,viewers);
+    const int time_len=int(std::strlen(st.live)),count_len=int(std::strlen(viewers));
+    if(time_len!=live_time_len||count_len!=live_count_len){
+        live_time_len=time_len;live_count_len=count_len;
+        char widest[16];int i=0;
+        for(;st.live[i]&&i<15;i++)widest[i]=st.live[i]==':'?':':'8';widest[i]=0;
+        b.set_text(live_time_probe,widest);
+        for(i=0;i<count_len&&i<15;i++)widest[i]='8';widest[i]=0;
+        b.set_text(live_count_probe,widest);
+        live_time_w=time_len<=5?37.8f:54.6f+8.4f*(time_len-7);
+        live_count_w=count_len<2?16.8f:8.4f*count_len;
+        live_probe_wait=2;
+    }
+    place_live(b);
+    art(b,live_mic,st.me=='o'?"mic":"mic_off_red");
+    void* const live_parts[]={live_segment,live_body,live_end,live_icon,live_time,live_eye,
+                             live_count,live_rule,live_mic,live_time_probe,live_count_probe};
+    for(void* w:live_parts)show(b,w,live_on);
+
+    // C: only talkers. Keep the 56 px rings and 60 px row stride.
     int talking=0;
     for(int i=0;i<st.count&&talking<kTalkRows;i++)
         if(st.people[i].flag=='t'){
             set_avatar(b,talk_avatar[talking],st.people[i]);
             b.set_text(talk_name[talking],st.people[i].name);
             ++talking;}
-    const bool card_on=!open&&in_call&&st.glance;
-    // Where the card sits (Settings: overlay_pos), inside the TV's safe area.
-    const float ch=205+60.0f*talking;
-    const int pos=st.set[4];
-    const float cx=pos%2?31:kCardX;
-    const float cy=pos<2?kCardY:pos<4?1080-kCardY-ch:(1080-ch)/2;
-    const float you_y=cy+107+60.0f*talking; // the "You" row's middle
-    char bg[16];std::snprintf(bg,sizeof bg,"glance_%d",talking);
-    art(b,card,bg);
+    const bool card_on=!open&&in_call&&st.glance&&st.set[3]!=0&&talking>0;
+    const float ch=kCardPadding+60.0f*talking;
+    const int corner=st.set[kCardCorner];
+    const float cx=corner%2?kCardX:31;
+    const float inset=live_on&&corner==st.set[kPillCorner]?kPillH+14:kCardY;
+    const float cy=corner<2?inset:1080-inset-ch;
+    if(talking){char bg[16];std::snprintf(bg,sizeof bg,"glance_%d",talking);art(b,card,bg);}
     b.set_rect(card,{cx,cy,kCardW,ch});
-    b.set_rect(pill,{cx+20,cy+17,79,34});
-    b.set_rect(card_head,{cx+114,cy+16,190,36});
-    b.set_rect(card_call,{cx+20,cy+16,275,36});
     for(int i=0;i<kTalkRows;i++){
-        const float c=cy+107+60.0f*i;
+        const float c=cy+44+60.0f*i;
         b.set_rect(talk_avatar[i],{cx+27,c-25,50,50});
         b.set_rect(talk_ring[i],{cx+24,c-28,56,56});
         b.set_rect(talk_name[i],{cx+91,c-18,160,36});
-        b.set_rect(talk_bars[i],{cx+256,c-15,30,30});}
-    b.set_rect(you_ring,{cx+27,you_y-25,50,50});
-    b.set_rect(you_mic,{cx+38,you_y-14,28,28});
-    b.set_rect(you_text,{cx+91,you_y-18,210,36});
-    b.set_rect(card_rule,{cx+20,you_y+40,275,2});
-    b.set_rect(card_hint,{cx+20,you_y+52,275,32});
-    art(b,you_mic,st.me=='o'?"mic":st.me=='d'?"headphones_off":"mic_off");
-    b.set_text(you_text,mic_text(st.me));
-    if(st.live[0]){
-        std::snprintf(text,sizeof text,"%s  |  %d watching",st.live,st.viewers);
-        b.set_text(card_head,text);}
-    b.set_text(card_call,st.state=='j'?"Joining\xe2\x80\xa6":st.call);
-    show(b,card,card_on);
-    show(b,pill,card_on&&st.live[0]);show(b,card_head,card_on&&st.live[0]);show(b,card_call,card_on&&!st.live[0]);
-    for(int i=0;i<kTalkRows;i++){
+        b.set_rect(talk_bars[i],{cx+256,c-15,30,30});
         const bool on=card_on&&i<talking;
         show(b,talk_avatar[i],on);show(b,talk_ring[i],on);show(b,talk_name[i],on);show(b,talk_bars[i],on);}
-    show(b,you_ring,card_on);show(b,you_mic,card_on);show(b,you_text,card_on);
-    show(b,card_rule,card_on);show(b,card_hint,card_on);
+    show(b,card,card_on);
 
     // A: the panel (call page, Chat, Mentions, or the mini settings).
     const bool call_page=open&&!settings&&page==0;
@@ -913,7 +946,9 @@ void reset(){
     kb=false;kb_text[0]=0;kb_len=kb_chars=kb_caret=0;kb_shift=kb_page=0;kb_row=1;kb_col=0;kb_x=0.5f;kb_sx=kb_sy=0;
     kb_field=kb_input=kb_pages=kb_hl=kb_measure=kb_bar=nullptr;kb_blink=kb_hold=0;kb_shown[0]=0;kb_style=-1;
     dock=dock_mid=dock_end=title=clock=timer=timer_probe=tile_sub=tile_focus=rule=nullptr;std::snprintf(timer_shown,sizeof timer_shown,"\x01");probe_wait=0;timer_w=0;
-    card=pill=card_head=card_call=you_ring=you_mic=you_text=card_rule=card_hint=nullptr;
+    card=live_segment=live_body=live_end=live_icon=live_time=live_eye=live_count=live_rule=live_mic=nullptr;
+    live_time_probe=live_count_probe=nullptr;live_time_len=live_count_len=live_probe_wait=0;
+    live_time_w=37.8f;live_count_w=16.8f;
     for(int i=0;i<kRows;i++)row_bg[i]=row_avatar[i]=row_ring[i]=row_name[i]=row_icon[i]=nullptr;
     for(int i=0;i<kTiles;i++)tile[i]=tile_icon[i]=tile_label[i]=nullptr;
     for(int i=0;i<4;i++)hint_icon[i]=hint_text[i]=nullptr;
@@ -982,24 +1017,27 @@ bool build(Builder& b){
     for(void* w:set_name)if(!w)return false;
     for(void* w:drop_word)if(!w)return false;
 
-    // C: the talking card.
-    card=image(b,{kCardX,kCardY,kCardW,325},"glance_2");
-    pill=image(b,{kCardX+20,kCardY+17,79,34},"pill_live");
-    card_head=label(b,{kCardX+114,kCardY+16,190,36},19,3,kText);
-    card_call=label(b,{kCardX+20,kCardY+16,275,36},21,1,kWhite);
+    // LIVE pill, independent of the talking card (placed in place_live).
+    live_segment=image(b,at,"live_segment_1");live_body=image(b,at,"live_body");live_end=image(b,at,"live_end_1");
+    live_icon=image(b,at,"golive");
+    live_time=label(b,at,13.3f,0,kWhite,1);
+    live_eye=image(b,at,"eye");if(live_eye)b.set_tint(live_eye,kDim);
+    live_count=label(b,at,13.3f,0,kWhite,1);
+    live_rule=image(b,at,"live_divider");live_mic=image(b,at,"mic");
+    live_time_probe=label(b,{0,0,200,28},13.3f,0,Color{1,1,1,0});
+    live_count_probe=label(b,{0,0,200,28},13.3f,0,Color{1,1,1,0});
+    b.set_text_valign(live_time,2);b.set_text_valign(live_count,2);
+
+    // C: the talking-only card.
+    card=image(b,{kCardX,kCardY,kCardW,148},"glance_2");
     for(int i=0;i<kTalkRows;i++){
-        const float c=kCardY+107+60.0f*i;
+        const float c=kCardY+44+60.0f*i;
         talk_avatar[i]=b.add_image({kCardX+27,c-25,50,50},"");
         talk_ring[i]=image(b,{kCardX+24,c-28,56,56},"ring_small");
         talk_name[i]=label(b,{kCardX+91,c-18,160,36},21,3,kWhite);
         talk_bars[i]=image(b,{kCardX+256,c-15,30,30},"bars");
         if(talk_bars[i])b.set_tint(talk_bars[i],kCoral);
     }
-    you_ring=image(b,{kCardX+27,kCardY+202,50,50},"you");
-    you_mic=image(b,{kCardX+38,kCardY+213,28,28},"mic");
-    you_text=label(b,{kCardX+91,kCardY+209,210,36},21,3,kWhite);
-    card_rule=image(b,{kCardX+20,kCardY+267,275,2},"glance_line");
-    card_hint=label(b,{kCardX+20,kCardY+279,275,32},17,0,kDim,0,"Hold Options for controls");
 
     // The tabs, Chat and Mentions (placed in render_pages).
     tabs_bg=image(b,{kRowX,kStripY,kRowW,kStripH},"tabs_bg");
@@ -1034,7 +1072,7 @@ bool build(Builder& b){
     kb_bar=image(b,at,"kb_caret");if(kb_bar)b.set_tint(kb_bar,kCoral);
 
     // Text is the overlay's job; pictures may be missing on a firmware without ImageBox.
-    if(!title||!timer||!tile_sub||!card_head||!card_call||!you_text||!card_hint)return false;
+    if(!title||!timer||!tile_sub||!live_time||!live_count||!live_time_probe||!live_count_probe)return false;
     for(void* w:row_name)if(!w)return false;
     for(void* w:tile_label)if(!w)return false;
     for(void* w:talk_name)if(!w)return false;
@@ -1303,6 +1341,11 @@ void on_tick(std::uint64_t frame,Builder& b){
         pill_x=pill_from+(pill_target()-pill_from)*e;
         b.set_rect(tab_on,{pill_x,kStripY+4,167,56});}
     if(reveal&&open&&!--reveal)render(b); // the content, laid out by now
+    if(live_probe_wait&&!open&&st.live[0]&&!--live_probe_wait){
+        const float tw=b.text_width(live_time_probe),cw=b.text_width(live_count_probe);
+        if(tw>0&&tw+2>live_time_w)live_time_w=tw+2;
+        if(cw>0&&cw+2>live_count_w)live_count_w=cw+2;
+        place_live(b);}
     if(probe_wait&&open&&!--probe_wait){ // the widest timer text, laid out by now
         const float w=b.text_width(timer_probe);
         if(w>0){timer_w=w;place_timer(b);}}

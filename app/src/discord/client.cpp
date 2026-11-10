@@ -1460,6 +1460,8 @@ void Client::poll_voice()
             prefs.overlay = num(p, "overlay", 0.0) != 0.0;
             prefs.overlay_autoload = num(p, "overlay_autoload", 0.0) != 0.0;
             prefs.overlay_glance = std::clamp(static_cast<int>(num(p, "overlay_glance", 1.0)), 0, 2);
+            prefs.overlay_pill_corner = std::clamp(static_cast<int>(num(p, "overlay_pill_corner", 1.0)), 0, 3);
+            prefs.overlay_card_corner = std::clamp(static_cast<int>(num(p, "overlay_card_corner", 1.0)), 0, 3);
             prefs.overlay_pos = std::clamp(static_cast<int>(num(p, "overlay_pos", 0.0)), 0, 5);
             prefs.overlay_hold = std::clamp(static_cast<int>(num(p, "overlay_hold", 3.0)), 0, 12);
         }

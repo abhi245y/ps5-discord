@@ -58,7 +58,7 @@ void dump(const char* dir,const char* name){
     std::fclose(f);
 }
 
-const char* kSet="0.5.5.1.0.3.1.1.1.0.0";
+const char* kSet="0.5.5.1.0.3.1.1.1.0.0.1.1";
 }
 
 int main(int argc,char** argv){
@@ -68,14 +68,27 @@ int main(int argc,char** argv){
     reset();used=0;
     if(!build(b))return 1;
     char line[1024];
-    auto feed=[&](const char* people,const char* live="",const char* set=kSet){
-        std::snprintf(line,sizeof line,"3|c|o|1|%s|%d|Raid Night|42:10|720p \xc2\xb7 30 fps|%s|2~68:A5~68:A5^AirPods Pro;00:1B^Buds|%s",
-            live,live[0]?3:0,set,people);
+    auto feed=[&](const char* people,const char* live="",const char* set=kSet,char me='o',int viewers=3,int glance=1){
+        std::snprintf(line,sizeof line,"3|c|%c|%d|%s|%d|Raid Night|42:10|720p \xc2\xb7 30 fps|%s|2~68:A5~68:A5^AirPods Pro;00:1B^Buds|%s",
+            me,glance,live,live[0]?viewers:0,set,people);
         on_text(line,b);};
     const char* four="11~11_ab~Mira~t,12~~Theo~-,13~13_cd~Ana~m,14~~Kenji~d";
 
     feed("11~11_ab~Mira~t,12~~Kenji~t");dump(dir,"card-two");
     feed("11~11_ab~Mira~t","18:42");dump(dir,"card-live");
+    const char* two="11~11_ab~Mira~t,12~~Kenji~t";
+    for(int corner=0;corner<4;corner++){
+        char settings[80],name[40];
+        std::snprintf(settings,sizeof settings,"0.5.5.1.0.3.1.1.1.0.0.%d.1",corner);
+        std::snprintf(name,sizeof name,"pill-corner-%d-card-tr",corner);
+        feed(two,"12:34",settings,'o',12);dump(dir,name);
+    }
+    feed(two,"12:34",kSet,'o',12);dump(dir,"shared-tr");
+    feed(two,"12:34","0.5.5.1.0.3.1.1.1.0.0.3.3",'o',12);dump(dir,"shared-br");
+    feed(two,"12:34",kSet,'m',12);dump(dir,"pill-muted");
+    feed(two,"1:02:45",kSet,'o',128);dump(dir,"pill-long-session");
+    feed("11~11_ab~Mira~-","12:34",kSet,'o',12,0);dump(dir,"pill-only");
+    feed(two,"12:34","0.5.5.0.0.3.1.1.1.0.0.1.1",'o',12,0);dump(dir,"pill-card-off");
     feed("");on_gesture(oui::Gesture::Chord,b);dump(dir,"call-empty");on_gesture(oui::Gesture::Chord,b);
     feed("11~11_ab~Mira~t");on_gesture(oui::Gesture::Chord,b);dump(dir,"call-one");on_gesture(oui::Gesture::Chord,b);
     feed(four);on_gesture(oui::Gesture::Chord,b);dump(dir,"call-four");

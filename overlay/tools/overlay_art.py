@@ -23,6 +23,8 @@ TILE = (44, 46, 52, 255)
 CORAL = (255, 122, 89, 255)
 LEAVE = (74, 38, 36, 255)
 GLANCE = (32, 34, 39, 235)
+GLASS = (32, 34, 39, 158)  # live-pill-demo.html: 62%, no blur in the overlay
+MUTED = (237, 66, 69, 255)
 LINE = (255, 255, 255, 30)
 WHITE = (255, 255, 255, 255)
 
@@ -57,13 +59,13 @@ def icon(name, draw, size=64):
     save(img, name, size, size)
 
 
-def mic(d, k, slash=False):
-    d.rounded_rectangle((24 * k, 8 * k, 40 * k, 38 * k), 8 * k, fill=WHITE)
-    d.arc((16 * k, 18 * k, 48 * k, 46 * k), 0, 180, fill=WHITE, width=int(4 * k))
-    d.line((32 * k, 46 * k, 32 * k, 54 * k), fill=WHITE, width=int(4 * k))
-    d.line((24 * k, 55 * k, 40 * k, 55 * k), fill=WHITE, width=int(4 * k))
+def mic(d, k, slash=False, colour=WHITE):
+    d.rounded_rectangle((24 * k, 8 * k, 40 * k, 38 * k), 8 * k, fill=colour)
+    d.arc((16 * k, 18 * k, 48 * k, 46 * k), 0, 180, fill=colour, width=int(4 * k))
+    d.line((32 * k, 46 * k, 32 * k, 54 * k), fill=colour, width=int(4 * k))
+    d.line((24 * k, 55 * k, 40 * k, 55 * k), fill=colour, width=int(4 * k))
     if slash:
-        d.line((14 * k, 10 * k, 52 * k, 56 * k), fill=WHITE, width=int(5 * k))
+        d.line((14 * k, 10 * k, 52 * k, 56 * k), fill=colour, width=int(5 * k))
 
 
 def headphones(d, k, slash=False):
@@ -82,6 +84,52 @@ def golive(d, k):
         box = (32 * k - r * k, 32 * k - r * k, 32 * k + r * k, 32 * k + r * k)
         d.arc(box, 135, 225, fill=WHITE, width=int(4 * k))
         d.arc(box, -45, 45, fill=WHITE, width=int(4 * k))
+
+
+def eye(d, k):
+    # The demo's four quadratic curves: M6 32 Q17 15 32 15 ...
+    points = []
+    for a, b, c in (((6, 32), (17, 15), (32, 15)), ((32, 15), (47, 15), (58, 32)),
+                    ((58, 32), (47, 49), (32, 49)), ((32, 49), (17, 49), (6, 32))):
+        for i in range(25):
+            t = i / 24
+            points.append(tuple(((1-t)**2*a[j] + 2*(1-t)*t*b[j] + t*t*c[j]) * k for j in (0, 1)))
+    d.line(points, fill=WHITE, width=int(4 * k), joint="curve")
+    d.ellipse((24*k, 24*k, 40*k, 40*k), fill=WHITE)
+
+
+def live_piece(name, w, fill, corner=None):
+    """Only the selected corner rounds; the other three stay flush and square."""
+    img, d = canvas(w, 28)
+    d.rectangle((0, 0, w*S-1, 28*S-1), fill=fill)
+    if corner is not None:
+        # Cut just one 7.5 px quadrant from a full square, at supersampled size.
+        r = int(7.5*S)
+        mask = Image.new("L", (2*r, 2*r), 0)
+        ImageDraw.Draw(mask).ellipse((0, 0, 2*r-1, 2*r-1), fill=255)
+        left, top = corner in (0, 2), corner in (0, 1)
+        quadrant = mask.crop((0 if left else r, 0 if top else r, r if left else 2*r, r if top else 2*r))
+        alpha = img.getchannel("A")
+        if fill[3] != 255:
+            quadrant = quadrant.point(lambda a: round(a * fill[3] / 255))
+        alpha.paste(quadrant, (0 if left else w*S-r, 0 if top else 28*S-r))
+        img.putalpha(alpha)
+    # Resize alpha alone: Pillow's RGBA resampling rounds dark RGB by a level and
+    # can overshoot translucent alpha. Keep the demo's fill exact, even at the cap.
+    alpha = img.getchannel("A").resize((w, 28), Image.LANCZOS).point(lambda a: min(a, fill[3]))
+    final = Image.new("RGBA", (w, 28), fill)
+    final.putalpha(alpha)
+    final.save(os.path.join(OUT, name + ".png"), optimize=True)
+
+
+def live_art():
+    live_piece("live_body", 1, GLASS)
+    for corner in range(4):  # TL, TR, BL, BR: only the diagonal inner corner rounds
+        live_piece("live_segment_%d" % corner, 31, CORAL, {1: 2, 3: 0}.get(corner))
+        live_piece("live_end_%d" % corner, 8, GLASS, {0: 3, 2: 1}.get(corner))
+    rounded("live_divider", 1, 12, 0, LINE)
+    icon("eye", eye)
+    icon("mic_off_red", lambda d, k: mic(d, k, True, MUTED))
 
 
 def leave(d, k):
@@ -347,13 +395,16 @@ def main():
     keyboard_art()
     chat_art()
     text_pill("chip_options", 78, 28, None, "OPTIONS", 12, outline=True)
-    # C: the glance card, one per number of talking rows (0-3).
-    for n in range(4):
-        rounded("glance_%d" % n, 315, 205 + 60 * n, 18, GLANCE)
-    rounded("glance_line", 275, 2, 0, LINE)
+    # C: talking-only card, 16 px above/below the 56 px rows, 4 px row gaps.
+    for n in range(1, 4):
+        rounded("glance_%d" % n, 315, 28 + 60 * n, 18, GLANCE)
     ring("ring_small", 56, 3, CORAL)
-    ring("you", 50, 2, (200, 205, 215, 255))
-    text_pill("pill_live", 79, 34, CORAL, "LIVE", 17, dot=True)
+    live_art()
+    # Retired talking-card chrome; no current UI references these pieces.
+    for name in ("glance_0", "glance_line", "you", "pill_live"):
+        old = os.path.join(OUT, name + ".png")
+        if os.path.exists(old):
+            os.remove(old)
     # Icons: white, tinted where they are used.
     icon("mic", lambda d, k: mic(d, k))
     icon("mic_off", lambda d, k: mic(d, k, True))

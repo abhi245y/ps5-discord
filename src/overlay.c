@@ -78,6 +78,11 @@ static int sep(char *out, int cap, int at, char c)
     return at;
 }
 
+int overlay_glance_enabled(int mode, int talking)
+{
+    return mode == 2 || (mode == 1 && talking);
+}
+
 int overlay_line(char *out, int cap, char state, char me, int glance, const char *live, int viewers,
                  const char *call, const char *timer, const char *quality, const char *settings,
                  const overlay_headset *bt, const overlay_person *people, int count)
@@ -516,9 +521,9 @@ static void compose(char *line, int cap, time_t *live_since)
         clock_text(live, sizeof live, (long)(now - *live_since));
     } else
         *live_since = 0;
-    // Settings: 0 off, 1 while someone talks (or Go Live is on), 2 always.
+    // Settings: 0 off, 1 while someone talks, 2 always (the UI still needs a talker).
     const int pref = prefs_get("overlay_glance");
-    const int glance = pref == 2 || (pref == 1 && (talking || live[0]));
+    const int glance = overlay_glance_enabled(pref, talking);
     int w = 0, h = 0, fps = 0;
     bc_profile(&w, &h, &fps);
     char quality[24];
@@ -526,7 +531,8 @@ static void compose(char *line, int cap, time_t *live_since)
     // The mini settings' values, in the order discord_app.inc reads them.
     static const char *const keys[] = {"golive_quality", "mic_gain",     "call_volume",   "overlay_glance",
                                        "overlay_pos",    "overlay_hold", "notify_dm",     "notify_server",
-                                       "notify_system",  "quiet_hours",  "bt_handsfree"};
+                                       "notify_system",  "quiet_hours",  "bt_handsfree",
+                                       "overlay_pill_corner", "overlay_card_corner"};
     char settings[96];
     int n = 0;
     for (size_t i = 0; i < sizeof keys / sizeof *keys; i++)
@@ -924,7 +930,8 @@ static void run_command(const char *what)
         // The mini settings: only these keys (cmd.bin is written by the overlay).
         static const char *const allowed[] = {"golive_quality", "mic_gain",     "call_volume",   "overlay_glance",
                                               "overlay_pos",    "overlay_hold", "notify_dm",     "notify_server",
-                                              "notify_system",  "quiet_hours",  "bt_handsfree"};
+                                              "notify_system",  "quiet_hours",  "bt_handsfree",
+                                              "overlay_pill_corner", "overlay_card_corner"};
         char key[32];
         int value = 0, known = 0;
         if (sscanf(what + 4, "%31s %d", key, &value) == 2)

@@ -108,7 +108,7 @@ constexpr const char *kServerMessages[] = {"Off", "As in Discord", "Every messag
 constexpr const char *kCallModes[] = {"High quality", "Low latency"};
 // Prefs::overlay_glance.
 constexpr const char *kGlance[] = {"Off", "While someone talks", "Always"};
-constexpr const char *kPlaces[] = {"Top right", "Top left", "Bottom right", "Bottom left", "Middle right", "Middle left"};
+constexpr const char *kCorners[] = {"Top left", "Top right", "Bottom left", "Bottom right"};
 constexpr const char *kHold[] = {"0.3 s", "0.4 s", "0.5 s", "0.6 s", "0.7 s", "0.8 s", "0.9 s",
                                  "1.0 s", "1.1 s", "1.2 s", "1.3 s", "1.4 s", "1.5 s"};
 constexpr const char *kQuiet[] = {"Off", "22:00 – 07:00", "23:00 – 08:00", "00:00 – 08:00", "21:00 – 06:00"};
@@ -270,7 +270,10 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
             on,
             choice_row("Talking card", "Who is talking, while the panel is closed.", "overlay_glance", kGlance,
                        s.prefs.overlay_glance),
-            choice_row("Card position", "Where the talking card sits.", "overlay_pos", kPlaces, s.prefs.overlay_pos),
+            choice_row("Pill corner", "Live status, while the panel is closed.", "overlay_pill_corner", kCorners,
+                       s.prefs.overlay_pill_corner),
+            choice_row("Card corner", "Where the talking card sits.", "overlay_card_corner", kCorners,
+                       s.prefs.overlay_card_corner),
             choice_row("Hold Options", "Opens the panel; most games pause first. L3+R3 works too.", "overlay_hold",
                        kHold, s.prefs.overlay_hold),
             toggle_row("Load at start", "If it isn't loaded when Discord starts, the home screen reloads after a notice.",

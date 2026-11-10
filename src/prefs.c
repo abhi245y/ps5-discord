@@ -27,8 +27,10 @@ static pref prefs[] = {
     {"share_game", 0, 1, 1, 1},     // Discord shows the game in front on this console (gateway.c)
     {"bt_handsfree", 0, 1, 0, 0},   // Bluetooth headset: hands-free for calls even on AirPods (src/bt)
     {"overlay_glance", 0, 2, 1, 1}, // in-game overlay's glance card: 0 off, 1 while someone talks, 2 always
+    {"overlay_pill_corner", 0, 3, 1, 1}, // 0 top left, 1 top right, 2 bottom left, 3 bottom right
+    {"overlay_card_corner", 0, 3, 1, 1}, // independent talking-card corner; same order
     {"overlay", 0, 1, 0, 0},        // in-game overlay (overlay/, loaded into the system UI): off until tested
-    {"overlay_pos", 0, 5, 0, 0},    // its talking card: top right, top left, bottom right, bottom left, middle right, middle left
+    {"overlay_pos", 0, 5, 0, 0},    // legacy position, retained for older overlays
     {"overlay_hold", 0, 12, 3, 3},  // holding Options 0.3 s + this many tenths opens the panel
     {"overlay_autoload", 0, 1, 0, 0}, // the core starts and the overlay is not loaded: reload the home screen
 };

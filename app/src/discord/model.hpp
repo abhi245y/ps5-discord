@@ -369,7 +369,9 @@ struct Prefs
     bool bt_handsfree = false; // the headset's hands-free link for calls, even on AirPods
     bool overlay = false;      // the in-game overlay (overlay/, in the system UI)
     int overlay_glance = 1;    // its talking card: 0 off, 1 while someone talks, 2 always
-    int overlay_pos = 0;       // where the card sits (screens/settings.cpp kPlaces)
+    int overlay_pos = 0;       // legacy position, retained for older overlays
+    int overlay_pill_corner = 1; // 0 top left, 1 top right, 2 bottom left, 3 bottom right
+    int overlay_card_corner = 1; // independent talking-card corner; same order
     int overlay_hold = 3;      // holding Options 0.3 s + this many tenths opens the panel
     bool overlay_autoload = false; // not loaded when Discord starts: reload the home screen by itself
 
@@ -403,6 +405,10 @@ struct Prefs
             overlay = value != 0;
         else if (key == "overlay_glance")
             overlay_glance = value;
+        else if (key == "overlay_pill_corner")
+            overlay_pill_corner = value;
+        else if (key == "overlay_card_corner")
+            overlay_card_corner = value;
         else if (key == "overlay_pos")
             overlay_pos = value;
         else if (key == "overlay_hold")

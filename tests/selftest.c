@@ -864,7 +864,9 @@ static void test_overlay_line(void)
     assert(strcmp(line, "3|c|o|1||0|Raid Night|42:10|720p|0.5.5|1~68:A5:93:5E:57:B2~68:A5:93:5E:57:B2^Air Pods ;"
                         "00:1B:66:00:00:02^Buds|3~3_cd~Mira~t,1~1_ab~Ana~m,2~~Ki m o ~-") == 0);
     overlay_headset none = {0};
-    overlay_line(line, sizeof line, 'c', 'm', 0, "18:42", 3, "R", "", "", "", &none, p, 0);
+    // Live must not keep mode 1's card up when nobody talks.
+    assert(!overlay_glance_enabled(1, 0));
+    overlay_line(line, sizeof line, 'c', 'm', overlay_glance_enabled(1, 0), "18:42", 3, "R", "", "", "", &none, p, 0);
     assert(strcmp(line, "3|c|m|0|18:42|3|R||||0~~|") == 0);
     // More than fits: whole people only.
     overlay_person many[40];

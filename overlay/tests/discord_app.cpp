@@ -64,24 +64,27 @@ int main(){
     oui::Builder b{&vt,nullptr};
     reset();
     assert(build(b));
-    assert(used==170);
+    assert(used==173);
     for(int i=0;i<used;i++)assert(!widgets[i].visible); // nothing before the core says anything
 
-    // In a call, two talking, the card on: their avatars and names, "You" under them.
-    on_text("3|c|o|1||0|Raid Night|42:10|720p \xc2\xb7 30 fps|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~t,12~~Kenji~t,13~13_cd~Ana~m,14~14_ef~Theo~-",b);
-    assert(w(card)->visible&&!w(pill)->visible&&shows("Raid Night"));
-    assert(shows("Mira")&&shows("Kenji")&&shows("You \xc2\xb7 mic on"));
+    // In a call, only talkers appear: no call title, self row, header or hints.
+    on_text("3|c|o|1||0|Raid Night|42:10|720p \xc2\xb7 30 fps|0.5.5.1.0.3.1.1.1.0.0.1.1|1~~|11~11_ab~Mira~t,12~~Kenji~t,13~13_cd~Ana~m,14~14_ef~Theo~-",b);
+    assert(w(card)->visible&&!w(live_segment)->visible&&!shows("Raid Night"));
+    assert(shows("Mira")&&shows("Kenji")&&!shows("You \xc2\xb7 mic on")&&!shows("Hold Options for controls"));
     assert(ends(w(talk_avatar[0])->path,"/av/11_ab.png")&&ends(w(talk_avatar[1])->path,"avatar_none.png")); // not fetched yet
-    assert(w(card)->r.h==325&&ends(w(card)->path,"glance_2.png")&&w(you_ring)->r.y==34+107+120-25);
+    assert(w(card)->r.h==148&&ends(w(card)->path,"glance_2.png")&&w(talk_ring[0])->r.y==34+16);
     assert(!w(talk_avatar[2])->visible&&!w(dock)->visible);
 
-    // Live and muted: the LIVE pill and "time | viewers"; the card shrinks to one talker.
-    on_text("3|c|m|1|18:42|3|Raid Night|1:02:03|720p|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~t",b);
-    assert(w(pill)->visible&&shows("18:42  |  3 watching")&&!shows("Raid Night")&&shows("You \xc2\xb7 muted"));
-    assert(w(card)->r.h==265&&ends(w(you_mic)->path,"mic_off.png"));
+    // Live and muted: independent compact pill; one-talker card below it.
+    on_text("3|c|m|1|18:42|3|Raid Night|1:02:03|720p|0.5.5.1.0.3.1.1.1.0.0.1.1|1~~|11~11_ab~Mira~t",b);
+    assert(w(live_segment)->visible&&shows("18:42")&&shows("3")&&!shows("Raid Night")&&!shows("You \xc2\xb7 muted"));
+    assert(w(card)->r.h==88&&w(card)->r.y==42&&ends(w(live_mic)->path,"mic_off_red.png"));
+    assert(w(live_segment)->r.y==0&&w(live_segment)->r.h==28&&w(live_end)->r.x+w(live_end)->r.w==1920);
+    on_gesture(oui::Gesture::Chord,b);assert(!w(live_segment)->visible&&!w(card)->visible);
+    on_gesture(oui::Gesture::Chord,b);assert(w(live_segment)->visible&&w(card)->visible);
 
     // The panel: four rows (talking ring on Mira), the tiles, focus on Mute, capture on.
-    on_text("3|c|o|1||0|Raid Night|42:10|720p \xc2\xb7 30 fps|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~t,13~13_cd~Ana~m,14~14_ef~Theo~d,15~~Sam~-,16~~Nova~-",b);
+    on_text("3|c|o|1||0|Raid Night|42:10|720p \xc2\xb7 30 fps|0.5.5.1.0.3.1.1.1.0.0.1.1|1~~|11~11_ab~Mira~t,13~13_cd~Ana~m,14~14_ef~Theo~d,15~~Sam~-,16~~Nova~-",b);
     on_gesture(oui::Gesture::Chord,b);
     assert(capturing&&w(dock)->visible&&!w(card)->visible);
     assert(shows("Raid Night")&&shows("42:10")&&shows("Mira")&&shows("Ana")&&shows("Theo")&&shows("Sam")&&!shows("Nova"));
@@ -97,21 +100,21 @@ int main(){
     on_pad(0x40,0,0,b); // Circle closes
     assert(!capturing&&!w(dock)->visible&&!w(tile[0])->visible&&w(card)->visible);
     // One person: the panel ends under them.
-    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~-",b);
+    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0.1.1|1~~|11~11_ab~Mira~-",b);
     on_gesture(oui::Gesture::Chord,b);
     assert(w(tile[0])->r.y==184+143+10&&w(dock_end)->r.y==184+143+10+140+32+28+70-40&&w(rule)->r.y==184+143+10+172);
     on_gesture(oui::Gesture::Chord,b);
 
     // Muted and live: the tiles say so.
-    on_text("3|c|m|1|0:12|1|Raid Night||720p|0.5.5.1.0.3.1.1.1.0.0|1~~|",b);
+    on_text("3|c|m|1|0:12|1|Raid Night||720p|0.5.5.1.0.3.1.1.1.0.0.1.1|1~~|",b);
     on_gesture(oui::Gesture::Chord,b);
     assert(shows("Unmute")&&shows("Stop")&&shows("0:12")&&ends(w(tile_icon[0])->path,"mic_off.png"));
     on_gesture(oui::Gesture::Chord,b);
 
     // The card off (Settings, or nobody talking), and out of the call.
-    on_text("3|c|o|0||0|Raid Night||720p|0.5.5.1.0.3.1.1.1.0.0|1~~|14~~Kenji~-",b);
+    on_text("3|c|o|0||0|Raid Night||720p|0.5.5.1.0.3.1.1.1.0.0.1.1|1~~|14~~Kenji~-",b);
     assert(!w(card)->visible);
-    on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0|1~~|",b);
+    on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0.1.1|1~~|",b);
     on_gesture(oui::Gesture::Chord,b);
     assert(shows("Not in a call")&&!w(row_bg[0])->visible&&!w(tile[0])->visible&&!w(timer)->visible);
     sent[0]=0;on_pad(0x80,0,0,b);assert(!sent[0]); // nothing to act on
@@ -120,7 +123,7 @@ int main(){
     // The mini settings: Options opens them on the Go Live tab; L1/R1 moves along the tabs;
     // Cross opens a row's choices inline (up/down, Cross picks), flips a toggle; left/right
     // moves a slider; the headset row connects and disconnects; Circle goes back.
-    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0|1~68:A5~68:A5^AirPods;00:1B^Buds|11~11_ab~Mira~-",b);
+    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0.1.1|1~68:A5~68:A5^AirPods;00:1B^Buds|11~11_ab~Mira~-",b);
     on_gesture(oui::Gesture::Chord,b);
     on_pad(0x100,0,0,b);
     assert(!std::strcmp(w(title)->text,"Settings"));
@@ -142,15 +145,19 @@ int main(){
     on_pad(0x4,0,0,b);assert(!std::strcmp(sent,"set mic_gain 6")&&w(slider_knob[0])->r.x>knob&&shows("120%"));
     // Fast presses: a line from before them does not pull the slider back.
     on_pad(0x4,0,0,b);assert(shows("140%"));
-    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.6.5.1.0.3.1.1.1.0.0|1~68:A5~68:A5^AirPods;00:1B^Buds|11~11_ab~Mira~-",b);
+    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.6.5.1.0.3.1.1.1.0.0.1.1|1~68:A5~68:A5^AirPods;00:1B^Buds|11~11_ab~Mira~-",b);
     assert(shows("140%"));
-    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.7.5.1.0.3.1.1.1.0.0|1~68:A5~68:A5^AirPods;00:1B^Buds|11~11_ab~Mira~-",b);
+    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.7.5.1.0.3.1.1.1.0.0.1.1|1~68:A5~68:A5^AirPods;00:1B^Buds|11~11_ab~Mira~-",b);
     assert(shows("140%")); // confirmed
-    on_pad(0x800,0,0,b); // Card: Show, Position, Hold Options
-    on_pad(0x8,0,0,b);on_pad(0x80,0,0,b); // Position's choices: six, Top right checked
-    assert(shows("Middle left")&&w(drop_check)->visible);
-    assert(w(set_bg[2])->r.y>kItemY+kItemStep*2); // the row under it moved down
-    on_pad(0x8,0,0,b);on_pad(0x80,0,0,b);assert(!std::strcmp(sent,"set overlay_pos 1"));
+    on_pad(0x800,0,0,b); // Card: Show, Pill corner, Card corner, Hold Options
+    assert(shows("Pill corner")&&shows("Card corner")&&shows("Hold Options"));
+    on_pad(0x8,0,0,b);on_pad(0x80,0,0,b); // Pill corner: four choices, TR checked
+    assert(shows("Bottom left")&&shows("Bottom right")&&!shows("Middle left")&&w(drop_check)->visible);
+    assert(w(drop_check)->r.y==w(drop_bg)->r.y+6+48+10);
+    assert(w(set_bg[2])->r.y>kItemY+kItemStep*2); // rows under the choices move down
+    on_pad(0x8,0,0,b);on_pad(0x80,0,0,b);assert(!std::strcmp(sent,"set overlay_pill_corner 2"));
+    on_pad(0x8,0,0,b);on_pad(0x80,0,0,b); // Card corner: choose TL
+    on_pad(0x2,0,0,b);on_pad(0x80,0,0,b);assert(!std::strcmp(sent,"set overlay_card_corner 0"));
     on_pad(0x8,0,0,b);on_pad(0x1,0,0,b);assert(!std::strcmp(sent,"set overlay_hold 2")&&hold_ms==500);
     assert(shows("\xe2\x80\xb9  0.5 s  \xe2\x80\xba"));
     on_pad(0x800,0,0,b); // Alerts: a toggle flips with Cross
@@ -159,14 +166,14 @@ int main(){
     on_pad(0x80,0,0,b); // and back on
     on_pad(0x800,0,0,b); // Headset: Bluetooth, the paired ones and Disconnect, Call mode
     assert(shows("Bluetooth")&&shows("AirPods")&&!shows("Call mode")); // not AirPods' own mic: no Call mode
-    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0|2~68:A5~68:A5^AirPods;00:1B^Buds|11~11_ab~Mira~-",b);
+    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0.1.1|2~68:A5~68:A5^AirPods;00:1B^Buds|11~11_ab~Mira~-",b);
     assert(shows("Call mode")&&shows("High quality")); // AirPods connected (2)
     on_pad(0x8,0,0,b);on_pad(0x8,0,0,b);assert(w(set_focus)->r.y==kItemY+kItemStep*2); // on Call mode
-    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0|1~68:A5~68:A5^AirPods;00:1B^Buds|11~11_ab~Mira~-",b);
+    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0.1.1|1~68:A5~68:A5^AirPods;00:1B^Buds|11~11_ab~Mira~-",b);
     assert(!shows("Call mode")&&w(set_focus)->r.y==kItemY+kItemStep); // AirPods went: focus moves up a row
     on_pad(0x2,0,0,b); // back to Bluetooth
     on_pad(0x80,0,0,b);assert(!std::strcmp(sent,"bt off")&&ends(w(set_toggle[0])->path,"toggle_off.png"));
-    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0|1~68:A5~68:A5^AirPods;00:1B^Buds|11~11_ab~Mira~-",b);
+    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0.1.1|1~68:A5~68:A5^AirPods;00:1B^Buds|11~11_ab~Mira~-",b);
     assert(ends(w(set_toggle[0])->path,"toggle_off.png")); // the core's line has not caught up: still off
     on_pad(0x80,0,0,b);assert(!std::strcmp(sent,"bt on"));
     on_pad(0x8,0,0,b); // the headset row
@@ -179,36 +186,36 @@ int main(){
     on_pad(0x40,0,0,b); // Circle: back to the call page
     assert(!w(set_focus)->visible&&w(tile[0])->visible&&!std::strcmp(w(title)->text,"Raid Night"));
     on_gesture(oui::Gesture::Chord,b);
-    // The card where Settings put it: top left after "set overlay_pos 1".
-    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.1.3.1.1.1.0.0|1~~|11~11_ab~Mira~t",b);
+    // Confirm the corner choices, then change the card independently. Legacy position is ignored.
+    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.5.3.1.1.1.0.0.2.0|1~~|11~11_ab~Mira~t",b);
     assert(w(card)->visible&&w(card)->r.x==31&&w(card)->r.y==34);
-    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.2.3.1.1.1.0.0|1~~|11~11_ab~Mira~t",b);
-    assert(w(card)->r.x==1574&&w(card)->r.y==1080-34-265);
+    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0.1.3|1~~|11~11_ab~Mira~t",b);
+    assert(w(card)->r.x==1574&&w(card)->r.y==1080-34-88);
     // Live: the quality row is fixed.
-    on_text("3|c|o|1|0:05|2|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0|1~~|",b);
+    on_text("3|c|o|1|0:05|2|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0.1.1|1~~|",b);
     on_gesture(oui::Gesture::Chord,b);on_pad(0x100,0,0,b);
     sent[0]=0;on_pad(0x80,0,0,b);assert(!sent[0]&&shows("Live now")&&!w(drop_bg)->visible&&!w(set_chevron[0])->visible);
     on_pad(0x40,0,0,b);on_gesture(oui::Gesture::Chord,b);
 
-    on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0|1~~|",b);
+    on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0.1.1|1~~|",b);
     // The core quit: an open panel closes and gives the pad back; nothing opens until it is back.
     on_gesture(oui::Gesture::Chord,b);assert(capturing&&w(dock)->visible);
     on_text("3|x|o|0||0||||||",b);
     assert(!capturing&&!w(dock)->visible&&!w(card)->visible);
     on_gesture(oui::Gesture::Chord,b);assert(!capturing&&!w(dock)->visible);
-    on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0|1~~|",b);
+    on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0.1.1|1~~|",b);
     // The core crashed: no new line (no beat) for 10 s acts like the quit line.
-    on_tick(1,b);on_text("3|c4|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~t",b);
+    on_tick(1,b);on_text("3|c4|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0.1.1|1~~|11~11_ab~Mira~t",b);
     assert(w(card)->visible); // the beat digit after the state is ignored
     on_gesture(oui::Gesture::Chord,b);assert(capturing);
-    on_tick(300,b);on_text("3|c9|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~t",b); // only the beat
+    on_tick(300,b);on_text("3|c9|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0.1.1|1~~|11~11_ab~Mira~t",b); // only the beat
     on_tick(300+60*10,b);assert(capturing); // not yet: 10 s from the last beat
     on_tick(301+60*10,b);assert(!capturing&&!w(dock)->visible&&!w(card)->visible);
     on_gesture(oui::Gesture::Chord,b);assert(!capturing);
-    on_text("3|c5|o|1||0|Raid Night|1:01|720p|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~t",b);assert(w(card)->visible);
-    on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0|1~~|",b);
+    on_text("3|c5|o|1||0|Raid Night|1:01|720p|0.5.5.1.0.3.1.1.1.0.0.1.1|1~~|11~11_ab~Mira~t",b);assert(w(card)->visible);
+    on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0.1.1|1~~|",b);
     // The keyboard: Triangle on the Chat tab opens it for that chat; the call page has none.
-    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~t",b);
+    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0.1.1|1~~|11~11_ab~Mira~t",b);
     on_gesture(oui::Gesture::Chord,b);assert(capturing);
     auto pad=[&](std::uint32_t d,float lx=0,float ly=0){on_pad(d,lx,ly,b);};
     auto key=[&](int r,int c){kb_row=r;kb_col=c;kb_x=key_center(r,c);pad(0x80);}; // press that key
@@ -318,19 +325,19 @@ int main(){
     // The core quits: the keyboard goes with the panel.
     on_text("3|x|o|0||0||||||",b);
     assert(!kb&&!capturing&&!w(kb_field)->visible&&!w(kb_hl)->visible);
-    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~t",b);
+    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0.1.1|1~~|11~11_ab~Mira~t",b);
     // No beat for 10 s: inert too.
     on_gesture(oui::Gesture::Chord,b);open_kb();
     on_tick(10000,b);on_tick(10000+60*10+1,b);
     assert(!kb&&!capturing&&!w(kb_field)->visible);
-    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~t",b);
+    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0.1.1|1~~|11~11_ab~Mira~t",b);
     // The call ends while typing in a chat: the keyboard stays (it types in that chat, not the call).
     on_gesture(oui::Gesture::Chord,b);open_kb();
-    on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0|1~~|",b);
+    on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0.1.1|1~~|",b);
     assert(kb&&w(kb_field)->visible&&capturing&&kb_len==2);
     pad(0x40);assert(!kb&&kb_len==2);
     on_gesture(oui::Gesture::Chord,b);
-    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~t",b);
+    on_text("3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0.1.1|1~~|11~11_ab~Mira~t",b);
     // In the settings: Triangle does nothing.
     on_gesture(oui::Gesture::Chord,b);pad(0x100);assert(settings);
     pad(0x20);assert(!kb&&!w(kb_field)->visible&&!w(hint_icon[3])->visible);
@@ -346,10 +353,10 @@ int main(){
     sent[0]=0;pad(0x10);assert(!std::strcmp(sent,"chat back")&&!w(hint_icon[3])->visible);
     on_chat("H\tc\t555\t#raid-night\tNight Shift\t\t0\t\t2\n",b);assert(!w(hint_icon[3])->visible);
     on_gesture(oui::Gesture::Chord,b);assert(!kb&&!capturing);
-    on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0|1~~|",b);
+    on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0.1.1|1~~|",b);
 
     // ---- the tabs, Chat and Mentions ----
-    const char* kCall="3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~t";
+    const char* kCall="3|c|o|1||0|Raid Night|1:00|720p|0.5.5.1.0.3.1.1.1.0.0.1.1|1~~|11~11_ab~Mira~t";
     std::uint64_t frame=20000;
     on_tick(frame,b);on_text(kCall,b); // (a quiet stretch: the core's beat is stale after the long jump)
     auto step=[&](int n){frame+=std::uint64_t(n);on_tick(frame,b);on_text(kCall,b);};
@@ -381,9 +388,9 @@ int main(){
     for(int i=0;i<3;i++)on_tick(++frame,b); // the probe is read two frames after the panel opened
     assert(w(timer)->r.w==15*4+8&&w(clock)->r.x==w(timer)->r.x-34); // 15 px a byte in this fake
     {const float tx=w(timer)->r.x,cx=w(clock)->r.x,cy=w(clock)->r.y;
-     on_text("3|c|o|1||0|Raid Night|1:01|720p|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~t",b);
+     on_text("3|c|o|1||0|Raid Night|1:01|720p|0.5.5.1.0.3.1.1.1.0.0.1.1|1~~|11~11_ab~Mira~t",b);
      assert(!std::strcmp(w(timer)->text,"1:01")&&w(timer)->r.x==tx&&w(clock)->r.x==cx&&w(clock)->r.y==cy);
-     on_text("3|c|o|1||0|Raid Night|10:00|720p|0.5.5.1.0.3.1.1.1.0.0|1~~|11~11_ab~Mira~t",b); // a new format
+     on_text("3|c|o|1||0|Raid Night|10:00|720p|0.5.5.1.0.3.1.1.1.0.0.1.1|1~~|11~11_ab~Mira~t",b); // a new format
      assert(!std::strcmp(w(timer_probe)->text,"88:88"));
      for(int i=0;i<3;i++)on_tick(++frame,b);
      assert(w(timer)->r.w==15*5+8&&w(timer)->r.x+w(timer)->r.w==kRowX+kRowW+7&&w(clock)->r.x<cx);
@@ -479,14 +486,14 @@ int main(){
     step(40);padx(0x400);assert(page==0);
     step(40);padx(0x20);assert(!kb);
     // A channel's chat while not in a call: the chat is sent to its channel, the call page cannot type.
-    on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0|1~~|",b);
+    on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0.1.1|1~~|",b);
     assert(page==0);
     padx(0x20);assert(!kb);
     frame+=40;on_tick(frame,b);padx(0x800);assert(page==1&&w(in_field)->visible);
     padx(0x20);assert(kb&&!std::strcmp(kb_channel,"555"));
     key(1,0);pad(0x2000);assert(sent_texts==2&&!std::strcmp(sent_channel,"555")&&!kb);
     // The call ending does not close a chat's keyboard.
-    on_text(kCall,b);padx(0x20);assert(kb);on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0|1~~|",b);assert(kb);pad(0x40);
+    on_text(kCall,b);padx(0x20);assert(kb);on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0.1.1|1~~|",b);assert(kb);pad(0x40);
     on_text(kCall,b);
     step(40);padx(0x400);assert(page==0);
     pad(0x40); // (the panel is on the call page; Circle closes it: it opens again below)
@@ -606,12 +613,65 @@ int main(){
     on_tick(frame+1000,b);
     assert(!capturing&&!w(dock)->visible&&!strip_on()&&!w(men_focus)->visible&&!w(mrow[0].bg)->visible);
     on_text(kCall,b);
-    on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0|1~~|",b);
+    on_text("3|-|o|1||0||||0.5.5.1.0.3.1.1.1.0.0.1.1|1~~|",b);
     // Not ours: ignored.
     on_text("1|c|o|1||Raid Night|",b);on_text("",b);on_text(nullptr,b);
     assert(!w(card)->visible&&!w(dock)->visible);
     State s;
     assert(parse("3|c|o|1||0|Big|||||a~~A~t,b~~B~t,c~~C~-,d~~D~-,e~~E~-,f~~F~-,g~~G~-,h~~H~-,i~~I~-",s)&&s.count==8);
+    // New settings append to the wire format. Older lines keep both TR defaults.
+    assert(parse("3|c|o|0|12:34|12|Raid Night|||0.5.5.0.0.3.1.1.1.0.0|0~~|",s));
+    assert(s.set[kPillCorner]==1&&s.set[kCardCorner]==1);
+    assert(parse("3|c|o|1||||||0.5.5.1.0.3.1.1.1.0.0.2.3|0~~|",s));
+    assert(s.set[kPillCorner]==2&&s.set[kCardCorner]==3);
+    auto live_feed=[&](int mode,int glance,int pc,int cc,const char* people,const char* duration="12:34",int viewers=12,char me='o'){
+        char line[1024];
+        std::snprintf(line,sizeof line,"3|c|%c|%d|%s|%d|Raid Night|||0.5.5.%d.0.3.1.1.1.0.0.%d.%d|0~~|%s",
+                      me,glance,duration,viewers,mode,pc,cc,people);
+        on_text(line,b);
+    };
+    // Card Off never suppresses live status, even with talkers.
+    live_feed(0,0,1,1,"11~~Mira~t");
+    assert(w(live_segment)->visible&&!w(card)->visible&&!w(talk_name[0])->visible);
+    // Mode 1 + live + nobody talking: pill only. Even mode 2 cannot show an empty card.
+    live_feed(1,0,1,1,"11~~Mira~-");assert(w(live_segment)->visible&&!w(card)->visible);
+    live_feed(2,1,1,1,"");assert(w(live_segment)->visible&&!w(card)->visible);
+    live_feed(1,1,1,1,"11~~Mira~-");assert(!w(card)->visible); // defensive: stale glance bit
+    // All corner pairs: flush pill, independent card insets, shared 14 px gap.
+    for(int pc=0;pc<4;pc++)for(int cc=0;cc<4;cc++){
+        live_feed(1,1,pc,cc,"11~~Mira~t,12~~Kenji~t");
+        assert(w(live_segment)->visible&&w(card)->visible&&w(card)->r.h==148);
+        assert(w(live_segment)->r.y==(pc<2?0:1052));
+        if(pc%2)assert(w(live_end)->r.x+w(live_end)->r.w==1920);
+        else assert(w(live_segment)->r.x==0);
+        char segment[32],end[32];
+        std::snprintf(segment,sizeof segment,"live_segment_%d.png",pc);
+        std::snprintf(end,sizeof end,"live_end_%d.png",pc);
+        assert(ends(w(live_segment)->path,segment)&&ends(w(live_end)->path,end));
+        const float inset=pc==cc?42:34;
+        assert(w(card)->r.x==(cc%2?1574:31));
+        assert(w(card)->r.y==(cc<2?inset:1080-inset-148));
+    }
+    // Bottom card grows upward; live ending restores the ordinary bottom inset.
+    live_feed(1,1,3,3,"11~~Mira~t");const float bottom=w(card)->r.y+w(card)->r.h;
+    live_feed(1,1,3,3,"11~~Mira~t,12~~Kenji~t,13~~Ana~t");
+    assert(w(card)->r.h==208&&w(card)->r.y+w(card)->r.h==bottom);
+    live_feed(1,1,3,3,"11~~Mira~t","",0);
+    assert(!w(live_segment)->visible&&w(card)->r.y==1080-34-88);
+    // Mic state: normal white mic; muted and deafened both use the red slash.
+    live_feed(1,1,1,1,"11~~Mira~t");assert(ends(w(live_mic)->path,"/mic.png"));
+    live_feed(1,1,1,1,"11~~Mira~t","12:34",12,'m');assert(ends(w(live_mic)->path,"mic_off_red.png"));
+    live_feed(1,1,1,1,"11~~Mira~t","12:34",12,'d');assert(ends(w(live_mic)->path,"mic_off_red.png"));
+    const float short_width=live_time_w,short_viewers=live_count_w;
+    live_feed(1,1,1,1,"11~~Mira~t","1:02:45",128);
+    assert(shows("1:02:45")&&shows("128")&&live_time_w>short_width&&live_count_w>short_viewers);
+    assert(w(live_count)->r.x+w(live_count)->r.w<w(live_rule)->r.x);
+    on_tick(frame_now+1,b);on_tick(frame_now+1,b);
+    assert(live_time_w>=107&&live_count_w>=47); // fake Builder measures 15 px per byte, plus slack
+    assert(w(live_end)->r.x+w(live_end)->r.w==1920);
+    live_feed(1,1,1,1,"11~~Mira~t","1:02:46",129);
+    assert(live_probe_wait==0&&live_time_w>=107); // stable format: no width jitter
+    on_text("3|x|o|0|1:02:46|129||||||",b);assert(!w(live_segment)->visible&&!w(card)->visible);
     std::puts("discord app: ok");
     return 0;
 }

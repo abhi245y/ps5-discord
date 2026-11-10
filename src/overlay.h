@@ -33,6 +33,9 @@ typedef struct {
     char connected[18];
     char addr[4][18], name[4][40];
 } overlay_headset;
+// Whether the card mode allows a glance; independent of Go Live. Exposed for the selftest.
+int overlay_glance_enabled(int mode, int talking);
+
 // settings: the mini settings' values, dot-separated, in discord_app.inc's order.
 int overlay_line(char *out, int cap, char state, char me, int glance, const char *live, int viewers,
                  const char *call, const char *timer, const char *quality, const char *settings,
