@@ -225,7 +225,9 @@ static void send_rtp(conn *c, int pt, uint32_t ssrc, uint16_t seq, uint32_t ts, 
 // sound keeps flowing. ponytail: fixed cap, the knob to tune if Wi-Fi still drops bursts.
 #define KEY_EVERY_MS 3000 // a keyframe at least this often (and whenever a viewer asks)
 #define PACE_BATCH 8
-#define PACE_BITS_PER_S 40000000LL
+// 80 Mbit/s (was 40): a 200 KB keyframe at 40 took 45-68 ms, over a 33 ms frame period, and
+// delayed the next frame (console 2026-11-10). At 80 it leaves in about 25 ms.
+#define PACE_BITS_PER_S 80000000LL
 
 struct video_out {
     conn *c;
