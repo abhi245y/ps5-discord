@@ -7,6 +7,8 @@ static char pill_test_dir[160]{};
 #define LIVE_PILL_DIR pill_test_dir
 #include "../src/app/discord_app.inc"
 #include <cassert>
+#include <dirent.h>
+#include <unistd.h>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -69,13 +71,8 @@ int main(){
     oui::Builder b{&vt,nullptr};
     char temp_dir[]="/tmp/discord-pill-XXXXXX";assert(mkdtemp(temp_dir));
     std::snprintf(pill_test_dir,sizeof pill_test_dir,"%s",temp_dir);
-    // Only strict generated names from older builds may be removed. Preserve unrelated
-    // files, directories and symlinks, even when their names look like cache entries.
     auto touch=[&](const char* name){char path[240];std::snprintf(path,sizeof path,"%s/%s",temp_dir,name);
         FILE* f=std::fopen(path,"wb");assert(f);std::fputs("sentinel",f);assert(std::fclose(f)==0);};
-    touch("ffffffffffffffff_1_400.png");touch("unrelated.png");
-    char symlink_path[240];std::snprintf(symlink_path,sizeof symlink_path,"%s/ffffffffffffffff_0_400.png",temp_dir);
-    assert(symlink("unrelated.png",symlink_path)==0);
     reset();
     assert(build(b));
     assert(used==188&&used<=192);
@@ -708,10 +705,6 @@ int main(){
     // Corner switch then return must reuse the original PNG without rewriting it.
     live_feed(0,0,0,1,"","1:02:45",128);live_feed(0,0,1,1,"","1:02:45",128);
     assert(stat(cached,&after)==0&&before.st_ino==after.st_ino&&before.st_mtime==after.st_mtime);
-    char stale[240];std::snprintf(stale,sizeof stale,"%s/ffffffffffffffff_1_400.png",temp_dir);
-    assert(access(stale,F_OK)!=0&&access(symlink_path,F_OK)==0);
-    touch("ffffffffffffffff_1_400.png"); // cleanup must not repeat on later width/corner changes
-    live_feed(0,0,2,1,"","1:02:45",128);assert(access(stale,F_OK)==0);
     live_feed(0,0,1,1,"","12:34",1);
     assert(w(live_count)->visible&&!std::strcmp(w(live_count)->text,"1"));
     // The shared rasterizer also rejects invalid geometry without hiding native content.
@@ -734,8 +727,7 @@ int main(){
     assert(!live_background_ready&&!w(live_background)->visible);
     assert(shows("12:34")&&shows("1")&&w(live_icon)->visible&&w(live_eye)->visible&&w(live_mic)->visible);
     assert(ends(w(live_mic)->path,"mic_off.png")&&w(live_mic)->tint.g==60.f/255);
-    assert(!live_cache_name("../ffffffffffffffff_1_400.png")&&!live_cache_name("ffffffffffffffff_4_400.png"));
-    // Bounded removal of this test's own flat temporary cache (symlink unlinked, not followed).
+    // Bounded removal of this test's own flat temporary cache .
     DIR* dir=opendir(temp_dir);assert(dir);
     for(unsigned i=0;i<256;i++){
         const auto* entry=readdir(dir);if(!entry)break;

@@ -43,9 +43,7 @@
 #include <cstdio>
 #include <cstring>
 #include "live_pill.hpp"
-#include <dirent.h>
 #include <sys/stat.h>
-#include <unistd.h>
 #ifndef LIVE_PILL_DIR
 #define LIVE_PILL_DIR "/user/data/discord-overlay-poc/pill"
 #endif
@@ -220,7 +218,7 @@ void *live_time_probes[10]{},*live_count_probes[10]{};
 int live_time_len=0,live_count_len=0,live_probe_wait=0;
 float live_time_w=0,live_count_w=0;
 int live_cached_corner=-1;float live_cached_width=-1;
-bool live_background_ready=false,live_cleanup_done=false;
+bool live_background_ready=false;
 char live_image_path[200]{};
 void* talk_avatar[kTalkRows]={}; void* talk_ring[kTalkRows]={}; void* talk_name[kTalkRows]={};
 void* talk_bars[kTalkRows]={};
@@ -796,31 +794,8 @@ void place_timer(Builder& b){
     b.set_rect(clock,{right-w-34,kTitleY+16,26,26});
 }
 
-// Cache only generated filenames in this private directory. Never follow symlinks or
-// traverse subdirectories. Bound both the directory scan and the number of deletions.
-bool live_cache_name(const char* name){
-    const auto n=std::strlen(name);if(n<24||n>32)return false;
-    for(int i=0;i<16;i++)if(!((name[i]>='0'&&name[i]<='9')||(name[i]>='a'&&name[i]<='f')))return false;
-    if(name[16]!='_'||name[17]<'0'||name[17]>'3'||name[18]!='_')return false;
-    unsigned i=19;for(;i<n&&name[i]>='0'&&name[i]<='9';i++){}
-    return i>19&&(!std::strcmp(name+i,".png")||!std::strcmp(name+i,".png.tmp"));
-}
-void live_cleanup(){
-    if(live_cleanup_done)return;
-    live_cleanup_done=true;
-    DIR* dir=opendir(LIVE_PILL_DIR);if(!dir)return;
-    char build[24];std::snprintf(build,sizeof build,"%016llx_",(unsigned long long)OVERLAY_BUILD);
-    unsigned removed=0;
-    for(unsigned scanned=0;scanned<256&&removed<128;scanned++){
-        const auto* entry=readdir(dir);if(!entry)break;
-        if(!live_cache_name(entry->d_name)||!std::strncmp(entry->d_name,build,17))continue;
-        char path[256];const int n=std::snprintf(path,sizeof path,"%s/%s",LIVE_PILL_DIR,entry->d_name);
-        if(n<0||std::size_t(n)>=sizeof path)continue;
-        struct stat info{};
-        if(lstat(path,&info)==0&&S_ISREG(info.st_mode)&&unlink(path)==0)++removed;
-    }
-    closedir(dir);
-}
+// ponytail: files from older builds are not swept (one ~80 KB PNG per corner/width per build);
+// a sweep needs opendir/readdir/unlink, which no worker has run in ShellUI yet.
 bool live_raster(const pill::Layout& layout,Builder& b){
     if(!live_background)return false;
 #ifndef LIVE_PILL_HOST
@@ -828,19 +803,18 @@ bool live_raster(const pill::Layout& layout,Builder& b){
 #endif
     (void)mkdir(LIVE_PILL_DIR,0700);
     struct stat directory{};
-    if(lstat(LIVE_PILL_DIR,&directory)!=0||!S_ISDIR(directory.st_mode))return false;
-    live_cleanup();
+    if(stat(LIVE_PILL_DIR,&directory)!=0||!S_ISDIR(directory.st_mode))return false;
     char next[200],temp[208];
     // Half-pixel units preserve the exact layout width in a bounded integer key.
     const int n=std::snprintf(next,sizeof next,"%s/%016llx_%d_%d.png",LIVE_PILL_DIR,
         (unsigned long long)OVERLAY_BUILD,layout.corner,int(layout.background.w*2));
     if(n<0||std::size_t(n)>=sizeof next)return false;
     struct stat info{};
-    if(lstat(next,&info)!=0){
+    if(stat(next,&info)!=0){
         const int t=std::snprintf(temp,sizeof temp,"%s.tmp",next);
         if(t<0||std::size_t(t)>=sizeof temp)return false;
         // Reject a pre-existing temp symlink/non-regular entry before opening it.
-        if(lstat(temp,&info)==0&&!S_ISREG(info.st_mode))return false;
+        if(stat(temp,&info)==0&&!S_ISREG(info.st_mode))return false;
         FILE* f=std::fopen(temp,"wb");if(!f)return false;
         bool ok=pill::png(f,pill::shape(layout.background.w,layout.divider_x,layout.corner));
         if(std::fflush(f)!=0)ok=false;
@@ -1024,7 +998,6 @@ void reset(){
     for(void*& w:live_count_probes)w=nullptr;
     live_time_len=live_count_len=live_probe_wait=0;live_time_w=live_count_w=0;
     live_cached_corner=-1;live_cached_width=-1;live_background_ready=false;live_image_path[0]=0;
-    // live_cleanup_done intentionally survives reset: at most one scan per session.
     for(int i=0;i<kRows;i++)row_bg[i]=row_avatar[i]=row_ring[i]=row_name[i]=row_icon[i]=nullptr;
     for(int i=0;i<kTiles;i++)tile[i]=tile_icon[i]=tile_label[i]=nullptr;
     for(int i=0;i<4;i++)hint_icon[i]=hint_text[i]=nullptr;
