@@ -878,12 +878,15 @@ void render(Builder& b){
     show(b,live_background,live_on&&live_background_ready);
     for(int i=0;i<10;i++){show(b,live_time_probes[i],live_on);show(b,live_count_probes[i],live_on);}
 
-    // C: only talkers. Keep the 56 px rings and 60 px row stride.
-    int talking=0;
+    // C: who is talking; "Always" lists the call (talkers first, as the core sends them),
+    // with the ring and bars only on the talkers. Keep the 56 px rings and 60 px row stride.
+    const bool always=st.set[3]==2;
+    int talking=0;bool talks[kTalkRows]={};
     for(int i=0;i<st.count&&talking<kTalkRows;i++)
-        if(st.people[i].flag=='t'){
+        if(always||st.people[i].flag=='t'){
             set_avatar(b,talk_avatar[talking],st.people[i]);
             b.set_text(talk_name[talking],st.people[i].name);
+            talks[talking]=st.people[i].flag=='t';
             ++talking;}
     const bool card_on=!open&&in_call&&st.glance&&st.set[3]!=0&&talking>0;
     const float ch=kCardPadding+60.0f*talking;
@@ -900,7 +903,7 @@ void render(Builder& b){
         b.set_rect(talk_name[i],{cx+91,c-18,160,36});
         b.set_rect(talk_bars[i],{cx+256,c-15,30,30});
         const bool on=card_on&&i<talking;
-        show(b,talk_avatar[i],on);show(b,talk_ring[i],on);show(b,talk_name[i],on);show(b,talk_bars[i],on);}
+        show(b,talk_avatar[i],on);show(b,talk_ring[i],on&&talks[i]);show(b,talk_name[i],on);show(b,talk_bars[i],on&&talks[i]);}
     show(b,card,card_on);
 
     // A: the panel (call page, Chat, Mentions, or the mini settings).

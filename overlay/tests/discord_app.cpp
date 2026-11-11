@@ -647,6 +647,11 @@ int main(){
     // Mode 1 + live + nobody talking: pill only. Even mode 2 cannot show an empty card.
     live_feed(1,0,1,1,"11~~Mira~-");assert(w(live_background)->visible&&!w(card)->visible);
     live_feed(2,1,1,1,"");assert(w(live_background)->visible&&!w(card)->visible);
+    // Always: the call's people even when nobody talks; ring and bars only on talkers.
+    live_feed(2,1,1,1,"11~~Mira~-,12~~Kenji~m");
+    assert(w(card)->visible&&shows("Mira")&&shows("Kenji")&&!w(talk_ring[0])->visible&&!w(talk_bars[1])->visible);
+    live_feed(2,1,1,1,"12~~Kenji~t,11~~Mira~-");
+    assert(w(card)->visible&&w(talk_ring[0])->visible&&w(talk_bars[0])->visible&&!w(talk_ring[1])->visible);
     live_feed(1,1,1,1,"11~~Mira~-");assert(!w(card)->visible); // defensive: stale glance bit
     // All corner pairs: flush pill, independent card insets, shared 14 px gap.
     for(int pc=0;pc<4;pc++)for(int cc=0;cc<4;cc++){
