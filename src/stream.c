@@ -65,6 +65,7 @@ typedef struct {
     _Atomic int spent; // the 32-bit GCM nonce is nearly used up: the stream must end
     int64_t t0;
     unsigned sent_frames, sent_packets, sent_audio, dropped;
+    uint64_t video_bytes; // encoded video since the last 5 s line (the encoder's real rate)
     voice_rtx_cache rtx;
     int64_t rtx_window_ms;
     unsigned rtx_window_video, rtx_window_attempts;
@@ -453,6 +454,7 @@ static void on_video(const uint8_t *au, size_t n, int keyframe)
         c->last_ts_us = stamp_us;
         if (send_frame_rtp(c, send_buf, out_len, (uint32_t)((mono_ms() - c->t0) * 90))) {
             c->sent_frames++;
+            c->video_bytes += n;
             if (mono_us() - stamp_us > c->longest_send_us)
                 c->longest_send_us = mono_us() - stamp_us;
         }
@@ -989,9 +991,11 @@ static int serve(conn *c)
         }
         if (now >= next_log) {
             pthread_mutex_lock(&mlock);
-            LOG("stream: sent %u frames, %u audio, %u packets, %u dropped; media %d, DAVE %d ready %d, %d users",
+            LOG("stream: sent %u frames, %u audio, %u packets, %u dropped; media %d, DAVE %d ready %d, %d users; "
+                "video %llu kbit/s",
                 c->sent_frames, c->sent_audio, c->sent_packets, c->dropped, c->media_ok, c->dave_version,
-                c->dave_ready, c->n_users);
+                c->dave_ready, c->n_users, (unsigned long long)(c->video_bytes * 8 / 1000 / 5));
+            c->video_bytes = 0;
             pthread_mutex_unlock(&mlock);
             pthread_mutex_lock(&mlock); // on_video writes these
             if (c->sent_frames)
