@@ -11,8 +11,21 @@ All notable changes to this project are documented here. The format follows
   (`capture/`, GPL-3.0-only), the sound from the core's game-audio capture, shared with the
   Bluetooth headset (`src/bt/game_audio.cpp`). The controller is left alone. Settings, Voice &
   audio, Capture: Auto (a USB controller means Remote Play, else wireless), Wireless, USB controller.
+- Go Live has its own settings page (quality, bitrate, capture, pairing). Bitrate: Recommended
+  (4/6/6/8 Mbit/s for 720p30/720p60/1080p30/1080p60) or a custom value up to 10 (720p) or 20 Mbit/s
+  (1080p).
+- Lost video packets are resent (RTX, RFC 4588) when viewers ask; Discord's loss reports, resends
+  and keyframe requests are logged every 5 s.
+- In-game overlay: a live pill (live time, viewers, mic state) in its own corner, shown whenever
+  Go Live is on, and a talking card that lists only who is talking (Always lists the call). Each
+  has its own corner setting. The pill is drawn at 2x at run time from the values tuned on a 4K TV
+  with the new standalone pill lab (`overlay/`, `make pill-lab`).
 
 ### Fixed
+- Wireless Go Live keeps streaming through a game launch (each HDMI change recovers), attaches
+  when Remote Play's code cannot be read, and paces video (80 Mbit/s bursts, no Nagle delay on the
+  helper link) so keyframes no longer cause hitches. 1080p loss came from too high a bitrate.
+- The capture helper's processes are named (discord-capture-supervisor.elf / -worker.elf).
 - Wireless Go Live: loader upload and commands handle short writes, backpressure and cancellation;
   concurrent handshake candidates and media deadlines prevent a stalled helper holding the session.
 - Capture setup observes Stop and disconnected cores between stages; the 120 Hz guard also runs
