@@ -23,8 +23,6 @@ TILE = (44, 46, 52, 255)
 CORAL = (255, 122, 89, 255)
 LEAVE = (74, 38, 36, 255)
 GLANCE = (32, 34, 39, 235)
-GLASS = (32, 34, 39, 158)  # live-pill-demo.html: 62%, no blur in the overlay
-MUTED = (237, 66, 69, 255)
 LINE = (255, 255, 255, 30)
 WHITE = (255, 255, 255, 255)
 
@@ -96,40 +94,6 @@ def eye(d, k):
             points.append(tuple(((1-t)**2*a[j] + 2*(1-t)*t*b[j] + t*t*c[j]) * k for j in (0, 1)))
     d.line(points, fill=WHITE, width=int(4 * k), joint="curve")
     d.ellipse((24*k, 24*k, 40*k, 40*k), fill=WHITE)
-
-
-def live_piece(name, w, fill, corner=None):
-    """Only the selected corner rounds; the other three stay flush and square."""
-    img, d = canvas(w, 28)
-    d.rectangle((0, 0, w*S-1, 28*S-1), fill=fill)
-    if corner is not None:
-        # Cut just one 7.5 px quadrant from a full square, at supersampled size.
-        r = int(7.5*S)
-        mask = Image.new("L", (2*r, 2*r), 0)
-        ImageDraw.Draw(mask).ellipse((0, 0, 2*r-1, 2*r-1), fill=255)
-        left, top = corner in (0, 2), corner in (0, 1)
-        quadrant = mask.crop((0 if left else r, 0 if top else r, r if left else 2*r, r if top else 2*r))
-        alpha = img.getchannel("A")
-        if fill[3] != 255:
-            quadrant = quadrant.point(lambda a: round(a * fill[3] / 255))
-        alpha.paste(quadrant, (0 if left else w*S-r, 0 if top else 28*S-r))
-        img.putalpha(alpha)
-    # Resize alpha alone: Pillow's RGBA resampling rounds dark RGB by a level and
-    # can overshoot translucent alpha. Keep the demo's fill exact, even at the cap.
-    alpha = img.getchannel("A").resize((w, 28), Image.LANCZOS).point(lambda a: min(a, fill[3]))
-    final = Image.new("RGBA", (w, 28), fill)
-    final.putalpha(alpha)
-    final.save(os.path.join(OUT, name + ".png"), optimize=True)
-
-
-def live_art():
-    live_piece("live_body", 1, GLASS)
-    for corner in range(4):  # TL, TR, BL, BR: only the diagonal inner corner rounds
-        live_piece("live_segment_%d" % corner, 31, CORAL, {1: 2, 3: 0}.get(corner))
-        live_piece("live_end_%d" % corner, 8, GLASS, {0: 3, 2: 1}.get(corner))
-    rounded("live_divider", 1, 12, 0, LINE)
-    icon("eye", eye)
-    icon("mic_off_red", lambda d, k: mic(d, k, True, MUTED))
 
 
 def leave(d, k):
@@ -399,7 +363,7 @@ def main():
     for n in range(1, 4):
         rounded("glance_%d" % n, 315, 28 + 60 * n, 18, GLANCE)
     ring("ring_small", 56, 3, CORAL)
-    live_art()
+    icon("eye", eye)
     # Retired talking-card chrome; no current UI references these pieces.
     for name in ("glance_0", "glance_line", "you", "pill_live"):
         old = os.path.join(OUT, name + ".png")

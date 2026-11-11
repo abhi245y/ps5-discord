@@ -34,11 +34,11 @@ std::vector<unsigned char> decode(const char* path,int w,int h){
 }
 const unsigned char* pixel(const std::vector<unsigned char>& p,int w,int x,int y){return p.data()+y*(w*4+1)+1+x*4;}
 void parameters(){
-    for(int preset=0;preset<2;preset++){
+    for(int preset=0;preset<3;preset++){
         lab::preset(preset);
         for(int i=0;i<lab::Count;i++){
             auto& p=lab::parameters[i];assert(p.value>=p.min&&p.value<=p.max&&p.step>0);
-            assert(p.original>=p.min&&p.original<=p.max&&p.notch>=p.min&&p.notch<=p.max);
+            assert(p.original>=p.min&&p.original<=p.max&&p.notch>=p.min&&p.notch<=p.max&&p.tuned>=p.min&&p.tuned<=p.max);
             for(int j=0;j<i;j++)assert(std::strcmp(p.name,lab::parameters[j].name));
             for(float v:{-1e20f,1e20f,std::numeric_limits<float>::quiet_NaN(),
                          std::numeric_limits<float>::infinity(),-std::numeric_limits<float>::infinity()}){
@@ -65,7 +65,16 @@ void parameters(){
 }
 }
 int main(){
-    parameters();(void)mkdir("build/lab-raster",0700);
+    parameters();
+    lab::preset(2);assert(lab::get(lab::Height)==26.5f&&lab::get(lab::RadiusInner)==16&&lab::get(lab::RenderScale)==2);
+    for(int corner=0;corner<4;corner++){
+        const auto layout=lab::layout(corner,0,0,49,19.5f);
+        const auto shape=lab::shape(layout.background.w,layout.divider_x,corner);
+        assert(shape.radius[corner]==6&&shape.radius[corner^3]==shape.h/2&&shape.radius[corner^1]==5);
+        assert(layout.background.y==(corner<2?0:1080-26.5f)&&layout.time.y==layout.background.y+2.5f);
+        assert(layout.mic.x+layout.mic.w+11==layout.background.x+layout.background.w);
+    }
+    (void)mkdir("build/lab-raster",0700);
     // Original at 1x/2x; Notch in every corner at 1x/2x/3x. Fractional outlines included.
     for(int test=0;test<6;test++){
         lab::preset(test<2?0:1);

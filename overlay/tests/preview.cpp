@@ -15,6 +15,9 @@ static std::uint64_t lab_host_ms=100000;
 #define PILL_LAB_NOW_MS() lab_host_ms
 #include "../src/app/pill_lab.inc"
 #else
+static char pill_host_dir[160]="build/preview-out/pill";
+#define LIVE_PILL_HOST
+#define LIVE_PILL_DIR pill_host_dir
 #include "../src/app/discord_app.inc"
 #endif
 #include <cstdio>
@@ -27,13 +30,13 @@ struct Widget {
     oui::Rect r{};
     char path[200]="", text[700]="";
     oui::Color tint{1,1,1,1}, ink{1,1,1,1};
-    float size=20;int weight=0,align=0;
+    float size=20;int weight=0,align=0,valign=0;
 };
-Widget widgets[200];
+Widget widgets[192];
 int used=0;
 
 void* add(char kind,const oui::Rect* r,const char* s){
-    if(used>=200)return nullptr;
+    if(used>=192)return nullptr;
     Widget& w=widgets[used++];
     w.kind=kind;w.r=*r;
     std::snprintf(kind=='i'?w.path:w.text,kind=='i'?200:700,"%s",s?s:"");
@@ -55,10 +58,11 @@ bool set_capture(void*,bool){return true;}
 bool send(void*,const char*){return true;}
 bool send_text(void*,const char*,const char*){return true;}
 bool set_hold(void*,int){return true;}
+bool set_valign(void*,void* w,int v){if(w)static_cast<Widget*>(w)->valign=v;return true;}
 float sw(void*){return 1920;}
 float sh(void*){return 1080;}
 const oui::Builder::Vt vt{add_panel,add_label,set_text,set_visible,set_color,sw,sh,set_capture,send,
-                          add_image,set_image,set_tint,set_style,set_rect,set_hold,send_text,nullptr,nullptr};
+                          add_image,set_image,set_tint,set_style,set_rect,set_hold,send_text,nullptr,set_valign};
 
 void dump(const char* dir,const char* name){
     char path[300];std::snprintf(path,sizeof path,"%s/%s.txt",dir,name);
@@ -66,9 +70,9 @@ void dump(const char* dir,const char* name){
     for(int i=0;i<used;i++){
         const Widget& w=widgets[i];
         if(!w.visible)continue;
-        std::fprintf(f,"%c\t%.1f\t%.1f\t%.1f\t%.1f\t%s\t%.3f,%.3f,%.3f,%.3f\t%.1f\t%d\t%.3f,%.3f,%.3f,%.3f\t%d\t%s\n",
+        std::fprintf(f,"%c\t%.1f\t%.1f\t%.1f\t%.1f\t%s\t%.3f,%.3f,%.3f,%.3f\t%.1f\t%d\t%.3f,%.3f,%.3f,%.3f\t%d\t%s\t%d\n",
             w.kind,w.r.x,w.r.y,w.r.w,w.r.h,w.path,w.tint.r,w.tint.g,w.tint.b,w.tint.a,w.size,w.weight,
-            w.ink.r,w.ink.g,w.ink.b,w.ink.a,w.align,w.text);}
+            w.ink.r,w.ink.g,w.ink.b,w.ink.a,w.align,w.text,w.valign);}
     std::fclose(f);
 }
 
@@ -83,6 +87,9 @@ int main(int argc,char** argv){
 #ifdef OVERLAY_APP_LAB
     if(std::snprintf(lab_host_dir,sizeof lab_host_dir,"%s/lab",dir)>=int(sizeof lab_host_dir))return 1;
     (void)mkdir(dir,0700);(void)mkdir(lab_host_dir,0700);
+#else
+    if(std::snprintf(pill_host_dir,sizeof pill_host_dir,"%s/pill",dir)>=int(sizeof pill_host_dir))return 1;
+    (void)mkdir(dir,0700);(void)mkdir(pill_host_dir,0700);
 #endif
     using namespace oui::app;
     oui::Builder b{&vt,nullptr};
@@ -115,6 +122,12 @@ int main(int argc,char** argv){
         char name[40];std::snprintf(name,sizeof name,"lab-notch-corner-%d",c);
         if(!snapshot(name))return 1;
     }
+    for(int c=0;c<4;c++){
+        pill_lab::preset(2);pill_lab::set(pill_lab::Corner,float(c));editor_visible=false;render(b);
+        char name[40];std::snprintf(name,sizeof name,"lab-tuned-corner-%d",c);
+        if(!snapshot(name))return 1;
+    }
+    editor_visible=true;
     pill_lab::preset(0);pill_lab::set(pill_lab::LongTime,1);pill_lab::set(pill_lab::Viewers,128);
     pill_lab::set(pill_lab::Muted,1);render(b);if(!snapshot("lab-long-muted"))return 1;
 #else
@@ -138,6 +151,7 @@ int main(int argc,char** argv){
     feed(two,"12:34","0.5.5.1.0.3.1.1.1.0.0.3.3",'o',12);dump(dir,"shared-br");
     feed(two,"12:34",kSet,'m',12);dump(dir,"pill-muted");
     feed(two,"1:02:45",kSet,'o',128);dump(dir,"pill-long-session");
+    feed(two,"12:34",kSet,'o',1);dump(dir,"pill-one-viewer");
     feed("11~11_ab~Mira~-","12:34",kSet,'o',12,0);dump(dir,"pill-only");
     feed(two,"12:34","0.5.5.0.0.3.1.1.1.0.0.1.1",'o',12,0);dump(dir,"pill-card-off");
     feed("");on_gesture(oui::Gesture::Chord,b);dump(dir,"call-empty");on_gesture(oui::Gesture::Chord,b);

@@ -4,7 +4,7 @@ CXX_PS5 := $(SDK)/bin/prospero-clang++
 CC_PS5 := $(SDK)/bin/prospero-clang
 export LLVM_CONFIG
 HASH_SOURCES := src/core/worker.cpp src/core/protocol.hpp src/core/hook.hpp src/core/parent.cpp \
-             src/app/overlay_ui.hpp src/app/overlay_app.cpp src/app/discord_app.inc vendor/shellui-loader/prologue.hpp
+             src/app/overlay_ui.hpp src/app/overlay_app.cpp src/app/discord_app.inc src/app/live_pill.hpp vendor/shellui-loader/prologue.hpp
 LAB_SOURCES := $(filter-out src/app/discord_app.inc,$(HASH_SOURCES)) src/app/pill_lab.inc src/app/pill_lab_model.hpp
 LAB_BUILD_ID := $(shell cat $(LAB_SOURCES) | sha256sum | cut -c1-16)
 BUILD_ID := $(shell cat $(HASH_SOURCES) | sha256sum | cut -c1-16)
@@ -89,26 +89,26 @@ build/safety-test: tests/safety.cpp src/core/protocol.hpp src/core/hook.hpp
 build/worker-test: tests/worker.cpp src/core/worker.cpp src/core/protocol.hpp src/core/hook.hpp src/app/demo_app.inc
 	@mkdir -p build
 	$(CXX) -std=c++20 -g -O1 -Wall -Wextra -Werror -Wno-misleading-indentation -fsanitize=address,undefined -fno-sanitize=function -fno-omit-frame-pointer -DOVERLAY_APP_DEMO tests/worker.cpp -o $@
-build/discord-app-test: tests/discord_app.cpp src/app/discord_app.inc src/app/overlay_ui.hpp
+build/discord-app-test: tests/discord_app.cpp src/app/discord_app.inc src/app/overlay_ui.hpp src/app/live_pill.hpp
 	@mkdir -p build
-	$(CXX) -std=c++20 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer tests/discord_app.cpp -o $@
+	$(CXX) -std=c++20 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer -DOVERLAY_BUILD=0x$(BUILD_ID)ULL tests/discord_app.cpp -o $@
 # The overlay's layout as pictures (tools/preview.py), for a look before a console run.
-build/preview: tests/preview.cpp src/app/discord_app.inc src/app/overlay_ui.hpp
+build/preview: tests/preview.cpp src/app/discord_app.inc src/app/overlay_ui.hpp src/app/live_pill.hpp
 	@mkdir -p build
-	$(CXX) -std=c++20 -g -O1 -Wall -Wextra -Werror tests/preview.cpp -o $@
+	$(CXX) -std=c++20 -g -O1 -Wall -Wextra -Werror -DOVERLAY_BUILD=0x$(BUILD_ID)ULL tests/preview.cpp -o $@
 preview: build/preview
 	@mkdir -p build/preview-out
 	./build/preview build/preview-out
 	python3 tools/preview.py build/preview-out
-build/lab-raster-test: tests/lab_raster.cpp src/app/pill_lab_model.hpp
+build/lab-raster-test: tests/lab_raster.cpp src/app/pill_lab_model.hpp src/app/live_pill.hpp src/app/overlay_ui.hpp
 	@mkdir -p build
 	$(CXX) -std=c++20 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer tests/lab_raster.cpp -lz -o $@
-build/lab-app-test: tests/lab_app.cpp src/app/pill_lab.inc src/app/pill_lab_model.hpp src/app/overlay_ui.hpp tests/preview.cpp
+build/lab-app-test: tests/lab_app.cpp src/app/pill_lab.inc src/app/pill_lab_model.hpp src/app/overlay_ui.hpp tests/preview.cpp src/app/live_pill.hpp
 	@mkdir -p build
 	$(CXX) -std=c++20 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer tests/lab_app.cpp -o $@
-build/lab-preview: tests/preview.cpp src/app/pill_lab.inc src/app/pill_lab_model.hpp src/app/overlay_ui.hpp
+build/lab-preview: tests/preview.cpp src/app/pill_lab.inc src/app/pill_lab_model.hpp src/app/overlay_ui.hpp src/app/live_pill.hpp
 	@mkdir -p build
-	$(CXX) -std=c++20 -g -O1 -Wall -Wextra -Werror -DOVERLAY_APP_LAB tests/preview.cpp -o $@
+	$(CXX) -std=c++20 -g -O1 -Wall -Wextra -Werror -DOVERLAY_APP_LAB -DOVERLAY_BUILD=0x$(LAB_BUILD_ID)ULL tests/preview.cpp -o $@
 lab-preview: build/lab-preview
 	@mkdir -p build/lab-preview-out
 	./build/lab-preview build/lab-preview-out

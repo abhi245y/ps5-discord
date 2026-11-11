@@ -2,6 +2,9 @@
 // The Discord overlay UI against a fake Builder: the core's line, the talking card, the
 // call panel, its tiles and focus.
 #include "../src/app/overlay_ui.hpp"
+static char pill_test_dir[160]{};
+#define LIVE_PILL_HOST
+#define LIVE_PILL_DIR pill_test_dir
 #include "../src/app/discord_app.inc"
 #include <cassert>
 #include <cstdio>
@@ -14,7 +17,8 @@ struct Widget {
     bool label=false, image=false, visible=true;
     char text[2200]="", path[160]="";
     oui::Rect r{};
-    int valign=0;
+    int valign=0,weight=0,align=0;float size=0;
+    oui::Color tint{},ink{};
 };
 Widget widgets[192];
 int used=0;
@@ -22,7 +26,7 @@ int used=0;
 void* add(bool label,bool image,const oui::Rect* r,const char* text){
     assert(used<192); // the engine's limit
     Widget& w=widgets[used++];
-    w.label=label;w.image=image;w.r=*r;
+    w=Widget{};w.label=label;w.image=image;w.r=*r;
     std::snprintf(image?w.path:w.text,image?160:2200,"%s",text?text:"");
     return &w;
 }
@@ -33,8 +37,9 @@ bool set_text(void*,void* w,const char* t){std::snprintf(static_cast<Widget*>(w)
 bool set_visible(void*,void* w,bool on){if(w)static_cast<Widget*>(w)->visible=on;return true;}
 bool set_color(void*,void*,const oui::Color*){return true;}
 bool set_image(void*,void* w,const char* p){std::snprintf(static_cast<Widget*>(w)->path,160,"%s",p);return true;}
-bool set_tint(void*,void*,const oui::Color*){return true;}
-bool set_style(void*,void*,float,int,const oui::Color*,int){return true;}
+bool set_tint(void*,void* w,const oui::Color* c){static_cast<Widget*>(w)->tint=*c;return true;}
+bool set_style(void*,void* w,float size,int weight,const oui::Color* c,int align){
+    auto& item=*static_cast<Widget*>(w);item.size=size;item.weight=weight;item.ink=*c;item.align=align;return true;}
 bool set_rect(void*,void* w,const oui::Rect* r){static_cast<Widget*>(w)->r=*r;return true;}
 int hold_ms=600;
 bool set_hold(void*,int ms){hold_ms=ms;return true;}
@@ -62,14 +67,23 @@ bool ends(const char* s,const char* tail){
 int main(){
     using namespace oui::app;
     oui::Builder b{&vt,nullptr};
+    char temp_dir[]="/tmp/discord-pill-XXXXXX";assert(mkdtemp(temp_dir));
+    std::snprintf(pill_test_dir,sizeof pill_test_dir,"%s",temp_dir);
+    // Only strict generated names from older builds may be removed. Preserve unrelated
+    // files, directories and symlinks, even when their names look like cache entries.
+    auto touch=[&](const char* name){char path[240];std::snprintf(path,sizeof path,"%s/%s",temp_dir,name);
+        FILE* f=std::fopen(path,"wb");assert(f);std::fputs("sentinel",f);assert(std::fclose(f)==0);};
+    touch("ffffffffffffffff_1_400.png");touch("unrelated.png");
+    char symlink_path[240];std::snprintf(symlink_path,sizeof symlink_path,"%s/ffffffffffffffff_0_400.png",temp_dir);
+    assert(symlink("unrelated.png",symlink_path)==0);
     reset();
     assert(build(b));
-    assert(used==173);
+    assert(used==188&&used<=192);
     for(int i=0;i<used;i++)assert(!widgets[i].visible); // nothing before the core says anything
 
     // In a call, only talkers appear: no call title, self row, header or hints.
     on_text("3|c|o|1||0|Raid Night|42:10|720p \xc2\xb7 30 fps|0.5.5.1.0.3.1.1.1.0.0.1.1|1~~|11~11_ab~Mira~t,12~~Kenji~t,13~13_cd~Ana~m,14~14_ef~Theo~-",b);
-    assert(w(card)->visible&&!w(live_segment)->visible&&!shows("Raid Night"));
+    assert(w(card)->visible&&!w(live_background)->visible&&!shows("Raid Night"));
     assert(shows("Mira")&&shows("Kenji")&&!shows("You \xc2\xb7 mic on")&&!shows("Hold Options for controls"));
     assert(ends(w(talk_avatar[0])->path,"/av/11_ab.png")&&ends(w(talk_avatar[1])->path,"avatar_none.png")); // not fetched yet
     assert(w(card)->r.h==148&&ends(w(card)->path,"glance_2.png")&&w(talk_ring[0])->r.y==34+16);
@@ -77,11 +91,11 @@ int main(){
 
     // Live and muted: independent compact pill; one-talker card below it.
     on_text("3|c|m|1|18:42|3|Raid Night|1:02:03|720p|0.5.5.1.0.3.1.1.1.0.0.1.1|1~~|11~11_ab~Mira~t",b);
-    assert(w(live_segment)->visible&&shows("18:42")&&shows("3")&&!shows("Raid Night")&&!shows("You \xc2\xb7 muted"));
-    assert(w(card)->r.h==88&&w(card)->r.y==42&&ends(w(live_mic)->path,"mic_off_red.png"));
-    assert(w(live_segment)->r.y==0&&w(live_segment)->r.h==28&&w(live_end)->r.x+w(live_end)->r.w==1920);
-    on_gesture(oui::Gesture::Chord,b);assert(!w(live_segment)->visible&&!w(card)->visible);
-    on_gesture(oui::Gesture::Chord,b);assert(w(live_segment)->visible&&w(card)->visible);
+    assert(w(live_background)->visible&&shows("18:42")&&shows("3")&&!shows("Raid Night")&&!shows("You \xc2\xb7 muted"));
+    assert(w(card)->r.h==88&&w(card)->r.y==pill::get(pill::Height)+14&&ends(w(live_mic)->path,"mic_off.png"));
+    assert(w(live_background)->r.y==0&&w(live_background)->r.h==pill::get(pill::Height)&&w(live_background)->r.x+w(live_background)->r.w==1920);
+    on_gesture(oui::Gesture::Chord,b);assert(!w(live_background)->visible&&!w(card)->visible);
+    on_gesture(oui::Gesture::Chord,b);assert(w(live_background)->visible&&w(card)->visible);
 
     // The panel: four rows (talking ring on Mira), the tiles, focus on Mute, capture on.
     on_text("3|c|o|1||0|Raid Night|42:10|720p \xc2\xb7 30 fps|0.5.5.1.0.3.1.1.1.0.0.1.1|1~~|11~11_ab~Mira~t,13~13_cd~Ana~m,14~14_ef~Theo~d,15~~Sam~-,16~~Nova~-",b);
@@ -632,23 +646,26 @@ int main(){
     };
     // Card Off never suppresses live status, even with talkers.
     live_feed(0,0,1,1,"11~~Mira~t");
-    assert(w(live_segment)->visible&&!w(card)->visible&&!w(talk_name[0])->visible);
+    assert(w(live_background)->visible&&!w(card)->visible&&!w(talk_name[0])->visible);
     // Mode 1 + live + nobody talking: pill only. Even mode 2 cannot show an empty card.
-    live_feed(1,0,1,1,"11~~Mira~-");assert(w(live_segment)->visible&&!w(card)->visible);
-    live_feed(2,1,1,1,"");assert(w(live_segment)->visible&&!w(card)->visible);
+    live_feed(1,0,1,1,"11~~Mira~-");assert(w(live_background)->visible&&!w(card)->visible);
+    live_feed(2,1,1,1,"");assert(w(live_background)->visible&&!w(card)->visible);
     live_feed(1,1,1,1,"11~~Mira~-");assert(!w(card)->visible); // defensive: stale glance bit
     // All corner pairs: flush pill, independent card insets, shared 14 px gap.
     for(int pc=0;pc<4;pc++)for(int cc=0;cc<4;cc++){
         live_feed(1,1,pc,cc,"11~~Mira~t,12~~Kenji~t");
-        assert(w(live_segment)->visible&&w(card)->visible&&w(card)->r.h==148);
-        assert(w(live_segment)->r.y==(pc<2?0:1052));
-        if(pc%2)assert(w(live_end)->r.x+w(live_end)->r.w==1920);
-        else assert(w(live_segment)->r.x==0);
-        char segment[32],end[32];
-        std::snprintf(segment,sizeof segment,"live_segment_%d.png",pc);
-        std::snprintf(end,sizeof end,"live_end_%d.png",pc);
-        assert(ends(w(live_segment)->path,segment)&&ends(w(live_end)->path,end));
-        const float inset=pc==cc?42:34;
+        assert(w(live_background)->visible&&w(card)->visible&&w(card)->r.h==148);
+        assert(w(live_background)->r.y==(pc<2?0:1080-pill::get(pill::Height)));
+        if(pc%2)assert(w(live_background)->r.x+w(live_background)->r.w==1920);
+        else assert(w(live_background)->r.x==0);
+        const auto layout=pill::layout(pc,0,0,live_time_w,live_count_w);
+        char suffix[64];std::snprintf(suffix,sizeof suffix,"_%d_%d.png",pc,int(layout.background.w*2));
+        assert(ends(w(live_background)->path,suffix));
+        const auto shape=pill::shape(layout.background.w,layout.divider_x,pc);
+        assert(shape.radius[pc]==6&&shape.radius[pc^3]==shape.h/2); // shared clamp, raw inner=16
+        assert(w(live_icon)->r.x==layout.live.x&&w(live_time)->r.y==layout.time.y);
+        assert(w(live_eye)->r.x==layout.eye.x&&w(live_count)->r.x==layout.count.x&&w(live_mic)->r.x==layout.mic.x);
+        const float inset=pc==cc?pill::get(pill::Height)+14:34;
         assert(w(card)->r.x==(cc%2?1574:31));
         assert(w(card)->r.y==(cc<2?inset:1080-inset-148));
     }
@@ -657,21 +674,76 @@ int main(){
     live_feed(1,1,3,3,"11~~Mira~t,12~~Kenji~t,13~~Ana~t");
     assert(w(card)->r.h==208&&w(card)->r.y+w(card)->r.h==bottom);
     live_feed(1,1,3,3,"11~~Mira~t","",0);
-    assert(!w(live_segment)->visible&&w(card)->r.y==1080-34-88);
+    assert(!w(live_background)->visible&&w(card)->r.y==1080-34-88);
     // Mic state: normal white mic; muted and deafened both use the red slash.
     live_feed(1,1,1,1,"11~~Mira~t");assert(ends(w(live_mic)->path,"/mic.png"));
-    live_feed(1,1,1,1,"11~~Mira~t","12:34",12,'m');assert(ends(w(live_mic)->path,"mic_off_red.png"));
-    live_feed(1,1,1,1,"11~~Mira~t","12:34",12,'d');assert(ends(w(live_mic)->path,"mic_off_red.png"));
+    live_feed(1,1,1,1,"11~~Mira~t","12:34",12,'m');assert(ends(w(live_mic)->path,"mic_off.png"));
+    live_feed(1,1,1,1,"11~~Mira~t","12:34",12,'d');assert(ends(w(live_mic)->path,"mic_off.png"));
+    on_tick(frame_now+1,b);on_tick(frame_now+1,b);on_tick(frame_now+1,b);
     const float short_width=live_time_w,short_viewers=live_count_w;
     live_feed(1,1,1,1,"11~~Mira~t","1:02:45",128);
-    assert(shows("1:02:45")&&shows("128")&&live_time_w>short_width&&live_count_w>short_viewers);
-    assert(w(live_count)->r.x+w(live_count)->r.w<w(live_rule)->r.x);
-    on_tick(frame_now+1,b);on_tick(frame_now+1,b);
-    assert(live_time_w>=107&&live_count_w>=47); // fake Builder measures 15 px per byte, plus slack
-    assert(w(live_end)->r.x+w(live_end)->r.w==1920);
+    assert(shows("1:02:45")&&shows("128"));
+    assert(w(live_count)->r.x+w(live_count)->r.w<pill::layout(live_time_w,live_count_w).divider.x);
+    on_tick(frame_now+1,b);on_tick(frame_now+1,b);on_tick(frame_now+1,b);
+    assert(live_time_w==105.5f&&live_count_w==45.5f&&live_time_w>short_width&&live_count_w>short_viewers); // shared lab measurement slack
+    assert(w(live_background)->r.x+w(live_background)->r.w==1920);
     live_feed(1,1,1,1,"11~~Mira~t","1:02:46",129);
-    assert(live_probe_wait==0&&live_time_w>=107); // stable format: no width jitter
-    on_text("3|x|o|0|1:02:46|129||||||",b);assert(!w(live_segment)->visible&&!w(card)->visible);
+    assert(live_probe_wait==0&&live_time_w==105.5f); // stable format: no width jitter
+    assert(w(live_time)->size==14&&w(live_time)->weight==1&&w(live_time)->align==1&&w(live_time)->valign==2);
+    assert(w(live_count)->r.y==2.5f&&w(live_eye)->r.w==21.5f&&w(live_mic)->r.w==21.5f);
+    assert(w(live_mic)->tint.r==1&&w(live_mic)->tint.g==1&&w(live_mic)->tint.b==1);
+    live_feed(1,1,1,1,"11~~Mira~t","1:02:46",129,'m');
+    assert(w(live_mic)->tint.r==237.f/255&&w(live_mic)->tint.g==60.f/255&&w(live_mic)->tint.b==69.f/255);
+    char cached[200];std::snprintf(cached,sizeof cached,"%s",live_image_path);
+    struct stat before{},after{};assert(stat(cached,&before)==0);
+    const float fixed_width=w(live_background)->r.w;
+    for(int i=0;i<20;i++){
+        char duration[16];std::snprintf(duration,sizeof duration,"1:02:%02d",i);
+        live_feed(0,0,1,1,"",duration,100+i);
+        on_tick(frame_now+1,b);
+        assert(live_probe_wait==0&&w(live_background)->r.w==fixed_width&&!std::strcmp(cached,live_image_path));
+        assert(w(live_time)->visible&&w(live_icon)->visible&&!w(card)->visible);
+    }
+    assert(stat(cached,&after)==0&&before.st_ino==after.st_ino&&before.st_mtime==after.st_mtime);
+    // Corner switch then return must reuse the original PNG without rewriting it.
+    live_feed(0,0,0,1,"","1:02:45",128);live_feed(0,0,1,1,"","1:02:45",128);
+    assert(stat(cached,&after)==0&&before.st_ino==after.st_ino&&before.st_mtime==after.st_mtime);
+    char stale[240];std::snprintf(stale,sizeof stale,"%s/ffffffffffffffff_1_400.png",temp_dir);
+    assert(access(stale,F_OK)!=0&&access(symlink_path,F_OK)==0);
+    touch("ffffffffffffffff_1_400.png"); // cleanup must not repeat on later width/corner changes
+    live_feed(0,0,2,1,"","1:02:45",128);assert(access(stale,F_OK)==0);
+    live_feed(0,0,1,1,"","12:34",1);
+    assert(w(live_count)->visible&&!std::strcmp(w(live_count)->text,"1"));
+    // The shared rasterizer also rejects invalid geometry without hiding native content.
+    pill::parameters[pill::RenderScale].value=0;
+    live_feed(0,0,3,1,"","1:02:45",9999);
+    assert(!live_background_ready&&!w(live_background)->visible&&shows("1:02:45")&&shows("9999"));
+    assert(w(live_icon)->visible&&w(live_eye)->visible&&w(live_mic)->visible);
+    pill::set(pill::RenderScale,2);
+    live_feed(0,0,2,1,"","1:02:45",9999);assert(live_background_ready&&w(live_background)->visible);
+    on_text("3|x|o|0|1:02:46|129||||||",b);assert(!w(live_background)->visible&&!w(card)->visible);
+    // An unwritable cache (a regular file in place of the directory) never breaks build
+    // or native pill content. No console path is used by this test.
+    touch("blocked");
+    std::snprintf(pill_test_dir,sizeof pill_test_dir,"%s/blocked",temp_dir);
+    reset();used=0;
+    st.state='c';st.me='d';st.set[3]=0;st.viewers=1;std::snprintf(st.live,sizeof st.live,"12:34");
+    assert(build(b)); // Includes an attempted raster write while constructing the live scene.
+    live_feed(0,0,1,1,"","12:34",1,'d');
+    on_tick(frame_now+1,b);on_tick(frame_now+1,b);on_tick(frame_now+1,b);
+    assert(!live_background_ready&&!w(live_background)->visible);
+    assert(shows("12:34")&&shows("1")&&w(live_icon)->visible&&w(live_eye)->visible&&w(live_mic)->visible);
+    assert(ends(w(live_mic)->path,"mic_off.png")&&w(live_mic)->tint.g==60.f/255);
+    assert(!live_cache_name("../ffffffffffffffff_1_400.png")&&!live_cache_name("ffffffffffffffff_4_400.png"));
+    // Bounded removal of this test's own flat temporary cache (symlink unlinked, not followed).
+    DIR* dir=opendir(temp_dir);assert(dir);
+    for(unsigned i=0;i<256;i++){
+        const auto* entry=readdir(dir);if(!entry)break;
+        if(entry->d_name[0]=='.')continue;
+        char path[256];const int n=std::snprintf(path,sizeof path,"%s/%s",temp_dir,entry->d_name);
+        assert(n>0&&std::size_t(n)<sizeof path);assert(unlink(path)==0);
+    }
+    closedir(dir);assert(rmdir(temp_dir)==0);
     std::puts("discord app: ok");
     return 0;
 }

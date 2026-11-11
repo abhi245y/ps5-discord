@@ -3,7 +3,7 @@
 // .impeccable/mocks/overlay/a-dock.png and c-glance.png; their 1672 px measures x 1.148).
 // LIVE pill and trimmed card: tmp/mockups/live-pill-demo.html, at 1920x1080:
 //  - the independent LIVE pill: flush in its chosen corner while live and the panel is
-//    closed, with broadcast icon, duration, viewers and mic status (28 px high).
+//    closed, with broadcast icon, duration, viewers and mic status (shared Tuned preset height).
 //  - the talking-only card (C): up to three talkers, avatars, rings, names and bars;
 //    no empty card. Its own corner has 31/34 px edge insets. When both share a corner,
 //    the card sits 14 px inward from the pill. Bottom cards grow upward.
@@ -42,6 +42,16 @@
 
 #include <cstdio>
 #include <cstring>
+#include "live_pill.hpp"
+#include <dirent.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#ifndef LIVE_PILL_DIR
+#define LIVE_PILL_DIR "/user/data/discord-overlay-poc/pill"
+#endif
+#ifndef OVERLAY_BUILD
+#define OVERLAY_BUILD 0ULL // Host tests/previews; workers supply the source hash.
+#endif
 
 namespace oui { namespace app {
 
@@ -69,7 +79,6 @@ constexpr float kTileW=122,kTileH=140,kTileStep=132;
 constexpr int kRows=4,kTiles=4;
 // C: the talking card.
 constexpr float kCardX=1574,kCardY=34,kCardW=315,kCardPadding=28;
-constexpr float kPillH=28,kPillSegment=30.8f,kPillEnd=8,kPillIcon=19.6f;
 constexpr int kTalkRows=3;
 
 // The mini settings, in the core line's order (src/overlay.c compose). Values index names
@@ -204,12 +213,15 @@ float pill_x=-1,pill_from=0; int slide_t=99; // the highlight's x now, where the
 constexpr int kSlide=8;
 // The talking card.
 void* card=nullptr;
-// LIVE pill: fixed-size end caps preserve the 7.5 px inner radius as text slots grow.
-void *live_segment=nullptr,*live_body=nullptr,*live_end=nullptr,*live_icon=nullptr;
-void *live_time=nullptr,*live_eye=nullptr,*live_count=nullptr,*live_rule=nullptr,*live_mic=nullptr;
-void *live_time_probe=nullptr,*live_count_probe=nullptr;
+// LIVE pill: the lab's Tuned model, raster and layout. No sliced background art.
+namespace pill=pill_lab;
+void *live_background=nullptr,*live_icon=nullptr,*live_time=nullptr,*live_eye=nullptr,*live_count=nullptr,*live_mic=nullptr;
+void *live_time_probes[10]{},*live_count_probes[10]{};
 int live_time_len=0,live_count_len=0,live_probe_wait=0;
-float live_time_w=37.8f,live_count_w=16.8f;
+float live_time_w=0,live_count_w=0;
+int live_cached_corner=-1;float live_cached_width=-1;
+bool live_background_ready=false,live_cleanup_done=false;
+char live_image_path[200]{};
 void* talk_avatar[kTalkRows]={}; void* talk_ring[kTalkRows]={}; void* talk_name[kTalkRows]={};
 void* talk_bars[kTalkRows]={};
 // The mini settings.
@@ -784,26 +796,78 @@ void place_timer(Builder& b){
     b.set_rect(clock,{right-w-34,kTitleY+16,26,26});
 }
 
-// PUI measures lazily. Probe the widest digits once per format, keep stable slots as
-// seconds/viewers change, and use the demo's compact widths until layout is ready.
+// Cache only generated filenames in this private directory. Never follow symlinks or
+// traverse subdirectories. Bound both the directory scan and the number of deletions.
+bool live_cache_name(const char* name){
+    const auto n=std::strlen(name);if(n<24||n>32)return false;
+    for(int i=0;i<16;i++)if(!((name[i]>='0'&&name[i]<='9')||(name[i]>='a'&&name[i]<='f')))return false;
+    if(name[16]!='_'||name[17]<'0'||name[17]>'3'||name[18]!='_')return false;
+    unsigned i=19;for(;i<n&&name[i]>='0'&&name[i]<='9';i++){}
+    return i>19&&(!std::strcmp(name+i,".png")||!std::strcmp(name+i,".png.tmp"));
+}
+void live_cleanup(){
+    if(live_cleanup_done)return;
+    live_cleanup_done=true;
+    DIR* dir=opendir(LIVE_PILL_DIR);if(!dir)return;
+    char build[24];std::snprintf(build,sizeof build,"%016llx_",(unsigned long long)OVERLAY_BUILD);
+    unsigned removed=0;
+    for(unsigned scanned=0;scanned<256&&removed<128;scanned++){
+        const auto* entry=readdir(dir);if(!entry)break;
+        if(!live_cache_name(entry->d_name)||!std::strncmp(entry->d_name,build,17))continue;
+        char path[256];const int n=std::snprintf(path,sizeof path,"%s/%s",LIVE_PILL_DIR,entry->d_name);
+        if(n<0||std::size_t(n)>=sizeof path)continue;
+        struct stat info{};
+        if(lstat(path,&info)==0&&S_ISREG(info.st_mode)&&unlink(path)==0)++removed;
+    }
+    closedir(dir);
+}
+bool live_raster(const pill::Layout& layout,Builder& b){
+    if(!live_background)return false;
+#ifndef LIVE_PILL_HOST
+    (void)mkdir("/user/data/discord-overlay-poc",0700);
+#endif
+    (void)mkdir(LIVE_PILL_DIR,0700);
+    struct stat directory{};
+    if(lstat(LIVE_PILL_DIR,&directory)!=0||!S_ISDIR(directory.st_mode))return false;
+    live_cleanup();
+    char next[200],temp[208];
+    // Half-pixel units preserve the exact layout width in a bounded integer key.
+    const int n=std::snprintf(next,sizeof next,"%s/%016llx_%d_%d.png",LIVE_PILL_DIR,
+        (unsigned long long)OVERLAY_BUILD,layout.corner,int(layout.background.w*2));
+    if(n<0||std::size_t(n)>=sizeof next)return false;
+    struct stat info{};
+    if(lstat(next,&info)!=0){
+        const int t=std::snprintf(temp,sizeof temp,"%s.tmp",next);
+        if(t<0||std::size_t(t)>=sizeof temp)return false;
+        // Reject a pre-existing temp symlink/non-regular entry before opening it.
+        if(lstat(temp,&info)==0&&!S_ISREG(info.st_mode))return false;
+        FILE* f=std::fopen(temp,"wb");if(!f)return false;
+        bool ok=pill::png(f,pill::shape(layout.background.w,layout.divider_x,layout.corner));
+        if(std::fflush(f)!=0)ok=false;
+        if(std::fclose(f)!=0)ok=false;
+        if(ok)ok=std::rename(temp,next)==0;
+        if(!ok){std::remove(temp);return false;}
+    }else if(!S_ISREG(info.st_mode)||info.st_size<=0)return false;
+    if(!b.set_image(live_background,next))return false;
+    std::snprintf(live_image_path,sizeof live_image_path,"%s",next);return true;
+}
+Color pill_color(pill::Id r,pill::Id g,pill::Id b,pill::Id a){
+    const auto c=pill::ink(r,g,b,a);return {c.r,c.g,c.b,c.a};
+}
 void place_live(Builder& b){
-    const int corner=st.set[kPillCorner];
-    const float width=kPillSegment+5.6f+live_time_w+5.6f+15.4f+3.36f+live_count_w+
-                      5.6f+0.7f+5.6f+kPillIcon+6.72f;
-    const float x=corner%2?1920-width:0,y=corner<2?0:1080-kPillH;
-    char name[32];
-    std::snprintf(name,sizeof name,"live_segment_%d",corner);art(b,live_segment,name);
-    std::snprintf(name,sizeof name,"live_end_%d",corner);art(b,live_end,name);
-    b.set_rect(live_segment,{x,y,kPillSegment,kPillH});
-    b.set_rect(live_body,{x+kPillSegment,y,width-kPillSegment-kPillEnd,kPillH});
-    b.set_rect(live_end,{x+width-kPillEnd,y,kPillEnd,kPillH});
-    b.set_rect(live_icon,{x+(kPillSegment-kPillIcon)/2,y+(kPillH-kPillIcon)/2,kPillIcon,kPillIcon});
-    float at=x+kPillSegment+5.6f;
-    b.set_rect(live_time,{at,y,live_time_w,kPillH});at+=live_time_w+5.6f;
-    b.set_rect(live_eye,{at,y+6.3f,15.4f,15.4f});at+=15.4f+3.36f;
-    b.set_rect(live_count,{at,y,live_count_w,kPillH});at+=live_count_w+5.6f;
-    b.set_rect(live_rule,{at,y+8.4f,0.7f,11.2f});at+=0.7f+5.6f;
-    b.set_rect(live_mic,{at,y+(kPillH-kPillIcon)/2,kPillIcon,kPillIcon});
+    const auto layout=pill::layout(st.set[kPillCorner],pill::get(pill::InsetX),pill::get(pill::InsetY),live_time_w,live_count_w);
+    if(layout.corner!=live_cached_corner||layout.background.w!=live_cached_width){
+        live_cached_corner=layout.corner;live_cached_width=layout.background.w;
+        live_background_ready=live_raster(layout,b);
+    }
+    // Raster failure must not hide native labels/icons or display an old-corner shape.
+    show(b,live_background,live_background_ready);
+    if(live_background)b.set_rect(live_background,layout.background);
+    if(live_icon)b.set_rect(live_icon,layout.live);
+    b.set_rect(live_time,layout.time);
+    if(live_eye)b.set_rect(live_eye,layout.eye);
+    b.set_rect(live_count,layout.count);
+    if(live_mic)b.set_rect(live_mic,layout.mic);
 }
 
 void render(Builder& b){
@@ -812,25 +876,33 @@ void render(Builder& b){
     // Independent LIVE pill; card mode never gates it. Both hide under the panel.
     const bool live_on=!open&&st.state!='x'&&st.live[0];
     b.set_text(live_time,st.live);
-    char viewers[16];std::snprintf(viewers,sizeof viewers,"%d",st.viewers);
+    char viewers[16];std::snprintf(viewers,sizeof viewers,"%d",int(pill::clamp(float(st.viewers),0,9999)));
     b.set_text(live_count,viewers);
     const int time_len=int(std::strlen(st.live)),count_len=int(std::strlen(viewers));
     if(time_len!=live_time_len||count_len!=live_count_len){
         live_time_len=time_len;live_count_len=count_len;
-        char widest[16];int i=0;
-        for(;st.live[i]&&i<15;i++)widest[i]=st.live[i]==':'?':':'8';widest[i]=0;
-        b.set_text(live_time_probe,widest);
-        for(i=0;i<count_len&&i<15;i++)widest[i]='8';widest[i]=0;
-        b.set_text(live_count_probe,widest);
-        live_time_w=time_len<=5?37.8f:54.6f+8.4f*(time_len-7);
-        live_count_w=count_len<2?16.8f:8.4f*count_len;
-        live_probe_wait=2;
+        // Same ten widest-digit probes as the lab, including proportional fonts where
+        // 0 is wider than 8. Never remeasure an actual ticking timer in width mode 0.
+        for(int digit=0;digit<10;digit++){
+            char t[16]{},c[16]{};
+            for(int i=0;i<time_len&&i<15;i++)t[i]=st.live[i]==':'?':':char('0'+digit);
+            for(int i=0;i<count_len&&i<15;i++)c[i]=char('0'+digit);
+            b.set_text(live_time_probes[digit],t);b.set_text(live_count_probes[digit],c);
+        }
+        live_time_w=pill::snap(pill::get(pill::FontSize)*.70f*time_len);
+        live_count_w=pill::snap(pill::get(pill::FontSize)*.70f*count_len);
+        live_probe_wait=3;
     }
-    place_live(b);
-    art(b,live_mic,st.me=='o'?"mic":"mic_off_red");
-    void* const live_parts[]={live_segment,live_body,live_end,live_icon,live_time,live_eye,
-                             live_count,live_rule,live_mic,live_time_probe,live_count_probe};
+    if(live_on)place_live(b);
+    if(live_mic){
+        art(b,live_mic,st.me=='o'?"mic":"mic_off");
+        b.set_tint(live_mic,st.me=='o'?pill_color(pill::MicR,pill::MicG,pill::MicB,pill::MicAlpha):
+            pill_color(pill::MutedR,pill::MutedG,pill::MutedB,pill::MicAlpha));
+    }
+    void* const live_parts[]={live_icon,live_time,live_eye,live_count,live_mic};
     for(void* w:live_parts)show(b,w,live_on);
+    show(b,live_background,live_on&&live_background_ready);
+    for(int i=0;i<10;i++){show(b,live_time_probes[i],live_on);show(b,live_count_probes[i],live_on);}
 
     // C: only talkers. Keep the 56 px rings and 60 px row stride.
     int talking=0;
@@ -843,7 +915,7 @@ void render(Builder& b){
     const float ch=kCardPadding+60.0f*talking;
     const int corner=st.set[kCardCorner];
     const float cx=corner%2?kCardX:31;
-    const float inset=live_on&&corner==st.set[kPillCorner]?kPillH+14:kCardY;
+    const float inset=live_on&&corner==st.set[kPillCorner]?pill::get(pill::Height)+14:kCardY;
     const float cy=corner<2?inset:1080-inset-ch;
     if(talking){char bg[16];std::snprintf(bg,sizeof bg,"glance_%d",talking);art(b,card,bg);}
     b.set_rect(card,{cx,cy,kCardW,ch});
@@ -946,9 +1018,13 @@ void reset(){
     kb=false;kb_text[0]=0;kb_len=kb_chars=kb_caret=0;kb_shift=kb_page=0;kb_row=1;kb_col=0;kb_x=0.5f;kb_sx=kb_sy=0;
     kb_field=kb_input=kb_pages=kb_hl=kb_measure=kb_bar=nullptr;kb_blink=kb_hold=0;kb_shown[0]=0;kb_style=-1;
     dock=dock_mid=dock_end=title=clock=timer=timer_probe=tile_sub=tile_focus=rule=nullptr;std::snprintf(timer_shown,sizeof timer_shown,"\x01");probe_wait=0;timer_w=0;
-    card=live_segment=live_body=live_end=live_icon=live_time=live_eye=live_count=live_rule=live_mic=nullptr;
-    live_time_probe=live_count_probe=nullptr;live_time_len=live_count_len=live_probe_wait=0;
-    live_time_w=37.8f;live_count_w=16.8f;
+    pill::preset(2);
+    card=live_background=live_icon=live_time=live_eye=live_count=live_mic=nullptr;
+    for(void*& w:live_time_probes)w=nullptr;
+    for(void*& w:live_count_probes)w=nullptr;
+    live_time_len=live_count_len=live_probe_wait=0;live_time_w=live_count_w=0;
+    live_cached_corner=-1;live_cached_width=-1;live_background_ready=false;live_image_path[0]=0;
+    // live_cleanup_done intentionally survives reset: at most one scan per session.
     for(int i=0;i<kRows;i++)row_bg[i]=row_avatar[i]=row_ring[i]=row_name[i]=row_icon[i]=nullptr;
     for(int i=0;i<kTiles;i++)tile[i]=tile_icon[i]=tile_label[i]=nullptr;
     for(int i=0;i<4;i++)hint_icon[i]=hint_text[i]=nullptr;
@@ -956,6 +1032,7 @@ void reset(){
 }
 
 bool build(Builder& b){
+    pill::preset(2);
     // A: the panel, back to front.
     dock=image(b,{kDockX,kDockY,kDockW,40},"dock_top");
     dock_mid=image(b,{kDockX,kDockY+40,kDockW,kDockH-80},"dock_mid");
@@ -1018,14 +1095,19 @@ bool build(Builder& b){
     for(void* w:drop_word)if(!w)return false;
 
     // LIVE pill, independent of the talking card (placed in place_live).
-    live_segment=image(b,at,"live_segment_1");live_body=image(b,at,"live_body");live_end=image(b,at,"live_end_1");
-    live_icon=image(b,at,"golive");
-    live_time=label(b,at,13.3f,0,kWhite,1);
-    live_eye=image(b,at,"eye");if(live_eye)b.set_tint(live_eye,kDim);
-    live_count=label(b,at,13.3f,0,kWhite,1);
-    live_rule=image(b,at,"live_divider");live_mic=image(b,at,"mic");
-    live_time_probe=label(b,{0,0,200,28},13.3f,0,Color{1,1,1,0});
-    live_count_probe=label(b,{0,0,200,28},13.3f,0,Color{1,1,1,0});
+    live_background=b.add_image(at,"");live_icon=image(b,at,"golive");
+    const float live_size=pill::get(pill::FontSize);const int live_weight=int(pill::get(pill::FontWeight));
+    const auto live_ink=pill_color(pill::TextR,pill::TextG,pill::TextB,pill::TextAlpha);
+    live_time=label(b,at,live_size,live_weight,live_ink,int(pill::get(pill::TimeAlign)));
+    live_eye=image(b,at,"eye");live_count=label(b,at,live_size,live_weight,live_ink,1);
+    live_mic=image(b,at,"mic");
+    if(live_icon)b.set_tint(live_icon,pill_color(pill::LiveR,pill::LiveG,pill::LiveB,pill::LiveAlpha));
+    if(live_eye)b.set_tint(live_eye,pill_color(pill::EyeR,pill::EyeG,pill::EyeB,pill::EyeAlpha));
+    for(int i=0;i<10;i++){
+        live_time_probes[i]=label(b,{0,0,512,96},live_size,live_weight,Color{1,1,1,0});
+        live_count_probes[i]=label(b,{0,0,256,96},live_size,live_weight,Color{1,1,1,0});
+        if(!live_time_probes[i]||!live_count_probes[i])return false;
+    }
     b.set_text_valign(live_time,2);b.set_text_valign(live_count,2);
 
     // C: the talking-only card.
@@ -1072,7 +1154,7 @@ bool build(Builder& b){
     kb_bar=image(b,at,"kb_caret");if(kb_bar)b.set_tint(kb_bar,kCoral);
 
     // Text is the overlay's job; pictures may be missing on a firmware without ImageBox.
-    if(!title||!timer||!tile_sub||!live_time||!live_count||!live_time_probe||!live_count_probe)return false;
+    if(!title||!timer||!tile_sub||!live_time||!live_count)return false;
     for(void* w:row_name)if(!w)return false;
     for(void* w:tile_label)if(!w)return false;
     for(void* w:talk_name)if(!w)return false;
@@ -1341,11 +1423,17 @@ void on_tick(std::uint64_t frame,Builder& b){
         pill_x=pill_from+(pill_target()-pill_from)*e;
         b.set_rect(tab_on,{pill_x,kStripY+4,167,56});}
     if(reveal&&open&&!--reveal)render(b); // the content, laid out by now
-    if(live_probe_wait&&!open&&st.live[0]&&!--live_probe_wait){
-        const float tw=b.text_width(live_time_probe),cw=b.text_width(live_count_probe);
-        if(tw>0&&tw+2>live_time_w)live_time_w=tw+2;
-        if(cw>0&&cw+2>live_count_w)live_count_w=cw+2;
-        place_live(b);}
+    if(live_probe_wait&&!open&&st.state!='x'&&st.live[0]&&!--live_probe_wait){
+        float tw=0,cw=0;
+        for(int i=0;i<10;i++){
+            const float t=b.text_width(live_time_probes[i]),c=b.text_width(live_count_probes[i]);
+            if(std::isfinite(t)&&t>tw&&t<400)tw=t;
+            if(std::isfinite(c)&&c>cw&&c<200)cw=c;
+        }
+        if(tw>0)live_time_w=pill::snap(tw+.5f);
+        if(cw>0)live_count_w=pill::snap(cw+.5f);
+        place_live(b);
+    }
     if(probe_wait&&open&&!--probe_wait){ // the widest timer text, laid out by now
         const float w=b.text_width(timer_probe);
         if(w>0){timer_w=w;place_timer(b);}}

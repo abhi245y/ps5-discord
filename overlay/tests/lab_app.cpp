@@ -58,6 +58,8 @@ int main(){
     on_pad(kCircle,0,0,b);assert(!host_capture&&!captured&&static_cast<Widget*>(background)->visible);
     selected=lab::Muted;const float muted=lab::get(lab::Muted);on_pad(kCross,0,0,b);assert(lab::get(lab::Muted)==muted);
     on_gesture(oui::Gesture::Chord,b);assert(host_capture&&captured);
+    on_pad(kTriangle,0,0,b);assert(lab::get(lab::Preset)==2&&lab::get(lab::Height)==26.5f);
+    on_pad(kTriangle,0,0,b);assert(lab::get(lab::Preset)==0&&lab::get(lab::Height)==32);
     const float height=lab::get(lab::Height);on_text("3|x|m|0||0",b);on_chat("garbage",b);assert(lab::get(lab::Height)==height);
     tick(31000);assert(host_capture&&static_cast<Widget*>(background)->visible&&commands==0);
     for(int i=0;i<used;i++)for(float v:{widgets[i].r.x,widgets[i].r.y,widgets[i].r.w,widgets[i].r.h}){

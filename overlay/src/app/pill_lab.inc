@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Standalone synthetic Go Live pill. No commands, feeds, core, or session state.
-#include "pill_lab_model.hpp"
+#include "live_pill.hpp"
 #include <ctime>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -39,7 +39,6 @@ std::uint64_t lab_now(){
 #endif
 }
 Color color(lab::Id r,lab::Id g,lab::Id b,lab::Id a){const auto c=lab::ink(r,g,b,a);return {c.r,c.g,c.b,c.a};}
-Rect rect(float x,float y,float w,float h){return {lab::snap(x),lab::snap(y),lab::snap(w),lab::snap(h)};}
 bool directory(){
     // Parent normally exists (worker log/request directory). Also support a fresh install.
 #ifndef PILL_LAB_HOST
@@ -162,15 +161,8 @@ bool raster_image(Builder& b,const lab::Shape& shape){
 }
 void render(Builder& b,bool force=false){
     format_time();prepare_probes(b);
-    const float h=lab::get(lab::Height),gap=lab::get(lab::Gap),segment=lab::get(lab::SegmentWidth);
-    const float tx=segment+lab::get(lab::PaddingLeft),ex=tx+time_width+gap;
-    const float cx=ex+lab::get(lab::EyeSize)+lab::get(lab::EyeGap),dx=cx+count_width+gap;
-    const float rule=lab::get(lab::Divider)?lab::get(lab::DividerWidth):0;
-    const float mx=dx+(rule>0?rule+gap:0),w=lab::snap(mx+lab::get(lab::MicSize)+lab::get(lab::PaddingRight));
-    const int corner=int(lab::get(lab::Corner));
-    const float x=corner%2?1920-w-lab::get(lab::InsetX):lab::get(lab::InsetX);
-    const float y=corner<2?lab::get(lab::InsetY):1080-h-lab::get(lab::InsetY);
-    const auto shape=lab::shape(w,dx);const auto now=lab_now();
+    const auto layout=lab::layout(time_width,count_width);
+    const auto shape=lab::shape(layout.background.w,layout.divider_x,layout.corner);const auto now=lab_now();
     if(!lab::same(shape,wanted_shape)){wanted_shape=shape;shape_since=now;}
     if((!have_shape||!lab::same(shape,rendered_shape))&&(force||(now-last_change>=150&&now-shape_since>=150))&&
        (force||!last_raster_attempt||now-last_raster_attempt>=150)){
@@ -178,13 +170,9 @@ void render(Builder& b,bool force=false){
         if(!raster_image(b,shape))std::snprintf(status,sizeof status,"PNG failed: check lab directory / image support");
     }
     // Keep the last valid image while repeats settle; native content updates immediately.
-    b.set_rect(background,rect(x,y,w,h));
-    const float live=lab::get(lab::LiveSize),es=lab::get(lab::EyeSize),ms=lab::get(lab::MicSize);
-    b.set_rect(live_icon,rect(x+(segment-live)/2,y+(h-live)/2,live,live));
-    b.set_rect(time_label,rect(x+tx,y+lab::get(lab::TimeY),time_width,h));
-    b.set_rect(eye,rect(x+ex,y+(h-es)/2,es,es));
-    b.set_rect(count_label,rect(x+cx,y+lab::get(lab::CountY),count_width,h));
-    b.set_rect(mic,rect(x+mx,y+(h-ms)/2,ms,ms));
+    b.set_rect(background,layout.background);
+    b.set_rect(live_icon,layout.live);b.set_rect(time_label,layout.time);
+    b.set_rect(eye,layout.eye);b.set_rect(count_label,layout.count);b.set_rect(mic,layout.mic);
     b.set_text(time_label,time_text);b.set_text(count_label,count_text);
     const Color text=color(lab::TextR,lab::TextG,lab::TextB,lab::TextAlpha);
     style(b,time_label,lab::get(lab::FontSize),int(lab::get(lab::FontWeight)),text,int(lab::get(lab::TimeAlign)));
@@ -254,7 +242,7 @@ void on_pad(std::uint32_t down,float,float,Builder& b){
     const bool repeat=(down&kPadRepeat)!=0;
     if(down&kCircle){captured=false;b.set_capture(false);render_editor(b);return;}
     if((down&kSquare)&&!repeat){editor_visible=!editor_visible;visible_editor(b);}
-    if((down&kTriangle)&&!repeat){lab::preset(1-int(lab::get(lab::Preset)));started=lab_now();dirty=true;last_change=lab_now();save_retry_at=0;}
+    if((down&kTriangle)&&!repeat){lab::preset((1+int(lab::get(lab::Preset)))%3);started=lab_now();dirty=true;last_change=lab_now();save_retry_at=0;}
     if(down&kUp)selected=(selected+lab::Count-1)%lab::Count;
     if(down&kDown)selected=(selected+1)%lab::Count;
     if(down&kLeft)change(-1,1);
