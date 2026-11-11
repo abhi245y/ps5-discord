@@ -12,7 +12,10 @@ from PIL import Image, ImageDraw, ImageFont
 HERE = os.path.dirname(__file__)
 ART = os.path.join(HERE, "../../app/assets/overlay")
 BOLD = os.path.join(HERE, "../../app/third_party/fonts/NunitoSans-Bold.ttf")
-REGULAR = "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf"  # the preview only
+REGULAR = next((p for p in (
+    "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+) if os.path.isfile(p)), "DejaVuSans.ttf")  # the preview only
 
 
 def tinted(img, tint):
@@ -42,12 +45,17 @@ def render(txt):
             name = os.path.basename(path)
             if "/av/" in path:
                 img = avatar(box[2])
+            elif path and os.path.isfile(path):
+                img = Image.open(path).convert("RGBA")
             elif not name or not os.path.exists(os.path.join(ART, name)):
                 continue
             else:
                 img = Image.open(os.path.join(ART, name)).convert("RGBA")
             img = tinted(img.resize((box[2], box[3]), Image.LANCZOS), tuple(map(float, tint.split(","))))
             screen.alpha_composite(img, (box[0], box[1]))
+        elif kind == "p":
+            panel = Image.new("RGBA", (box[2], box[3]), tuple(int(round(v * 255)) for v in map(float, tint.split(","))))
+            screen.alpha_composite(panel, (box[0], box[1]))
         elif kind == "l" and text:
             font = ImageFont.truetype(BOLD if weight in (1, 3) else REGULAR, max(8, int(size)))
             col = tuple(int(round(v * 255)) for v in map(float, ink.split(",")))
@@ -60,7 +68,8 @@ def render(txt):
                 tw = d.textlength(text, font=font)
             tx = box[0] if align == 0 else box[0] + (box[2] - tw) / 2 if align == 1 else box[0] + box[2] - tw
             d.text((tx, box[1] + box[3] / 2), text, font=font, fill=col, anchor="lm")
-            d.rectangle(box[:2] + (box[0] + box[2], box[1] + box[3]), outline=(255, 0, 255, 60))
+            if not os.path.basename(txt).startswith("lab-"):
+                d.rectangle(box[:2] + (box[0] + box[2], box[1] + box[3]), outline=(255, 0, 255, 60))
     out = txt[:-4] + ".png"
     screen.convert("RGB").save(out)
     return out

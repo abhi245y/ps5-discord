@@ -4,7 +4,19 @@
 // overlay/tools/preview.py draws them with the real art and font:
 //   build/preview <dir> && python3 tools/preview.py <dir>
 #include "../src/app/overlay_ui.hpp"
+#ifdef OVERLAY_APP_LAB
+#include <cstdint>
+#include <sys/stat.h>
+static char lab_host_dir[160]="build/lab-preview-out/lab";
+static std::uint64_t lab_host_ms=100000;
+#define PILL_LAB_HOST
+#define PILL_LAB_DIR lab_host_dir
+#define PILL_LAB_LOG "build/lab-preview-worker.log"
+#define PILL_LAB_NOW_MS() lab_host_ms
+#include "../src/app/pill_lab.inc"
+#else
 #include "../src/app/discord_app.inc"
+#endif
 #include <cstdio>
 #include <cstring>
 
@@ -21,17 +33,19 @@ Widget widgets[200];
 int used=0;
 
 void* add(char kind,const oui::Rect* r,const char* s){
+    if(used>=200)return nullptr;
     Widget& w=widgets[used++];
     w.kind=kind;w.r=*r;
     std::snprintf(kind=='i'?w.path:w.text,kind=='i'?200:700,"%s",s?s:"");
     return &w;
 }
-void* add_panel(void*,const oui::Rect* r,const oui::Color*){return add('p',r,nullptr);}
+void* add_panel(void*,const oui::Rect* r,const oui::Color* c){
+    auto* w=static_cast<Widget*>(add('p',r,nullptr));if(w)w->tint=*c;return w;}
 void* add_label(void*,void*,const oui::Rect* r,const char* t){return add('l',r,t);}
 void* add_image(void*,const oui::Rect* r,const char* p){return add('i',r,p);}
 bool set_text(void*,void* w,const char* t){std::snprintf(static_cast<Widget*>(w)->text,700,"%s",t);return true;}
 bool set_visible(void*,void* w,bool on){if(w)static_cast<Widget*>(w)->visible=on;return true;}
-bool set_color(void*,void*,const oui::Color*){return true;}
+bool set_color(void*,void* w,const oui::Color* c){static_cast<Widget*>(w)->tint=*c;return true;}
 bool set_image(void*,void* w,const char* p){std::snprintf(static_cast<Widget*>(w)->path,200,"%s",p);return true;}
 bool set_tint(void*,void* w,const oui::Color* c){static_cast<Widget*>(w)->tint=*c;return true;}
 bool set_style(void*,void* w,float size,int weight,const oui::Color* c,int align){
@@ -58,15 +72,52 @@ void dump(const char* dir,const char* name){
     std::fclose(f);
 }
 
+#ifndef OVERLAY_APP_LAB
 const char* kSet="0.5.5.1.0.3.1.1.1.0.0.1.1";
+#endif
 }
 
+#ifndef PILL_LAB_TEST
 int main(int argc,char** argv){
     const char* dir=argc>1?argv[1]:".";
+#ifdef OVERLAY_APP_LAB
+    if(std::snprintf(lab_host_dir,sizeof lab_host_dir,"%s/lab",dir)>=int(sizeof lab_host_dir))return 1;
+    (void)mkdir(dir,0700);(void)mkdir(lab_host_dir,0700);
+#endif
     using namespace oui::app;
     oui::Builder b{&vt,nullptr};
     reset();used=0;
     if(!build(b))return 1;
+#ifdef OVERLAY_APP_LAB
+    // These snapshots exercise the actual app, not a second layout implementation.
+    auto snapshot=[&](const char* name){
+        lab_host_ms+=200;on_tick(1,b);on_tick(2,b);on_tick(3,b);
+        lab_host_ms+=200;on_tick(4,b);
+        // The app retires its previous PNG after swapping. Preserve each snapshot's art.
+        auto* image=static_cast<Widget*>(background);
+        char archived[200];std::snprintf(archived,sizeof archived,"%s/%s-pill.png",dir,name);
+        FILE* src=std::fopen(image->path,"rb");FILE* dst=std::fopen(archived,"wb");
+        if(!src||!dst){if(src)std::fclose(src);if(dst)std::fclose(dst);return false;}
+        unsigned char buf[4096];std::size_t n=0;bool ok=true;
+        while((n=std::fread(buf,1,sizeof buf,src))>0)if(std::fwrite(buf,1,n,dst)!=n){ok=false;break;}
+        ok=ok&&!std::ferror(src);std::fclose(src);if(std::fclose(dst)!=0)ok=false;
+        if(!ok)return false;
+        char prior[200];std::snprintf(prior,sizeof prior,"%s",image->path);
+        std::snprintf(image->path,sizeof image->path,"%s",archived);dump(dir,name);
+        std::snprintf(image->path,sizeof image->path,"%s",prior);return true;
+    };
+    pill_lab::preset(0);render(b);if(!snapshot("lab-original-editor"))return 1;
+    on_pad(kSquare,0,0,b);if(!snapshot("lab-original-alone"))return 1;
+    on_pad(kTriangle,0,0,b);if(!snapshot("lab-notch-alone"))return 1;
+    on_pad(kSquare,0,0,b);if(!snapshot("lab-notch-editor"))return 1;
+    for(int c=0;c<4;c++){
+        pill_lab::preset(1);pill_lab::set(pill_lab::Corner,float(c));render(b);
+        char name[40];std::snprintf(name,sizeof name,"lab-notch-corner-%d",c);
+        if(!snapshot(name))return 1;
+    }
+    pill_lab::preset(0);pill_lab::set(pill_lab::LongTime,1);pill_lab::set(pill_lab::Viewers,128);
+    pill_lab::set(pill_lab::Muted,1);render(b);if(!snapshot("lab-long-muted"))return 1;
+#else
     char line[1024];
     auto feed=[&](const char* people,const char* live="",const char* set=kSet,char me='o',int viewers=3,int glance=1){
         std::snprintf(line,sizeof line,"3|c|%c|%d|%s|%d|Raid Night|42:10|720p \xc2\xb7 30 fps|%s|2~68:A5~68:A5^AirPods Pro;00:1B^Buds|%s",
@@ -152,6 +203,9 @@ int main(int argc,char** argv){
     chat_feed("H\tc\t555\t#raid-night\tNight Shift\t\t0\t\n",mentions);
     on_pad(0x80,0,0,b);dump(dir,"chat-loading");
     pend_until=0;chat_feed("H\tc\t556\t#gta-online\tRockstar Games\t\t0\t2\t1\n",convo);dump(dir,"chat-other"); // from a mention: Square goes back
+#endif
     std::printf("preview: %d widgets\n",used);
     return 0;
 }
+
+#endif // PILL_LAB_TEST

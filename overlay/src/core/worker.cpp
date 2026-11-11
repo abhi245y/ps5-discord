@@ -58,7 +58,9 @@ std::atomic<bool> holding{false};
 std::atomic<bool> repeat_reset{false}; // capture went on: no button counts as held from before
 std::atomic<int> game_app{-1};
 std::atomic<std::uint64_t> last_input_ms{0};
+#ifndef OVERLAY_APP_LAB
 constexpr std::uint64_t hold_idle_ms=30000;  // no button reaches us this long: give it back
+#endif
 // UI thread only. Pinned (1) handles like the reference: scene graph objects
 // and the captured Application instance survive GC moves.
 std::uint32_t app_handle=0,root_scene_handle=0,scene_handle=0,scene_root_handle=0;
@@ -626,9 +628,11 @@ void update_hook(Object* instance){
     if(gesture_requested.exchange(false,std::memory_order_acq_rel)){
         oui::app::on_gesture(oui::Gesture::Chord,builder);
         note("GESTURE chords=%u",chords.load());}
+#ifndef OVERLAY_APP_LAB
     if(holding.load()&&now_ms()-last_input_ms.load()>hold_idle_ms){
         // Nothing reached us for a while: maybe ShellUI sees no pad without focus. Close.
         release_game("idle");capture.store(false);oui::app::on_gesture(oui::Gesture::Chord,builder);}
+#endif
     if(capture.load(std::memory_order_acquire)){
         float x=0,y=0;std::uint32_t bx=stick_x.load(std::memory_order_relaxed),by=stick_y.load(std::memory_order_relaxed);
         std::memcpy(&x,&bx,4);std::memcpy(&y,&by,4);
