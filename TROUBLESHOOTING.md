@@ -92,6 +92,12 @@ dave`); without it every join fails with close code 4017. Release builds include
 **The second Go Live does not start.** After a Go Live, unplug the controller and plug it
 back in (the app asks you to).
 
+**Known issue: small motion hitches at 30 fps.** Some games (seen in 007 First Light at
+720p · 30 fps) show an occasional hitch in motion for viewers, while 60 fps looks smooth. The
+stream itself arrives evenly; the cause (the game's own frame rate dips, or how the PS5
+encoder picks 30 of the game's 60 frames) is not known yet. A 60 fps quality avoids it. If you
+see it, report it with the game and quality.
+
 **The controller does not work after a Go Live.** Unplug it and plug it back in. If the core
 was stopped while it held the controller, a reboot frees it.
 
