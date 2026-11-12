@@ -371,6 +371,18 @@ bool focusable(const Row &r)
 constexpr float kSecX = kMargin, kSecY = 140.0f, kSecW = 500.0f, kSecH = 84.0f, kSecGap = 12.0f; // nine fit above 994
 constexpr float kPanelX = 620.0f, kPanelY = 124.0f, kPanelW = 1920.0f - kMargin - kPanelX, kPanelH = 870.0f;
 constexpr float kRowX = kPanelX + 32.0f, kRowW = kPanelW - 64.0f, kRowY = 282.0f, kRowH = 96.0f, kRowGap = 12.0f;
+constexpr float kScrollMargin = 12.0f;
+
+// Content coordinates include room for the focus outline at both ends.
+Rect section_rect(int index)
+{
+    return {kScrollMargin, kScrollMargin + index * (kSecH + kSecGap), kSecW, kSecH};
+}
+
+Rect row_rect(int index)
+{
+    return {kScrollMargin, kScrollMargin + index * (kRowH + kRowGap), kRowW, kRowH};
+}
 
 void section_icon(DrawList &list, int section, float cx, float cy, Color c)
 {
@@ -458,7 +470,26 @@ static std::string app_version()
     return hui::read_content_version("/app0/sce_sys/param.json");
 }
 
-SettingsScreen::SettingsScreen(const Ink &ink) : ink_(ink), version_(app_version()) {}
+SettingsScreen::SettingsScreen(const Ink &ink) : ink_(ink), version_(app_version())
+{
+    sections_scroll_.set_bounds({kSecX - kScrollMargin, kSecY - kScrollMargin,
+                                 kSecW + 2.0f * kScrollMargin,
+                                 kPanelY + kPanelH - kSecY + 2.0f * kScrollMargin});
+    rows_scroll_.set_bounds({kRowX - kScrollMargin, kRowY - kScrollMargin,
+                             kRowW + 2.0f * kScrollMargin,
+                             kPanelY + kPanelH - 16.0f - kRowY + kScrollMargin});
+    for (ui::ScrollArea *scroll : {&sections_scroll_, &rows_scroll_})
+    {
+        scroll->style.margin = kScrollMargin;
+        scroll->style.clip_bleed = 0.0f; // keep the rows inside their viewport
+        scroll->style.edge_fade = 0.0f;
+        scroll->style.stick = false; // focus alone drives these lists
+        scroll->style.on_panel = true;
+        scroll->style.theme.text_muted = kDim;
+        scroll->style.theme.focus = kCoral;
+        scroll->style.theme.omega = 16.0f;
+    }
+}
 
 void SettingsScreen::open()
 {
@@ -468,6 +499,8 @@ void SettingsScreen::open()
     confirm_ = Confirm::none;
     pair_ = Pair::none;
     bt_open_ = false;
+    sections_scroll_.scroll_to(0.0f, 0.0f, true);
+    rows_scroll_.scroll_to(0.0f, 0.0f, true);
 }
 
 void SettingsScreen::start_pin()
@@ -721,6 +754,32 @@ bool SettingsScreen::update(const discord::Snapshot &s, const hui::InputFrame &i
                       std::vector<discord::Request> &requests, hui::Settings &app, bool &changed)
 {
     sent_time_ += dt;
+    const int previous_section = section_;
+    const bool stay = handle_input(s, input, feedback, requests, app, changed);
+
+    const std::vector<Row> rows = rows_for(section_, s, app, version_);
+    sections_scroll_.set_content_size(sections_scroll_.bounds().w,
+                                      kSectionCount * (kSecH + kSecGap) - kSecGap + 2.0f * kScrollMargin);
+    const float rows_height = rows.empty() ? 0.0f
+        : static_cast<float>(rows.size()) * (kRowH + kRowGap) - kRowGap + 2.0f * kScrollMargin;
+    rows_scroll_.set_content_size(rows_scroll_.bounds().w, rows_height);
+    if (section_ != previous_section || rows_scroll_.max_y() == 0.0f)
+        rows_scroll_.scroll_to(0.0f, 0.0f, true);
+    sections_scroll_.style.reduced_motion = app.reduced_motion;
+    rows_scroll_.style.reduced_motion = app.reduced_motion;
+    sections_scroll_.reveal(section_rect(section_), app.reduced_motion);
+    if (in_rows_ && row_ >= 0 && row_ < static_cast<int>(rows.size()))
+        rows_scroll_.reveal(row_rect(row_), app.reduced_motion);
+    // Advance even while a dialog is open so its background can finish scrolling.
+    sections_scroll_.update(dt);
+    rows_scroll_.update(dt);
+    return stay;
+}
+
+bool SettingsScreen::handle_input(const discord::Snapshot &s, const hui::InputFrame &input,
+                                  hui::ui::Feedback &feedback, std::vector<discord::Request> &requests,
+                                  hui::Settings &app, bool &changed)
+{
     if (pair_ != Pair::none)
     {
         update_pair(s, input, feedback, requests);
@@ -951,9 +1010,11 @@ void SettingsScreen::draw(const discord::Snapshot &s, const hui::Settings &app, 
     list.rounded_rect({0, 0, 1920, 1080}, 0.0f, kGround);
     ui::text(list, ink_.fonts.display, "Settings", kMargin, kTitleBaseline, kTitleSize, kText);
 
+    ui::Canvas canvas{list, ink_.fonts};
+    sections_scroll_.begin(canvas);
     for (int i = 0; i < kSectionCount; ++i)
     {
-        const Rect r{kSecX, kSecY + i * (kSecH + kSecGap), kSecW, kSecH};
+        const Rect r = section_rect(i);
         const bool chosen = i == section_;
         list.rounded_rect(r, kCardRadius, kRaised);
         list.circle(r.x + 56.0f, r.cy(), 34.0f, chosen ? Color::rgb(0xff7a59, 0.22f) : kRaisedHigh);
@@ -963,6 +1024,8 @@ void SettingsScreen::draw(const discord::Snapshot &s, const hui::Settings &app, 
         if (chosen)
             focus_outline(list, r, kCardRadius, in_rows_ ? 0.35f : 1.0f);
     }
+    sections_scroll_.end(canvas);
+    sections_scroll_.draw(canvas);
 
     const Rect panel{kPanelX, kPanelY, kPanelW, kPanelH};
     list.bordered_rect(panel, 28.0f, Color::rgb(0x1b1e24), 1.0f, kLine);
@@ -970,10 +1033,11 @@ void SettingsScreen::draw(const discord::Snapshot &s, const hui::Settings &app, 
     ui::text(list, ink_.fonts.regular, kSections[section_].about, kPanelX + 42.0f, kPanelY + 122.0f, 26.0f, kDim);
 
     const std::vector<Row> rows = rows_for(section_, s, app, version_);
+    rows_scroll_.begin(canvas);
     for (int i = 0; i < static_cast<int>(rows.size()); ++i)
     {
         const Row &row = rows[i];
-        const Rect r{kRowX, kRowY + i * (kRowH + kRowGap), kRowW, kRowH};
+        const Rect r = row_rect(i);
         const float right = r.x + r.w - 32.0f, cy = r.cy();
         list.push_opacity(row.soon ? 0.4f : 1.0f);
         // Controls are cards; facts are text on the panel, with a rule under them.
@@ -1035,6 +1099,8 @@ void SettingsScreen::draw(const discord::Snapshot &s, const hui::Settings &app, 
         if (in_rows_ && i == row_)
             focus_outline(list, r, kCardRadius, 1.0f);
     }
+    rows_scroll_.end(canvas);
+    rows_scroll_.draw(canvas);
 
     const bool on_slider = in_rows_ && row_ < static_cast<int>(rows.size()) &&
                            (rows[row_].kind == Kind::slider || rows[row_].kind == Kind::choice);

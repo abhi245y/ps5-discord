@@ -51,7 +51,7 @@ const app::ConceptInfo kInfo{
 constexpr app::TourStep kTour[] = {
     {0.9f, 0, Direction::none, "home"},
     // Settings (frame 11): Options from Home, sign out, Voice & audio, Go Live (pairing, quality),
-    // notifications, Appearance.
+    // Overlay (including its last row), notifications, Appearance.
     {0.4f, action_bit(Action::menu)},
     {0.8f, 0, Direction::none, "settings"},
     {0.4f, 0, Direction::right},
@@ -114,6 +114,9 @@ constexpr app::TourStep kTour[] = {
     {0.4f, 0, Direction::down},
     {0.4f, 0, Direction::down},
     {0.4f, 0, Direction::down},
+    {0.4f, 0, Direction::down},
+    {0.4f, 0, Direction::down},
+    {0.6f, 0, Direction::none, "settings-overlay-scrolled"},
     {0.4f, action_bit(Action::confirm)},
     {0.6f, 0, Direction::none, "settings-overlay-reload"},
     {0.4f, action_bit(Action::back)},

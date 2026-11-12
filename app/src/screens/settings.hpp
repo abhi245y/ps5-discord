@@ -11,6 +11,7 @@
 #include "core/settings.hpp"
 #include "discord/request.hpp"
 #include "screens/draw.hpp"
+#include "ui/components/scroll_area.hpp"
 
 namespace screens
 {
@@ -41,6 +42,7 @@ class SettingsScreen
     int section_ = 0;
     int row_ = 0;
     bool in_rows_ = false; // focus is on the rows, not the sections
+    hui::ui::ScrollArea sections_scroll_, rows_scroll_;
     enum class Confirm
     {
         none,
@@ -76,6 +78,9 @@ class SettingsScreen
     bool bt_open_ = false;
     int bt_at_ = 0;
 
+    bool handle_input(const discord::Snapshot &snapshot, const hui::InputFrame &input,
+                      hui::ui::Feedback &feedback, std::vector<discord::Request> &requests,
+                      hui::Settings &app_settings, bool &changed);
     void draw_bt(const discord::Snapshot &snapshot, DrawList &list) const;
     void update_bt(const discord::Snapshot &snapshot, const hui::InputFrame &input, hui::ui::Feedback &feedback,
                    std::vector<discord::Request> &requests);
