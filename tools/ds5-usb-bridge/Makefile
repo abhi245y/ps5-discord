@@ -7,7 +7,7 @@ PS5_CC := $(SDK)/bin/prospero-clang
 HOST_CC ?= cc
 DURATION_MS ?= 300000
 
-HEADERS := ds5_usb.h ds5_usb_pcm.h ds5_usb_format.h pcm_stream.h
+HEADERS := ds5_usb.h ds5_usb_owner.h ds5_usb_pcm.h ds5_usb_format.h pcm_stream.h
 SOURCES := bridge_main.c ds5_usb.c pcm_stream.c
 
 .PHONY: all clean test analyze

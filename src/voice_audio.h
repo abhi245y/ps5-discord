@@ -111,3 +111,10 @@ int vau_app_connected(void);
 // 1 while the authenticated USB PCM client owns audio (app socket stays parked).
 int vau_usb_connected(void);
 void vau_usb_release(void); // Release lease; worker deletes virtual pad and hands USB back.
+// Admission and reservation changes serialize with PCM acknowledgement under the engine mutex.
+void vau_usb_pause(int on);
+int vau_usb_blocked(void);
+int vau_remote_play_reserve(void); // 0 if another Remote Play USB lifetime still exists.
+void vau_remote_play_release(int usb_joined); // A timeout (0) must retain the reservation.
+int vau_remote_play_reserved(void);
+const char *vau_effective_owner(void); // app, bluetooth, controller, remote_play (actual audio route).

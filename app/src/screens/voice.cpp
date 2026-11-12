@@ -379,8 +379,11 @@ void VoiceRoom::draw(const discord::Snapshot &s, DrawList &list) const
     {
         // Go Live: what it is doing, or why it stopped.
         const bool failed = v.broadcast == "error";
-        const std::string line = v.broadcast == "live" && v.backend == "wireless" ? "Live"
-                                 : v.broadcast == "live"     ? "Live · the controller is the headset and plays the game"
+        const std::string line = v.broadcast == "live" && v.effective_owner == "remote_play"
+                                     ? "Live · controller mic, speaker and game input"
+                                 : v.broadcast == "live" && v.effective_owner == "controller"
+                                     ? "Live · call audio on the controller"
+                                 : v.broadcast == "live"     ? "Live"
                                  : v.broadcast == "starting" ? "Going live…"
                                                              : v.broadcast_error;
         ui::text(list, ink_.fonts.regular, fit(ink_.fonts.regular, line, 26.0f, 1300.0f), kMargin, 196.0f, 26.0f,
@@ -499,12 +502,12 @@ void VoiceRoom::draw(const discord::Snapshot &s, DrawList &list) const
         l.cy = card.y + card.h - 44.0f;
         ui::draw_hints(list, ink_.fonts, hint_glyphs(), pair_hints, 2, card.x + card.w - 48.0f, true, l);
     }
-    if (need_replug_ && v.backend == "remote_play") // ds5_usb_replug_state after Remote Play's bus reset
+    if (need_replug_ && v.backend == "remote_play") // Includes the controller-audio worker's handback.
         confirm_card(list, ink_, "Replug your controller",
                      v.replug == "unknown"
-                         ? "The console can't tell how your controller is connected. If Go Live used it since it "
+                         ? "The console can't tell how your controller is connected. If USB call audio used it since it "
                            "was plugged in, unplug and replug it first, or the PS button may end the stream."
-                         : "Go Live has used your controller since it was last plugged in. Unplug its USB cable "
+                         : "USB call audio has used your controller since it was last plugged in. Unplug its USB cable "
                            "and plug it back in first, or the PS button may ask who is using it and end the "
                            "stream.",
                      "Go Live");

@@ -1,10 +1,41 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The control API's request helpers (src/web.c, included for its statics): ids, query
 // strings, %-decoding, the image proxy's allowlist, the REST reply wrapper and the core key.
+#define vau_effective_owner web_effective_owner
 #include "../src/web.c"
+#undef vau_effective_owner
 
 #include <assert.h>
 #include <sys/stat.h>
+
+static const char *audio_owner = "app";
+const char *web_effective_owner(void)
+{
+    return audio_owner;
+}
+
+static void effective_owner_json(void)
+{
+    static const char *const owners[] = {"app", "bluetooth", "controller", "remote_play"};
+    for (unsigned i = 0; i < sizeof owners / sizeof owners[0]; ++i) {
+        audio_owner = owners[i];
+        char *json = voice_json();
+        assert(json);
+        cJSON *o = cJSON_Parse(json);
+        free(json);
+        assert(o);
+        cJSON *owner = cJSON_GetObjectItemCaseSensitive(o, "effective_owner");
+        assert(cJSON_IsString(owner) && !strcmp(owner->valuestring, owners[i]));
+        cJSON *output = cJSON_GetObjectItemCaseSensitive(o, "output");
+        const char *legacy = i == 0 ? "tv" : i == 1 ? "bluetooth" : "controller";
+        assert(cJSON_IsString(output) && !strcmp(output->valuestring, legacy));
+        cJSON *preferences = cJSON_GetObjectItemCaseSensitive(o, "prefs");
+        cJSON *saved = cJSON_GetObjectItemCaseSensitive(preferences, "controller_audio");
+        assert(cJSON_IsNumber(saved) && saved->valueint == prefs_get("controller_audio"));
+        cJSON_Delete(o);
+    }
+    audio_owner = "app";
+}
 
 // main.c's, which this test does not link.
 int core_sign_out(void)
@@ -46,6 +77,7 @@ static void rest_reply(int status, const char *body, char *out, size_t cap)
 
 int main(void)
 {
+    effective_owner_json();
     assert(is_id("1165665327712063540") && !is_id("") && !is_id("12a") && !is_id("1/../2"));
     assert(!is_id("123456789012345678901234")); // 24 digits: longer than any snowflake
 

@@ -73,4 +73,8 @@ int ds5_usb_replug_state(void);
 // Async-signal-safe: while the system's drivers are detached from the controller, hand it
 // back (re-enumerate) at once, for a crash handler or a stuck stop. Does nothing otherwise.
 void ds5_usb_rescue(void);
+// Called only while holding ds5-usb.lock, before a new takeover after a crash.
+int ds5_usb_recover(void);
+// Independent of stream success: did cleanup verify the physical handback?
+int ds5_usb_handback_verified(void);
 #endif

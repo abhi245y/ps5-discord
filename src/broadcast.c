@@ -33,6 +33,7 @@
 #include "voice.h"
 #ifdef __PROSPERO__
 #include "ds5_usb.h"
+#include "ds5_usb_owner.h"
 #endif
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
@@ -389,6 +390,23 @@ static int usb_service(void *user)
 static void *usb_main(void *arg)
 {
     (void)arg;
+    ds5_usb_owner owner = DS5_USB_OWNER_INIT;
+    int acquired = 1;
+    for (int i = 0; i < 300 && want && !quit; ++i) { // 30 s: the worker deletes its pad and hands back first
+        acquired = ds5_usb_owner_try(&owner, DS5_USB_OWNER_DIR, "remote_play", usb_log, NULL);
+        if (acquired != 1)
+            break;
+        usleep(100000);
+    }
+    if (acquired || !want || quit) {
+        if (!acquired)
+            (void)ds5_usb_owner_release(&owner, 1); // No takeover occurred.
+        LOG("broadcast: USB ownership unavailable or cancelled (%d)", acquired);
+        ds5_done = 1;
+        return NULL;
+    }
+    holding = 1;
+    (void)vau_ext_acquire(VAU_EXT_REMOTE_PLAY);
     ds5_usb_config config;
     ds5_usb_default_config(&config);
     config.duration_ms = 0; // until the broadcast ends
@@ -396,6 +414,14 @@ static void *usb_main(void *arg)
                                          .playback = usb_playback, .service = usb_service};
     ds5_usb_stats stats = {0};
     int r = ds5_usb_run(&config, &callbacks, NULL, &stats);
+    int verified = ds5_usb_handback_verified();
+    if (!verified) {
+        LOG("broadcast: handback not verified; recovering before releasing USB lock");
+        verified = ds5_usb_recover() == DS5_USB_OK;
+    }
+    if (ds5_usb_owner_release(&owner, verified))
+        LOG("broadcast: could not update USB taken marker");
+    holding = 0; // The lock, including physical recovery, is now released.
     LOG("broadcast: controller released (%d): mic %llu frames, played %llu, %llu reports", r,
         (unsigned long long)stats.microphone_frames, (unsigned long long)stats.playback_frames,
         (unsigned long long)stats.controller_reports);
@@ -445,10 +471,10 @@ static const char *run(void)
     ChiakiAudioSink audio = {NULL, audio_header_cb, audio_frame_cb};
     chiaki_session_set_audio_sink(&session, &audio);
     const char *why = NULL;
-    const int reserve_controller = mine && want;
+    const int reserve_controller = mine && want && vau_remote_play_reserve();
+    if (mine && want && !reserve_controller)
+        why = "Remote Play is still releasing the controller.";
     if (reserve_controller) {
-        cv_pause(1);
-        vau_usb_release();
         for (int i = 0; i < 300 && want && cv_holds_controller(); ++i)
             usleep(100000);
         if (cv_holds_controller())
@@ -467,12 +493,9 @@ static const char *run(void)
     if (!why && connected) {
         if (mine && want) { // not when Go Live was stopped (or the core quit) meanwhile
             LOG("broadcast: Remote Play connected, taking the controller");
-            (void)vau_ext_acquire(VAU_EXT_REMOTE_PLAY);
-            holding = 1;
             usb_running = pthread_create(&usb, NULL, usb_main, NULL) == 0;
-            holding = usb_running;
             if (!usb_running)
-                vau_ext_release(VAU_EXT_REMOTE_PLAY);
+                why = "The controller USB thread could not start.";
         } else // another console user's session: the controller stays the user's own
             LOG("broadcast: Remote Play connected as another console user; the controller stays yours");
         pthread_mutex_lock(&live_lock);
@@ -480,7 +503,7 @@ static const char *run(void)
         pthread_mutex_unlock(&live_lock);
         set_state("live", "");
         unsigned tick = 0;
-        while (want && !quit && !(usb_running && ds5_done) && voice_wanted()) {
+        while (!why && want && !quit && !(usb_running && ds5_done) && voice_wanted()) {
             usleep(200000);
             if (++tick % 25 == 0)
                 LOG("broadcast: %u video frames (%u keyframes), %u audio frames", frames, keyframes, audio_frames);
@@ -505,14 +528,17 @@ static const char *run(void)
             for (int i = 0; i < 20 && !ds5_done; i++)
                 usleep(100000);
         }
-        if (ds5_done)
-            pthread_join(usb, NULL);
-        else {
-            pthread_detach(usb);
-            LOG("broadcast: the USB thread is still stuck; Go Live cannot take the controller again "
-                "until the core restarts");
+        if (!ds5_done) {
+            vau_remote_play_release(0);
+            LOG("broadcast: USB thread still stuck; keeping reservation, USB lock and session until it exits");
         }
-        holding = 0;
+        // Retain the session too: a delayed USB callback must not touch a freed session.
+        // This broadcast worker is already detached; stop/API callers remain nonblocking.
+        int joined = pthread_join(usb, NULL);
+        if (joined) {
+            LOG("broadcast: USB join failed (%d); keeping reservation and session", joined);
+            return "The controller USB thread could not be joined. Restart the core.";
+        }
     }
     vau_ext_release(VAU_EXT_REMOTE_PLAY);
     if (started) { // its thread exists only then
@@ -521,7 +547,7 @@ static const char *run(void)
     }
     chiaki_session_fini(&session);
     if (reserve_controller)
-        cv_pause(0);
+        vau_remote_play_release(1);
     return why;
 }
 
@@ -541,11 +567,13 @@ static const char *rp_controller(void)
     static const char *last = "ok";
     static time_t at;
     static pthread_mutex_t once = PTHREAD_MUTEX_INITIALIZER;
-    // Only Go Live as the user on screen takes the controller, and not while it runs.
+    // Both processes publish handback history. Never scan while either owns USB.
     if (strcmp(bc_state(), "off") != 0 && strcmp(bc_state(), "error") != 0)
         return last;
     if (rp_used() < 0 || rp_used() != rp_foreground())
         return "ok";
+    if (ds5_usb_owner_busy(DS5_USB_OWNER_DIR))
+        return last;
     pthread_mutex_lock(&once);
     if (time(NULL) - at >= 2) { // the app asks every poll; a scan opens USB devices
         static const char *const names[] = {"ok", "replug", "unknown"};
@@ -614,6 +642,13 @@ int bc_start(void)
     }
     pthread_mutex_lock(&run_lock);
     const int b = running ? (int)backend : choose_backend();
+#ifdef __PROSPERO__
+    if (!running && b == REMOTE_PLAY && vau_remote_play_reserved()) {
+        pthread_mutex_unlock(&run_lock);
+        set_state("error", "Remote Play is still releasing the controller.");
+        return -1;
+    }
+#endif
     if (b == REMOTE_PLAY && rp_used() < 0) {
         pthread_mutex_unlock(&run_lock);
         set_state("error", "Remote Play is not paired with this console.");
@@ -688,7 +723,7 @@ void bc_request_keyframe(void)
 
 const char *bc_controller(void)
 {
-    // The wireless backend never touches the controller: nothing to unplug or replug.
+    // Only same-user Remote Play needs this prompt; its history includes worker handbacks.
     if (running_now ? backend == WIRELESS : choose_backend() == WIRELESS)
         return "ok";
     return rp_controller();

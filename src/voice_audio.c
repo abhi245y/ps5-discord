@@ -236,6 +236,7 @@ static OpusEncoder *enc_opus;
 static int listen_fd = -1, usb_listen_fd = -1;
 static pcm_clients audio_clients = PCM_CLIENTS_INIT;
 static _Atomic int usb_client, app_client;
+static _Atomic int usb_paused, remote_play_reserved;
 
 // the connection (set by vau_attach / vau_dave_state)
 static int attached, udp = -1;
@@ -455,7 +456,7 @@ static void check_pending(void)
         return;
     }
     if (pending_usb) {
-        int busy = audio_clients.usb;
+        int busy = audio_clients.usb || vau_usb_blocked();
 #ifdef __PROSPERO__
         busy = busy || bc_holds_controller();
 #endif
@@ -1162,4 +1163,55 @@ void vau_usb_release(void)
     if (audio_clients.usb)
         client_drop();
     pthread_mutex_unlock(&mu);
+}
+
+void vau_usb_pause(int on)
+{
+    pthread_mutex_lock(&mu);
+    usb_paused = !!on;
+    if (on && audio_clients.usb)
+        client_drop();
+    pthread_mutex_unlock(&mu);
+}
+
+int vau_usb_blocked(void)
+{
+    return usb_paused || remote_play_reserved;
+}
+
+int vau_remote_play_reserve(void)
+{
+    pthread_mutex_lock(&mu);
+    int acquired = !remote_play_reserved;
+    if (acquired) {
+        remote_play_reserved = 1;
+        if (audio_clients.usb)
+            client_drop();
+    }
+    pthread_mutex_unlock(&mu);
+    return acquired;
+}
+
+void vau_remote_play_release(int usb_joined)
+{
+    if (!usb_joined)
+        return;
+    pthread_mutex_lock(&mu);
+    remote_play_reserved = 0;
+    pthread_mutex_unlock(&mu);
+}
+
+int vau_remote_play_reserved(void)
+{
+    return remote_play_reserved;
+}
+
+const char *vau_effective_owner(void)
+{
+    pthread_mutex_lock(&mu);
+    const char *owner = audio_clients.usb ? "controller"
+                        : ext_owner == VAU_EXT_REMOTE_PLAY ? "remote_play"
+                        : ext_owner == VAU_EXT_BT ? "bluetooth" : "app";
+    pthread_mutex_unlock(&mu);
+    return owner;
 }

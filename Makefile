@@ -40,7 +40,7 @@ CHIAKI := third_party/chiaki-ng
 CHIAKI_SRC := $(wildcard $(CHIAKI)/src/*.c) $(CHIAKI)/src/remote/rudp.c $(CHIAKI)/src/remote/rudpsendbuffer.c \
 	$(CHIAKI)/gen/takion.pb.c $(addprefix third_party/nanopb/,pb_common.c pb_encode.c pb_decode.c) \
 	$(wildcard third_party/gf-complete/src/*.c) $(wildcard third_party/jerasure/src/*.c)
-PS5_ONLY_SRC = $(CHIAKI_SRC) $(DS5)/ds5_usb.c $(SBC_SRC)
+PS5_ONLY_SRC = $(CHIAKI_SRC) $(DS5)/ds5_usb.c $(DS5)/ds5_usb_owner.c $(SBC_SRC)
 # The Bluetooth headset (console only): BlueV's stack (third_party/bluev, C++) and ours (src/bt).
 BLUEV := third_party/bluev
 BLUEV_CXX := $(shell find $(BLUEV)/src/core $(BLUEV)/src/platform -name '*.cpp' | sort) $(wildcard src/bt/*.cpp)
@@ -198,11 +198,13 @@ build/host/%.o: %.c
 
 test: build/host/selftest build/host/browser-storage-test build/host/client-read-state-test build/host/gif-frames-test \
 		build/host/pcm-clients-test build/host/pcm-engine-test build/host/controller-prefs-test \
+		build/host/usb-owner-test \
 		build/host/ds5-usb-test build/host/web-test build/host/gateway-test build/host/update-test $(HOST_DAVE_TEST) \
 		build/host/golive-opus-test build/host/game-audio-test build/host/game-audio-tsan-test build/host/capture-test build/host/capture-io-test capture-test controller-audio-test
 	./build/host/selftest
 	./build/host/pcm-clients-test
 	./build/host/pcm-engine-test
+	./build/host/usb-owner-test
 	./build/host/controller-prefs-test
 	./build/host/golive-opus-test
 	./build/host/game-audio-test
@@ -221,6 +223,10 @@ test: build/host/selftest build/host/browser-storage-test build/host/client-read
 # Controller audio: ownership, preference persistence, and physical-input forwarding.
 controller-audio-test:
 	$(MAKE) -C tools/vpad-probe test HOST_CC="$(HOST_CC)"
+
+build/host/usb-owner-test: tests/usb_owner.c $(DS5)/ds5_usb_owner.c $(DS5)/ds5_usb_owner.h $(DS5)/ds5_usb.h
+	@mkdir -p $(@D)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -g -fsanitize=address,undefined -DUSB_OWNER_TEST_MAIN -I$(DS5) -o $@ tests/usb_owner.c $(DS5)/ds5_usb_owner.c
 
 build/host/pcm-clients-test: tests/pcm_clients.c src/pcm_clients.h
 	@mkdir -p $(@D)

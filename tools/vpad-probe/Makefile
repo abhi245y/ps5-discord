@@ -6,9 +6,12 @@ export LLVM_CONFIG ?= $(or $(shell command -v llvm-config),$(abspath ../llvm-con
 PS5_CC := $(SDK)/bin/prospero-clang
 HOST_CC ?= cc
 
-.PHONY: all game usb audio call restore call-restore service test clean
+.PHONY: all game orphan delete-handle usb audio call restore call-restore service test clean
 all: vpad-probe.elf
 game: vpad-game-probe.elf
+# Both research targets read vpad-probe-mode; absent file keeps the existing sequence.
+orphan: vpad-orphan-probe.elf
+delete-handle: vpad-delete-handle-probe.elf
 usb: vpad-usb-probe.elf
 audio: vpad-usb-audio-probe.elf
 call: vpad-usb-call-probe.elf
@@ -16,7 +19,7 @@ restore: vpad-usb-restore-probe.elf
 call-restore: vpad-usb-call-restore-probe.elf
 service: controller-audio.elf
 
-vpad-probe.elf: vpad_probe.c Makefile
+vpad-probe.elf vpad-orphan-probe.elf vpad-delete-handle-probe.elf: vpad_probe.c Makefile
 	@echo "  CC    $@"
 	@PS5_PAYLOAD_SDK=$(SDK) $(PS5_CC) -std=gnu11 -Wall -Wextra -Werror -O2 -o $@ $< -lkernel_sys -lSceUserService
 
@@ -25,9 +28,9 @@ vpad-game-probe.elf: vpad_probe.c Makefile
 	@PS5_PAYLOAD_SDK=$(SDK) $(PS5_CC) -std=gnu11 -Wall -Wextra -Werror -O2 -DPROBE_RESUME_GAME=1 -o $@ $< -lkernel_sys -lSceUserService
 
 # USB variants share the same runtime, IPC, and virtual-input implementation.
-USB_SOURCES := vpad_probe.c ../ds5-usb-bridge/ds5_usb.c
+USB_SOURCES := vpad_probe.c ../ds5-usb-bridge/ds5_usb.c ../ds5-usb-bridge/ds5_usb_owner.c
 USB_HEADERS := usb_forward.inc usb_forward_report.h usb_call.inc usb_test_tone.h \
-	../ds5-usb-bridge/ds5_usb.h ../ds5-usb-bridge/ds5_usb_pcm.h \
+	../ds5-usb-bridge/ds5_usb.h ../ds5-usb-bridge/ds5_usb_owner.h ../ds5-usb-bridge/ds5_usb_pcm.h \
 	../ds5-usb-bridge/ds5_usb_format.h ../ds5-usb-bridge/pcm_stream.h
 USB_TARGETS := vpad-usb-probe.elf vpad-usb-audio-probe.elf vpad-usb-call-probe.elf \
 	vpad-usb-restore-probe.elf vpad-usb-call-restore-probe.elf controller-audio.elf
@@ -46,9 +49,9 @@ $(USB_TARGETS): $(USB_SOURCES) $(USB_HEADERS) ../ds5-usb-bridge/pcm_stream.c Mak
 	@PS5_PAYLOAD_SDK=$(SDK) $(PS5_CC) -std=gnu11 -Wall -Wextra -Werror -O2 $(PROBE_FLAGS) \
 		-I../ds5-usb-bridge -o $@ $(USB_SOURCES) $(CALL_SOURCE) -lkernel_sys -lSceUserService -lpthread
 
-test: test_usb_forward.c usb_forward_report.h usb_test_tone.h ../ds5-usb-bridge/ds5_usb.h ../ds5-usb-bridge/ds5_usb_pcm.h ../ds5-usb-bridge/ds5_usb_format.h
-	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -g -fsanitize=address,undefined -I../ds5-usb-bridge -o usb-forward-test test_usb_forward.c -lpthread -lm
+test: test_usb_forward.c ../../tests/usb_owner.c ../ds5-usb-bridge/ds5_usb_owner.c ../ds5-usb-bridge/ds5_usb_owner.h usb_forward_report.h usb_test_tone.h ../ds5-usb-bridge/ds5_usb.h ../ds5-usb-bridge/ds5_usb_pcm.h ../ds5-usb-bridge/ds5_usb_format.h
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -g -fsanitize=address,undefined -I../ds5-usb-bridge -o usb-forward-test test_usb_forward.c ../../tests/usb_owner.c ../ds5-usb-bridge/ds5_usb_owner.c -lpthread -lm
 	./usb-forward-test
 
 clean:
-	rm -f vpad-probe.elf vpad-game-probe.elf vpad-usb-probe.elf vpad-usb-audio-probe.elf vpad-usb-call-probe.elf vpad-usb-restore-probe.elf vpad-usb-call-restore-probe.elf controller-audio.elf usb-forward-test
+	rm -f vpad-probe.elf vpad-game-probe.elf vpad-orphan-probe.elf vpad-delete-handle-probe.elf vpad-usb-probe.elf vpad-usb-audio-probe.elf vpad-usb-call-probe.elf vpad-usb-restore-probe.elf vpad-usb-call-restore-probe.elf controller-audio.elf usb-forward-test

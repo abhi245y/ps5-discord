@@ -255,6 +255,8 @@ static void on_crash(int sig)
     klog_printf("[discord] crashed: signal %d\n", sig);
 #endif
     bc_rescue_controller();
+    // Do not remove ds5-usb.taken here. Rescue cannot verify handback, nor reach a
+    // separate worker's USB fd; the next lock holder must recover any surviving marker.
     // End the process here: re-raising the signal left a crashed core alive on the console,
     // still holding the control port, so the app could not start a new one ("already running").
     _exit(128 + sig);

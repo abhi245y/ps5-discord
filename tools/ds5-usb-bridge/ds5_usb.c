@@ -14,6 +14,7 @@
 #include <time.h>
 #include <unistd.h>
 #include "ds5_usb_pcm.h"
+#include "ds5_usb_owner.h"
 
 #define FRAMES 16u
 #define MIC_PACKET 196u
@@ -29,6 +30,7 @@ static atomic_int rescue_fd = -1; // the device while its system drivers are det
 // a replug makes a new device with a new one. plug_unknown: the console would not say.
 static atomic_uint handed_plug;
 static atomic_int plug_unknown;
+static atomic_int handback_verified = 1;
 static atomic_flag running = ATOMIC_FLAG_INIT;
 static struct {
     ds5_usb_config config;
@@ -295,6 +297,121 @@ static int complete_one(int fd, unsigned *slot)
     return 1;
 }
 
+// Handback status survives worker exit. Rename keeps API readers off partial writes.
+static int save_handback(int verified)
+{
+    const char *path = DS5_USB_OWNER_DIR "/" DS5_USB_HANDBACK;
+    const char *temporary = DS5_USB_OWNER_DIR "/" DS5_USB_HANDBACK ".tmp";
+    FILE *f = fopen(temporary, "w");
+    if (!f) {
+        log_line("could not open USB handback status errno %d", errno);
+        return -1;
+    }
+    int ok = fprintf(f, "%u %d %d\n", atomic_load(&handed_plug),
+                     atomic_load(&plug_unknown), verified) > 0;
+    if (fflush(f) || fsync(fileno(f)))
+        ok = 0;
+    if (fclose(f))
+        ok = 0;
+    if (ok && rename(temporary, path) == 0)
+        return 0;
+    unlink(temporary);
+    log_line("could not persist USB handback status errno %d", errno);
+    return -1;
+}
+
+// A successful reset request is insufficient: reopen and verify the system HID driver.
+static int verify_handback(void)
+{
+    for (int attempt = 0; attempt < 20; ++attempt) {
+        usleep(100000);
+        int fd = scan(1);
+        if (fd < 0)
+            continue;
+        struct ds5_mic_format formats[2];
+        uint8_t endpoints[2] = {0};
+        int hid = -1;
+        int verified = !discover(fd, formats, &hid, endpoints) &&
+                       !ioctl(fd, USB_IFACE_DRIVER_ACTIVE, &hid);
+        if (verified) {
+            uint32_t plugged = 0;
+            int unknown = ioctl(fd, USB_GET_PLUGTIME, &plugged) != 0;
+            atomic_store(&handed_plug, plugged ? plugged : 1);
+            atomic_store(&plug_unknown, unknown);
+        }
+        close(fd);
+        if (verified)
+            return 0;
+    }
+    return -1;
+}
+
+static int restore_controller(int fd, int hid, int saved_config)
+{
+#ifndef DS5_USB_RESTORE_CONFIG
+    (void)hid;
+    (void)saved_config;
+#endif
+    int rc = -1;
+#ifdef DS5_USB_RESTORE_CONFIG
+    /* Opt-in controller worker handback. FreeBSD 11 usb_generic.c's driver-detach
+     * path inhibits attachment until the next set-configuration event.
+     * Reapply only this device's saved index, then verify HID driver state.
+     * Verified with the USB worker on FW 13.00; retain the reset fallback.
+     * https://github.com/freebsd/freebsd-src/blob/releng/11.0/sys/dev/usb/usb_generic.c */
+    if (saved_config >= 0) {
+#if DS5_USB_RESTORE_CONFIG >= 2
+        /* Reapplying the current index can be a no-op in FreeBSD. A
+         * distinct unconfigured state forces an actual configuration
+         * transition. Only this already-owned controller is affected. */
+        int unconfigured = USB_UNCONFIG_INDEX;
+        int unconfig_rc = ioctl(fd, USB_SET_CONFIG, &unconfigured);
+        log_line("handback unconfigure rc %d errno %d", unconfig_rc,
+                 unconfig_rc ? errno : 0);
+        if (!unconfig_rc) {
+            for (int attempt = 0; attempt < 10; ++attempt) {
+                int current = -1;
+                if (!ioctl(fd, USB_GET_CONFIG, &current) && current == USB_UNCONFIG_INDEX) {
+                    log_line("handback unconfigured state confirmed");
+                    break;
+                }
+                usleep(100000);
+            }
+        }
+#endif
+        int reset_rc = ioctl(fd, USB_SET_CONFIG, &saved_config);
+        log_line("handback restore config index %d rc %d errno %d",
+                 saved_config, reset_rc, reset_rc ? errno : 0);
+        if (!reset_rc) {
+            for (int attempt = 0; attempt < 10; ++attempt) {
+                int iface = hid;
+                if (!ioctl(fd, USB_IFACE_DRIVER_ACTIVE, &iface)) {
+                    rc = 0;
+                    log_line("handback HID driver reattached; press PS to wake controller");
+                    break;
+                }
+                usleep(100000);
+            }
+        }
+        if (rc)
+            log_line("handback restore not verified; using re-enumeration fallback");
+    }
+#endif
+    for (int i = 0; i < 3 && rc; i++) {
+        int zero = 0;
+        if (i)
+            usleep(200000);
+        rc = ioctl(fd, USB_DEVICEENUMERATE, &zero);
+        log_line("re-enumerate rc %d errno %d", rc, rc ? errno : 0);
+    }
+    int verified = rc == 0 && verify_handback() == 0;
+    if (save_handback(verified))
+        verified = 0; // Keep the marker if the core cannot learn the worker's reset.
+    atomic_store(&handback_verified, verified);
+    log_line("handback verified=%d", verified);
+    return verified ? 0 : -1;
+}
+
 static int run_usb(void)
 {
     int fd = -1, result = 1, detached = 0, initialized = 0, hid = -1, detaching = 0;
@@ -321,6 +438,7 @@ static int run_usb(void)
         if (ioctl(fd, USB_GET_ALTINTERFACE, &old[n]))
             goto cleanup;
     }
+    atomic_store(&handback_verified, 0);
     detaching = 1; // from here a failure may leave the pad detached (or find it so after a crash)
     if (formats[0].control_index != 255) {
         int parent = formats[0].control_index;
@@ -533,58 +651,13 @@ cleanup:
             atomic_store(&handed_plug, plugged ? plugged : 1);
             atomic_store(&plug_unknown, 0); // it answered this time
         }
-        int rc = -1;
+        int rc = restore_controller(fd, hid,
 #ifdef DS5_USB_RESTORE_CONFIG
-        /* Opt-in controller worker handback. FreeBSD 11 usb_generic.c's driver-detach
-         * path inhibits attachment until the next set-configuration event.
-         * Reapply only this device's saved index, then verify HID driver state.
-         * Verified with the USB worker on FW 13.00; retain the reset fallback.
-         * https://github.com/freebsd/freebsd-src/blob/releng/11.0/sys/dev/usb/usb_generic.c */
-        if (saved_config >= 0) {
-#if DS5_USB_RESTORE_CONFIG >= 2
-            /* Reapplying the current index can be a no-op in FreeBSD. A
-             * distinct unconfigured state forces an actual configuration
-             * transition. Only this already-owned controller is affected. */
-            int unconfigured = USB_UNCONFIG_INDEX;
-            int unconfig_rc = ioctl(fd, USB_SET_CONFIG, &unconfigured);
-            log_line("handback unconfigure rc %d errno %d", unconfig_rc,
-                     unconfig_rc ? errno : 0);
-            if (!unconfig_rc) {
-                for (int attempt = 0; attempt < 10; ++attempt) {
-                    int current = -1;
-                    if (!ioctl(fd, USB_GET_CONFIG, &current) && current == USB_UNCONFIG_INDEX) {
-                        log_line("handback unconfigured state confirmed");
-                        break;
-                    }
-                    usleep(100000);
-                }
-            }
+                                    saved_config
+#else
+                                    -1
 #endif
-            int reset_rc = ioctl(fd, USB_SET_CONFIG, &saved_config);
-            log_line("handback restore config index %d rc %d errno %d",
-                     saved_config, reset_rc, reset_rc ? errno : 0);
-            if (!reset_rc) {
-                for (int attempt = 0; attempt < 10; ++attempt) {
-                    int iface = hid;
-                    if (!ioctl(fd, USB_IFACE_DRIVER_ACTIVE, &iface)) {
-                        rc = 0;
-                        log_line("handback HID driver reattached; press PS to wake controller");
-                        break;
-                    }
-                    usleep(100000);
-                }
-            }
-            if (rc)
-                log_line("handback restore not verified; using re-enumeration fallback");
-        }
-#endif
-        for (int i = 0; i < 3 && rc; i++) {
-            int zero = 0;
-            if (i)
-                usleep(200000);
-            rc = ioctl(fd, USB_DEVICEENUMERATE, &zero);
-            log_line("re-enumerate rc %d errno %d", rc, rc ? errno : 0);
-        }
+        );
         if (rc)
             result = 2; // says replug below
     }
@@ -615,6 +688,18 @@ void ds5_usb_request_stop(void)
 
 int ds5_usb_replug_state(void)
 {
+    if (access(DS5_USB_OWNER_DIR "/" DS5_USB_TAKEN, F_OK) == 0)
+        return 2; // Incomplete handback or recovery, including a crashed worker.
+    FILE *f = fopen(DS5_USB_OWNER_DIR "/" DS5_USB_HANDBACK, "r");
+    if (f) {
+        unsigned plugged;
+        int unknown, verified;
+        if (fscanf(f, "%u %d %d", &plugged, &unknown, &verified) == 3) {
+            atomic_store(&handed_plug, plugged);
+            atomic_store(&plug_unknown, unknown || !verified);
+        }
+        fclose(f);
+    }
     if (atomic_load(&plug_unknown))
         return 2;
     const uint32_t handed = atomic_load(&handed_plug);
@@ -652,6 +737,37 @@ void ds5_usb_rescue(void)
     }
 }
 
+int ds5_usb_handback_verified(void)
+{
+    return atomic_load(&handback_verified);
+}
+
+int ds5_usb_recover(void)
+{
+    if (atomic_flag_test_and_set(&running))
+        return DS5_USB_BUSY;
+    // scan(1) ignores a stop flag left by a previous session in this process.
+    atomic_store(&handback_verified, 0);
+    int fd = scan(1), result = DS5_USB_ERROR;
+    if (fd >= 0) {
+        struct ds5_mic_format formats[2];
+        uint8_t endpoints[2] = {0};
+        int hid = -1, config = -1;
+        (void)discover(fd, formats, &hid, endpoints);
+        (void)ioctl(fd, USB_GET_CONFIG, &config);
+        log_line("recovering abandoned USB controller");
+        if (restore_controller(fd, hid, config) == 0)
+            result = DS5_USB_OK;
+        close(fd);
+    } else {
+        atomic_store(&plug_unknown, 1);
+        (void)save_handback(0);
+        log_line("USB recovery: controller unavailable; marker retained until recovery can verify it");
+    }
+    atomic_flag_clear(&running);
+    return result;
+}
+
 int ds5_usb_run(const ds5_usb_config *config, const ds5_usb_callbacks *callbacks,
                 void *user, ds5_usb_stats *stats)
 {
@@ -667,6 +783,7 @@ int ds5_usb_run(const ds5_usb_config *config, const ds5_usb_callbacks *callbacks
         return DS5_USB_BUSY;
     memset(&g, 0, sizeof g);
     atomic_store(&g_stop, 0);
+    atomic_store(&handback_verified, 1); // No device touched yet.
     g.config = *config;
     if (callbacks)
         g.callbacks = *callbacks;

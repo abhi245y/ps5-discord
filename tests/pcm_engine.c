@@ -59,9 +59,11 @@ static int accept_pair(int usb)
 
 static void external_routes(void)
 {
+    assert(!strcmp(vau_effective_owner(), "app"));
     int app = accept_pair(0);
     const int16_t mono[] = {1000, 2000, 3000, 4000};
     assert(vau_ext_acquire(VAU_EXT_BT));
+    assert(!strcmp(vau_effective_owner(), "bluetooth"));
     vau_ext_mic(VAU_EXT_BT, mono, 4);
     // Failed/other-user Remote Play exit neither releases BT nor clears its ring.
     vau_ext_release(VAU_EXT_REMOTE_PLAY);
@@ -71,6 +73,7 @@ static void external_routes(void)
     assert(mic_count == 0); // App mic is suppressed while BT owns the route.
 
     int usb = accept_pair(1);
+    assert(!strcmp(vau_effective_owner(), "controller"));
     assert(!vau_ext_acquire(VAU_EXT_BT)); // BT yields selection, remains available.
     vau_ext_mic(VAU_EXT_BT, mono, 4);
     assert(ext_mic_count == 0); // A cached BT callback cannot feed USB's mic.
@@ -95,6 +98,7 @@ static void external_routes(void)
     close(usb);
 
     assert(vau_ext_acquire(VAU_EXT_REMOTE_PLAY));
+    assert(!strcmp(vau_effective_owner(), "remote_play"));
     // BT release between RP acquire and setting holding cannot clear RP's route.
     vau_ext_release(VAU_EXT_BT);
     assert(vau_ext_get() && ext_owner == VAU_EXT_REMOTE_PLAY);
@@ -114,6 +118,112 @@ static void external_routes(void)
     assert(ext_owner == VAU_EXT_BT && ext_mic_count == 0 && ext_out.count == 0);
     vau_ext_release(VAU_EXT_BT);
     assert(!vau_ext_get());
+    client_drop();
+    close(app);
+}
+
+static void refused_usb(void)
+{
+    int fds[2];
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    assert(pending_fd == -1);
+    pending_fd = fds[0];
+    pending_usb = 1;
+    char key[CORE_KEY_LEN];
+    memset(key, '0', sizeof key);
+    assert(send(fds[1], key, sizeof key, 0) == sizeof key);
+    check_pending();
+    assert(pending_fd == -1 && !vau_usb_connected());
+    char ack[2];
+    assert(recv(fds[1], ack, sizeof ack, MSG_DONTWAIT) == 0); // No OK/admission.
+    close(fds[1]);
+}
+
+struct stuck_usb {
+    pthread_mutex_t mutex;
+    pthread_cond_t condition;
+    int exit_allowed, started, exited;
+};
+
+static void *stuck_usb_thread(void *arg)
+{
+    struct stuck_usb *usb = arg;
+    pthread_mutex_lock(&usb->mutex);
+    usb->started = 1;
+    pthread_cond_broadcast(&usb->condition);
+    while (!usb->exit_allowed)
+        pthread_cond_wait(&usb->condition, &usb->mutex);
+    usb->exited = 1;
+    pthread_cond_broadcast(&usb->condition);
+    pthread_mutex_unlock(&usb->mutex);
+    return NULL;
+}
+
+static void remote_play_reservation(void)
+{
+    int app = accept_pair(0);
+    int usb = accept_pair(1);
+    int late[2];
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, late) == 0);
+    pending_fd = late[0];
+    pending_usb = 1;
+    pending_ms = now_ms();
+    char key[CORE_KEY_LEN];
+    memset(key, '0', sizeof key);
+    assert(send(late[1], key, sizeof key / 2, 0) == sizeof key / 2);
+    check_pending();
+    assert(pending_fd == late[0]); // Authentication began before the reservation.
+    assert(vau_remote_play_reserve());
+    assert(vau_remote_play_reserved() && vau_usb_blocked());
+    assert(!vau_usb_connected() && vau_app_connected());
+    assert(!vau_remote_play_reserve()); // Another session cannot steal this lifetime.
+    assert(send(late[1], key + sizeof key / 2, sizeof key / 2, 0) == sizeof key / 2);
+    check_pending();
+    assert(pending_fd == -1 && !vau_usb_connected());
+    char ack[2];
+    assert(recv(late[1], ack, sizeof ack, MSG_DONTWAIT) == 0);
+    close(late[1]);
+    refused_usb(); // Late launch after reservation, before any RP route/holding flag.
+    struct stuck_usb stuck = {PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER, 0, 0, 0};
+    pthread_t thread;
+    assert(pthread_create(&thread, NULL, stuck_usb_thread, &stuck) == 0);
+    pthread_mutex_lock(&stuck.mutex);
+    while (!stuck.started)
+        pthread_cond_wait(&stuck.condition, &stuck.mutex);
+    struct timespec deadline;
+    assert(clock_gettime(CLOCK_REALTIME, &deadline) == 0);
+    deadline.tv_nsec += 10000000; // A short host equivalent of the bounded stop wait.
+    if (deadline.tv_nsec >= 1000000000) {
+        ++deadline.tv_sec;
+        deadline.tv_nsec -= 1000000000;
+    }
+    int waited = 0;
+    while (!stuck.exited && !waited)
+        waited = pthread_cond_timedwait(&stuck.condition, &stuck.mutex, &deadline);
+    assert(waited == ETIMEDOUT && !stuck.exited);
+    pthread_mutex_unlock(&stuck.mutex);
+    vau_remote_play_release(0); // Real blocked owner outlived the stop deadline.
+    assert(vau_remote_play_reserved() && vau_usb_blocked());
+    refused_usb();
+    pthread_mutex_lock(&stuck.mutex);
+    stuck.exit_allowed = 1;
+    pthread_cond_broadcast(&stuck.condition);
+    pthread_mutex_unlock(&stuck.mutex);
+    assert(pthread_join(thread, NULL) == 0 && stuck.exited);
+    assert(pthread_cond_destroy(&stuck.condition) == 0);
+    assert(pthread_mutex_destroy(&stuck.mutex) == 0);
+    vau_remote_play_release(1); // Only the eventual join permits worker admission again.
+    assert(!vau_remote_play_reserved() && !vau_usb_blocked());
+    close(usb);
+    usb = accept_pair(1);
+    vau_usb_pause(1);
+    assert(vau_usb_blocked() && !vau_usb_connected());
+    refused_usb(); // Explicit pause also blocks an already-launched worker.
+    vau_usb_pause(0);
+    close(usb);
+    usb = accept_pair(1);
+    vau_usb_release();
+    close(usb);
     client_drop();
     close(app);
 }
@@ -199,6 +309,7 @@ int main(void)
     const unsigned char raw[32] = {0};
     assert(core_key_make(directory, raw) == 0);
     external_routes();
+    remote_play_reservation();
     partial_playback();
     vau_init();
     int bad = connect_role(VAU_USB_PORT, 0);

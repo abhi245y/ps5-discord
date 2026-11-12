@@ -35,6 +35,7 @@ int cv_holds_controller(void)
 void cv_pause(int on)
 {
     paused = on;
+    vau_usb_pause(on);
 }
 
 void cv_stop(void)
@@ -44,6 +45,8 @@ void cv_stop(void)
 
 const char *cv_state(void)
 {
+    if (vau_remote_play_reserved())
+        return "remote_play";
     if (vau_usb_connected())
         return "on";
     static const char *const names[] = {"off", "starting", "on", "missing", "stopping", "error"};
@@ -56,6 +59,7 @@ void cv_init(void)
 }
 #else
 #include "ds5_usb.h"
+#include "ds5_usb_owner.h"
 #include "log.h"
 
 #include <arpa/inet.h>
@@ -83,6 +87,9 @@ static uint64_t milliseconds(void)
 
 static int worker_busy(void)
 {
+    // Includes handback/recovery after the worker's PCM socket has closed.
+    if (ds5_usb_owner_busy(DS5_USB_OWNER_DIR))
+        return 1;
     int fd = open(WORKER_LOCK, O_RDWR);
     if (fd < 0)
         return errno == ENOENT ? 0 : 1;
@@ -112,7 +119,7 @@ static int launch_worker(void)
     uint64_t deadline = milliseconds() + 3000u;
     size_t total = 0;
     unsigned char bytes[4096];
-    while (!atomic_load(&paused) && !atomic_load(&suppressed) && milliseconds() < deadline) {
+    while (!vau_usb_blocked() && !atomic_load(&paused) && !atomic_load(&suppressed) && milliseconds() < deadline) {
         struct pollfd wait = {.fd = fd, .events = POLLOUT};
         rc = poll(&wait, 1, 50);
         if (rc < 0 && errno == EINTR)
@@ -137,7 +144,7 @@ static int launch_worker(void)
                 sent += (size_t)count;
                 total += (size_t)count;
             } else if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
-                if (milliseconds() >= deadline || atomic_load(&paused) || atomic_load(&suppressed))
+                if (milliseconds() >= deadline || vau_usb_blocked() || atomic_load(&paused) || atomic_load(&suppressed))
                     goto done;
                 usleep(1000);
             } else
@@ -163,7 +170,7 @@ static void *supervise(void *unused)
         if (!call)
             suppressed = 0;
         int want =
-            prefs_loaded() && prefs_get("controller_audio") && call && !paused && !suppressed;
+            prefs_loaded() && prefs_get("controller_audio") && call && !paused && !suppressed && !vau_usb_blocked();
         uint64_t now = milliseconds();
         if (owned) {
             if (vau_usb_connected())

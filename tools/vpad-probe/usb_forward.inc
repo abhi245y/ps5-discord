@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Included only by the USB build of vpad_probe.c; USB callbacks never do HID I/O.
+#include "ds5_usb_owner.h"
+static ds5_usb_owner g_usb_owner = DS5_USB_OWNER_INIT;
 #if PROBE_USB_CALL
 static atomic_int g_core_lost;
 #include "usb_call.inc"
@@ -105,9 +107,25 @@ static void *usb_owner(void *arg)
 static int usb_forward_start(void)
 {
 #if PROBE_USB_CALL
+    // Let the core reject a delayed launch during its Remote Play reservation before
+    // even stale-owner recovery can reset the controller. No USB is touched by PCM setup.
     if (usb_call_connect() != 0)
         return -1;
 #endif
+    int acquired = 1;
+    const uint64_t lock_deadline = now_ms() + 3000;
+    while (running() && now_ms() < lock_deadline) {
+        acquired = ds5_usb_owner_try(&g_usb_owner, DS5_USB_OWNER_DIR,
+                                     PROBE_USB_SERVICE ? "controller" : "probe", usb_message, NULL);
+        if (acquired != 1)
+            break;
+        if (wait_until(now_ms() + FRAME_MS) != 0)
+            break;
+    }
+    if (acquired || !running()) {
+        log_line("shared USB owner lock unavailable or cancelled (%d)", acquired);
+        return -1;
+    }
     int rc = pthread_create(&g_usb_thread, NULL, usb_owner, NULL);
     log_line("USB owner pthread_create rc=%d", rc);
     if (rc)
@@ -189,6 +207,8 @@ static void usb_forward_stop(void)
 #if PROBE_USB_CALL
         usb_call_close();
 #endif
+        (void)ds5_usb_owner_release(&g_usb_owner, 1); // No USB thread touched the device.
+        usb_drain(); // Includes stale-owner recovery failures before pthread_create.
         return;
     }
     /* Called after virtual deletion: real USB pad comes back afterward. */
@@ -201,6 +221,13 @@ static void usb_forward_stop(void)
         return;
     }
     g_usb_started = 0;
+    int verified = ds5_usb_handback_verified();
+    if (!verified) {
+        log_line("USB handback not verified; recovering before releasing shared owner lock");
+        verified = ds5_usb_recover() == DS5_USB_OK;
+    }
+    if (ds5_usb_owner_release(&g_usb_owner, verified))
+        log_line("could not update USB taken marker errno=%d", errno);
     usb_drain();
     log_line("USB result=%d reports=%llu mic_frames=%llu mic_peak=%u playback_frames=%llu playback_peak=%u silent_playback_frames=%llu queue_dropped=%u logs_dropped=%u",
         g_usb_result, (unsigned long long)g_usb_stats.controller_reports,

@@ -596,9 +596,12 @@ static char *voice_json(void)
     free(s);
     if (!o)
         return NULL;
-    int usb_audio = vau_usb_connected();
-    cJSON_AddStringToObject(o, "controller", usb_audio ? "on" : cv_state());
-    cJSON_AddStringToObject(o, "output", usb_audio || !cv_tv() ? "controller" : "tv");
+    const char *owner = vau_effective_owner();
+    cJSON_AddStringToObject(o, "effective_owner", owner);
+    cJSON_AddStringToObject(o, "controller", cv_state());
+    // Legacy output reflects the live route too; the saved pick stays in prefs.controller_audio.
+    cJSON_AddStringToObject(o, "output", !strcmp(owner, "remote_play") || !strcmp(owner, "controller")
+                                           ? "controller" : !strcmp(owner, "bluetooth") ? "bluetooth" : "tv");
     // One state for the app: the picture (broadcast.c) and Discord's side (stream.c).
     const char *b = bc_state(), *st = stream_state();
     int failed = strcmp(st, "error") == 0 || strcmp(b, "error") == 0;

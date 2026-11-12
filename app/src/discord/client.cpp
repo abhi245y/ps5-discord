@@ -1420,6 +1420,7 @@ void Client::poll_voice()
         voice.error = text(v, "error");
         voice.controller = text(v, "controller");
         voice.output_tv = text(v, "output") != "controller";
+        voice.effective_owner = text(v, "effective_owner");
         if (v.contains("broadcast") && v["broadcast"].is_object())
         {
             voice.broadcast = text(v["broadcast"], "state");

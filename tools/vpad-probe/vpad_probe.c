@@ -557,6 +557,64 @@ static int dpad_burst(const char *direction, uint32_t button)
 
 #endif
 
+#if !PROBE_USB_FORWARD && !PROBE_USB_SERVICE
+// Research only: never compiled into controller-audio or any USB takeover build.
+enum { RESEARCH_NORMAL, RESEARCH_ORPHAN, RESEARCH_DELETE_HANDLE };
+#define RESEARCH_MODE_PATH PROBE_DIR "/vpad-probe-mode"
+#define ORPHAN_HANDLE_PATH PROBE_DIR "/vpad-orphan-handle"
+
+static int research_mode(void)
+{
+    FILE *file = fopen(RESEARCH_MODE_PATH, "r");
+    if (!file)
+        return RESEARCH_NORMAL;
+    char mode[32] = {0};
+    (void)fscanf(file, "%31s", mode);
+    fclose(file);
+    if (strcmp(mode, "orphan") == 0)
+        return RESEARCH_ORPHAN;
+    if (strcmp(mode, "delete-handle") == 0)
+        return RESEARCH_DELETE_HANDLE;
+    return RESEARCH_NORMAL;
+}
+
+static int delete_orphan_handle(void)
+{
+    FILE *file = fopen(ORPHAN_HANDLE_PATH, "r");
+    unsigned handle;
+    if (!file)
+        return -1;
+    int valid = fscanf(file, "%x", &handle) == 1;
+    fclose(file);
+    if (!valid)
+        return -1;
+    g_hid = open("/dev/hid", O_RDWR);
+    log_line("delete-handle: fresh /dev/hid fd=%d handle=0x%08x errno=%d",
+             g_hid, handle, g_hid < 0 ? errno : 0);
+    if (g_hid < 0)
+        return -1;
+    struct hid_delete request = {.command = 5, .handle = handle};
+    int rc = checked_ioctl("DeleteDevice saved orphan handle", HID_DEL_DEVICE, &request);
+    log_line("delete-handle: handle=0x%08x result=%d", handle, rc);
+    if (!rc)
+        (void)unlink(ORPHAN_HANDLE_PATH);
+    return rc;
+}
+
+static int save_orphan_handle(void)
+{
+    FILE *file = fopen(ORPHAN_HANDLE_PATH, "w");
+    if (!file)
+        return -1;
+    int ok = fprintf(file, "%08x\n", (unsigned)g_handle) > 0;
+    if (fflush(file) || fsync(fileno(file)))
+        ok = 0;
+    if (fclose(file))
+        ok = 0;
+    return ok ? 0 : -1;
+}
+#endif
+
 int main(void)
 {
 #if PROBE_USB_SERVICE
@@ -641,6 +699,13 @@ int main(void)
         goto done;
     }
     log_line("single-instance lock acquired: %s", LOCK_PATH);
+#if !PROBE_USB_FORWARD && !PROBE_USB_SERVICE
+    const int mode = research_mode();
+    if (mode == RESEARCH_DELETE_HANDLE) {
+        status = delete_orphan_handle() == 0 ? 0 : 1;
+        goto done;
+    }
+#endif
     if (choose_user(&user) != 0 || !running())
         goto done;
     errno = 0;
@@ -685,6 +750,15 @@ int main(void)
     if (wait_until(now_ms() + 3000) != 0 ||
         state_for("initial neutral sample", 0, 128, 0, 0) != 0)
         goto done;
+#if !PROBE_USB_SERVICE
+    if (mode == RESEARCH_ORPHAN) {
+        if (restore_credentials() != 0 || save_orphan_handle() != 0)
+            goto done;
+        log_line("orphan: neutral inserted; handle=0x%08x saved to %s; _exit without DeleteDevice or atexit",
+                 (unsigned)g_handle, ORPHAN_HANDLE_PATH);
+        _exit(0);
+    }
+#endif
 #if PROBE_RESUME_GAME
     /* Opt-in build: user requested selecting the highlighted running game.
      * One Cross pulse only; release and allow the title to regain focus. */

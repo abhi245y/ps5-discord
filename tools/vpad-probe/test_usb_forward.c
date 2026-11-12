@@ -7,6 +7,8 @@
 #include <sched.h>
 #include <stdio.h>
 
+void usb_owner_tests(void);
+
 static usb_forward_queue queue;
 static void *produce(void *unused)
 {
@@ -22,6 +24,7 @@ static void *produce(void *unused)
 
 int main(void)
 {
+    usb_owner_tests();
     int16_t tone[960];
     uint64_t cursor = 0;
     unsigned nonzero = 0;

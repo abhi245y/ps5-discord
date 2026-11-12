@@ -205,13 +205,19 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
         heard.key = "call_volume";
         heard.percent = 20;
         const char *controller_help = "Use its mic and speaker in calls. USB cable required.";
-        if (v.controller == "stopping")
+        if (v.effective_owner == "remote_play")
+            controller_help = "Remote Play is using the controller.";
+        else if (v.controller == "remote_play")
+            controller_help = "Controller audio is reserved for Remote Play.";
+        else if (v.controller == "stopping")
             controller_help = "Releasing controller. Press PS when it stops.";
+        else if (v.effective_owner == "controller")
+            controller_help = "Using controller mic and speaker. Press PS after release.";
+        else if (v.effective_owner == "bluetooth")
+            controller_help = "Call audio is on your Bluetooth headset.";
         else if (s.prefs.controller_audio)
         {
-            if (v.controller == "on")
-                controller_help = "Using controller mic and speaker. Press PS after release.";
-            else if (v.controller == "starting")
+            if (v.controller == "starting")
                 controller_help = "Connecting USB controller audio...";
             else if (v.controller == "missing")
                 controller_help = "Connect your controller with a USB data cable.";
