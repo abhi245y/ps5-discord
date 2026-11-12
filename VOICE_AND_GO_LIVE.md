@@ -38,10 +38,11 @@ there) and **Call volume** (how loud the call is for you).
 
 ### Things to know
 
-- **The app must be on screen for you to talk and hear.** You can leave the call running and
-  use the rest of the app. When a game is in front, the console does not give the app the
-  mic or the sound, so the call stays connected but you are silent and hear nothing. To talk
-  while you play, use [Go Live](#go-live): there the USB controller is your headset.
+- **Without an external audio device, the app must be on screen for you to talk and hear.**
+  When a game is in front, the console does not give the app the mic or the sound. To talk
+  while you play, use a Bluetooth headset through the USB adapter, or [Go Live](#go-live)
+  with **Remote Play (legacy)**: there the USB controller is your headset. The default
+  hardware encoder capture does not take over controller audio.
 - **What ends a call:** Leave, Settings, Account, **Sign out** or **Quit Discord**, and
   **Restart now** or **Roll back** in Settings, About. Closing the app with the PS button does
   not end it.
@@ -51,33 +52,36 @@ there) and **Call volume** (how loud the call is for you).
 Go Live streams what the PS5 shows into the call, picture and game sound, end-to-end
 encrypted. Viewers watch it like any Discord stream, on a PC or phone.
 
-How it works: the core opens a Remote Play session with your own console to get the picture.
-For as long as you are live, the **DualSense on USB plays the game through that session and
-is your headset**: its mic for your voice, its speaker or the headphones plugged into it for
-the call and the game.
+By default, **Hardware encoder** uses the console's own encoder for the picture and the
+core's game-audio capture for sound. The controller stays wireless if you use it that way;
+plugging it in does not change capture method. No Remote Play pairing is needed.
 
 ### Before the first time
 
-1. **A USB cable for the DualSense.** Go Live does not work with a controller on Bluetooth.
-2. **Remote Play on:** PS5 Settings, System, Remote Play, Enable Remote Play. The console
-   user must be signed in to PSN.
-3. **Pair Go Live once per console user:** in the app, Settings, **Voice & audio**, **Go Live
-   pairing**. Pick yourself (only the user on screen can pair). The app asks the PS5 for a
-   code by itself; if that fails, Square (**Enter a PIN**) and type the 8 digits from PS5
-   Settings, System, Remote Play, **Link Device**.
-4. **Pick a quality:** Settings, Voice & audio, **Go Live quality**. 720p · 30 fps works for
-   everyone. 720p · 60, 1080p · 30 and 1080p · 60 need Nitro or a boosted server, and Discord
-   may act on an account that streams above its limits.
+1. **Pick a quality:** Settings, **Go Live**, **Quality**. 720p · 30 fps works for everyone.
+   Higher qualities may need Nitro or a boosted server, and Discord may act on an account
+   that streams above its limits.
+2. **Optional legacy method:** Settings, Go Live, **Capture method**, **Remote Play (legacy)**.
+   This needs a DualSense plugged in by USB, Remote Play enabled in PS5 Settings, System,
+   Remote Play, and a console user signed in to PSN.
+3. **For Remote Play only, pair once per console user:** Settings, Go Live, **Pairing**.
+   Pick yourself (only the user on screen can pair). The app asks the PS5 for a code by
+   itself; if that fails, Square (**Enter a PIN**) and type the 8 digits from PS5 Settings,
+   System, Remote Play, **Link Device**. Missing USB or pairing is an error; capture never
+   silently switches methods.
+
+Remote Play as the user on screen takes over the USB DualSense: its buttons play the game
+through that session, its mic feeds the call, and its speaker or plugged-in headphones play
+the call. A session as another console user leaves the controller alone.
 
 ### Going live
 
-1. Plug the DualSense in by USB.
-2. Join a voice room or a DM call.
-3. In the room, Cross on **Go Live**. The room shows "Going live…", then "Live · the controller
-   is the headset and plays the game". The controller's lightbar turns teal with player 1's
-   light while Go Live holds it.
-4. Go to your game and play. Your friends see it in the call.
-5. To stop, come back to the room and press **Stop live**, or Leave.
+1. Join a voice room or a DM call. For Remote Play, plug the DualSense in by USB first.
+2. In the room, Cross on **Go Live**. The room shows "Going live…", then "Live". During
+   Remote Play controller takeover it also says the controller is the headset and plays
+   the game; the lightbar turns teal with player 1's light.
+3. Go to your game and play. Your friends see it in the call.
+4. To stop, come back to the room and press **Stop live**, or Leave.
 
 ### Things to know
 
@@ -85,15 +89,16 @@ the call and the game.
   Notifications, **Alerts during Go Live** is off unless you turn it on, so message alerts
   stay off your stream. Games and scenes that block Remote Play or screen sharing may show viewers a
   black picture.
-- **Replug the controller between Go Lives.** When Go Live ends, it gives the controller
-  back to the console. Before the next Go Live, unplug its USB cable and plug it back in; the
+- **Remote Play only: replug the controller between Go Lives.** When Remote Play ends, it
+  gives the controller back to the console. Before the next Go Live, unplug its USB cable and plug it back in; the
   app asks you to. If you skip it, pressing the PS button while live can make the console ask
   "Who's using this controller?", and answering ends the stream.
-- **Your PS button and controller** go through Remote Play while you are live, so everything
-  takes a moment longer than usual.
+- **During Remote Play controller takeover, your PS button and controller** go through the
+  session, so everything takes a moment longer than usual.
 - **Network:** a stream at 720p · 30 fps sends about 2.5 to 5 Mbit/s. A wired connection
   helps.
 - **When Go Live stops by itself** (the network drops, Remote Play ends), the app shows why in
-  the room and the stream ends in the call too. Replug the controller and try again.
-- **If the controller is dead after a Go Live**, unplug it and plug it back in. If the core
-  was stopped while it held the controller, a reboot frees it.
+  the room and the stream ends in the call too. For Remote Play, replug the controller
+  before trying again.
+- **If the controller is dead after a Remote Play Go Live**, unplug it and plug it back in.
+  If the core was stopped while it held the controller, a reboot frees it.

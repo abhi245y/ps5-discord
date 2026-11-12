@@ -232,6 +232,8 @@ bool VoiceRoom::update(const discord::Snapshot &s, const hui::InputFrame &input,
 {
     const discord::Voice &v = s.voice;
     const bool live = v.active();
+    if (v.backend != "remote_play")
+        need_pair_ = need_replug_ = false;
     if (need_pair_) // the note over the room: Cross opens Settings, Circle closes it
     {
         if (input.is_pressed(Action::confirm))
@@ -309,12 +311,14 @@ bool VoiceRoom::update(const discord::Snapshot &s, const hui::InputFrame &input,
             set(!v.muted, v.deafened);
         else if (focus_ == kDeafen && live)
             set(v.muted, !v.deafened);
-        else if (focus_ == kShare && live && !v.paired && v.broadcast != "live" && v.broadcast != "starting")
+        else if (focus_ == kShare && live && v.backend == "remote_play" && !v.paired &&
+                 v.broadcast != "live" && v.broadcast != "starting")
         {
             need_pair_ = true;
             feedback.play(hui::audio::Cue::modal_open);
         }
-        else if (focus_ == kShare && live && v.broadcast != "live" && v.broadcast != "starting" &&
+        else if (focus_ == kShare && live && v.backend == "remote_play" &&
+                 v.broadcast != "live" && v.broadcast != "starting" &&
                  (v.replug == "replug" || v.replug == "unknown"))
         {
             need_replug_ = true;
@@ -478,7 +482,7 @@ void VoiceRoom::draw(const discord::Snapshot &s, DrawList &list) const
     layout.item_gap = 38.0f;
     ui::draw_hints(list, ink_.fonts, hint_glyphs(), hints, 4, right, true, layout);
 
-    if (need_pair_) // Go Live is not paired yet: say what to do, Cross goes there
+    if (need_pair_ && v.backend == "remote_play") // Remote Play needs pairing: Cross goes there
     {
         list.rounded_rect({0, 0, 1920, 1080}, 0.0f, Color::rgb(0x0d0e12, 0.78f));
         const Rect card{510.0f, 300.0f, 900.0f, 440.0f};
@@ -486,8 +490,8 @@ void VoiceRoom::draw(const discord::Snapshot &s, DrawList &list) const
         list.rounded_rect(card, 28.0f, kRaised);
         ui::text(list, ink_.fonts.display, "Pair Go Live first", card.x + 56.0f, card.y + 92.0f, 48.0f, kText);
         ui::paragraph(list, ink_.fonts.regular,
-                      "Go Live sees your game through Remote Play, paired once with this console. Open "
-                      "Settings, Voice & audio, Go Live pairing, and enter the PIN from the PS5's Link Device "
+                      "Remote Play needs pairing once with this console. Open "
+                      "Settings, Go Live, Pairing, and enter the PIN from the PS5's Link Device "
                       "screen. Remote Play must be on for a console user signed in to PSN.",
                       card.x + 58.0f, card.y + 150.0f, 26.0f, card.w - 116.0f, 38.0f, kDim, 6, gfx::Align::left);
         const ui::Hint pair_hints[] = {{ui::Button::cross, "Open Settings"}, {ui::Button::circle, "Close"}};
@@ -495,7 +499,7 @@ void VoiceRoom::draw(const discord::Snapshot &s, DrawList &list) const
         l.cy = card.y + card.h - 44.0f;
         ui::draw_hints(list, ink_.fonts, hint_glyphs(), pair_hints, 2, card.x + card.w - 48.0f, true, l);
     }
-    if (need_replug_) // ds5_usb_replug_state: the controller came back from Go Live by a bus reset
+    if (need_replug_ && v.backend == "remote_play") // ds5_usb_replug_state after Remote Play's bus reset
         confirm_card(list, ink_, "Replug your controller",
                      v.replug == "unknown"
                          ? "The console can't tell how your controller is connected. If Go Live used it since it "

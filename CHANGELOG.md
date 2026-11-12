@@ -9,8 +9,8 @@ All notable changes to this project are documented here. The format follows
 ### Added
 - Wireless Go Live: the picture from the console's own hardware encoder through a helper payload
   (`capture/`, GPL-3.0-only), the sound from the core's game-audio capture, shared with the
-  Bluetooth headset (`src/bt/game_audio.cpp`). The controller is left alone. Settings, Voice &
-  audio, Capture: Auto (a USB controller means Remote Play, else wireless), Wireless, USB controller.
+  Bluetooth headset (`src/bt/game_audio.cpp`). The controller is left alone. Settings, Go Live,
+  Capture method: Hardware encoder (default) or Remote Play (legacy, needs USB + pairing).
 - Go Live has its own settings page (quality, bitrate, capture, pairing). Bitrate: Recommended
   (4/6/6/8 Mbit/s for 720p30/720p60/1080p30/1080p60) or a custom value up to 10 (720p) or 20 Mbit/s
   (1080p).

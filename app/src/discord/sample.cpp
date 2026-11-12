@@ -101,7 +101,9 @@ Snapshot sample_snapshot()
     s.voice.muted = false;
     s.voice.ping_ms = 42;
     s.voice.secure = true;
-    // Two console users: the one on screen, and a second one for Go Live over Bluetooth.
+    // Two console users for legacy Remote Play pairing.
+    s.voice.backend = "wireless";
+    s.voice.paired = true; // the default hardware encoder needs no pairing
     s.voice.replug = "replug"; // the tour shows the question before Go Live
     s.overlay_state = "running";
     s.prefs.overlay = true;
@@ -344,6 +346,11 @@ void apply_sample(Snapshot &s, const Request &r)
     if (r.kind == Request::Kind::set_pref)
     {
         s.prefs.set(r.content, r.value);
+        if (r.content == "golive_method" && s.voice.broadcast != "live" && s.voice.broadcast != "starting")
+        {
+            s.voice.backend = s.prefs.golive_method == 1 ? "remote_play" : "wireless";
+            s.voice.paired = s.prefs.golive_method != 1 || !s.voice.rp_use.empty();
+        }
         if (r.content == "overlay")
             s.overlay_state = r.value ? "running" : "off";
         return;
@@ -393,7 +400,7 @@ void apply_sample(Snapshot &s, const Request &r)
                 if (!u.paired && s.voice.rp_use == u.id)
                     s.voice.rp_use.clear();
             }
-        s.voice.paired = !s.voice.rp_use.empty();
+        s.voice.paired = s.prefs.golive_method != 1 || !s.voice.rp_use.empty();
         s.voice.pair_state = r.kind == Request::Kind::remoteplay_pair ? "paired" : "idle";
         for (const RemotePlayUser &u : s.voice.rp_users)
             if (u.id == s.voice.rp_use)

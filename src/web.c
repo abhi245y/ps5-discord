@@ -505,7 +505,7 @@ static void api_voice_output(int c, const char *body)
         refuse(c, "400 Bad Request", "tv must be true or false.");
 }
 
-// Go Live on or off: {"on": true|false} (broadcast.h). Needs the call and a USB controller.
+// Go Live on or off: {"on": true|false} (broadcast.h). Remote Play also needs USB + pairing.
 static void api_voice_broadcast(int c, const char *body)
 {
     cJSON *in = cJSON_Parse(body ? body : "");

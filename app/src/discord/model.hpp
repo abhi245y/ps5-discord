@@ -356,7 +356,7 @@ struct Bluetooth
 struct Prefs
 {
     int golive_quality = 0; // 0 720p30, 1 720p60, 2 1080p30, 3 1080p60
-    int golive_backend = 0; // 0 auto (a USB controller: Remote Play, else wireless), 1 wireless, 2 Remote Play
+    int golive_method = 0; // 0 hardware encoder (default), 1 Remote Play (legacy)
     int golive_bitrate = 0; // 0 recommended for the quality, n: n + 1 Mbit/s
     int mic_gain = 5;       // 0..10, 5 = as captured
     int call_volume = 5;    // 0..10, the voices heard: 5 = as received
@@ -379,8 +379,8 @@ struct Prefs
     {
         if (key == "golive_quality")
             golive_quality = value;
-        else if (key == "golive_backend")
-            golive_backend = value;
+        else if (key == "golive_method")
+            golive_method = value;
         else if (key == "golive_bitrate")
             golive_bitrate = value;
         else if (key == "mic_gain")

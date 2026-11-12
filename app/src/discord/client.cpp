@@ -1446,7 +1446,7 @@ void Client::poll_voice()
             const json &p = v["prefs"];
             Prefs &prefs = snapshot_.prefs;
             prefs.golive_quality = std::clamp(static_cast<int>(num(p, "golive_quality", 0.0)), 0, 3);
-            prefs.golive_backend = std::clamp(static_cast<int>(num(p, "golive_backend", 0.0)), 0, 2);
+            prefs.golive_method = std::clamp(static_cast<int>(num(p, "golive_method", 0.0)), 0, 1);
             prefs.golive_bitrate = std::clamp(static_cast<int>(num(p, "golive_bitrate", 0.0)), 0, 19);
             prefs.mic_gain = std::clamp(static_cast<int>(num(p, "mic_gain", 5.0)), 0, 10);
             prefs.call_volume = std::clamp(static_cast<int>(num(p, "call_volume", 5.0)), 0, 10);

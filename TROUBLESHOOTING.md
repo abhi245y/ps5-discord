@@ -70,11 +70,12 @@ Discord's voice servers. Updates need `api.github.com`, `github.com` and
 How calls work, step by step: [VOICE_AND_GO_LIVE.md](VOICE_AND_GO_LIVE.md).
 
 **Others cannot hear you.** The app's microphone works while the app is on screen. During a
-game the console does not give the mic to the app: use Go Live, where the USB DualSense is
-your headset. Check mute (the room's mic button) and Settings, Voice & audio, Mic gain.
+game the console does not give the mic to the app: use a Bluetooth headset through the USB
+adapter, or Remote Play (legacy) Go Live, where the USB DualSense is your headset. Check mute
+(the room's mic button) and Settings, Voice & audio, Mic gain.
 
-**You cannot hear the call.** Check deafen and Settings, Voice & audio, Call volume. Outside
-Go Live the call plays while the app is on screen.
+**You cannot hear the call.** Check deafen and Settings, Voice & audio, Call volume. With no
+Bluetooth headset or Remote Play USB takeover, the call plays while the app is on screen.
 
 **Joining fails at once.** If you built the core yourself: voice needs libdave (`make
 dave`); without it every join fails with close code 4017. Release builds include it.
@@ -82,15 +83,17 @@ dave`); without it every join fails with close code 4017. Release builds include
 ## Go Live
 
 **Go Live does not start.**
-- The DualSense must be plugged in by USB. A Bluetooth controller does not work for Go Live.
-- Remote Play must be on (PS5 Settings, System, Remote Play) for a user signed in to PSN.
-- Pair once: Settings, Voice & audio, Go Live pairing. Pair again if you removed the device
-  from the PS5's Remote Play list.
+- Settings, Go Live, **Capture method** defaults to **Hardware encoder**. No USB controller
+  or pairing is needed; the controller can stay wireless.
+- **Remote Play (legacy)** needs a DualSense plugged in by USB, Remote Play enabled
+  (PS5 Settings, System, Remote Play) for a user signed in to PSN, and pairing once in
+  Settings, Go Live, Pairing. Pair again if you removed the device from the PS5's Remote Play
+  list. Missing USB or pairing is an error; it does not switch to the hardware encoder.
 - The steps: [VOICE_AND_GO_LIVE.md](VOICE_AND_GO_LIVE.md#go-live).
 - Above 720p · 30 fps needs Nitro or a boosted server; 720p · 30 fps is the safe choice.
 
-**The second Go Live does not start.** After a Go Live, unplug the controller and plug it
-back in (the app asks you to).
+**The second Remote Play Go Live does not start.** After a Remote Play Go Live, unplug the
+controller and plug it back in (the app asks you to). Hardware encoder capture leaves it alone.
 
 **Known issue: small motion hitches at 30 fps.** Some games (seen in 007 First Light at
 720p · 30 fps) show an occasional hitch in motion for viewers, while 60 fps looks smooth. The
@@ -98,8 +101,8 @@ stream itself arrives evenly; the cause (the game's own frame rate dips, or how 
 encoder picks 30 of the game's 60 frames) is not known yet. A 60 fps quality avoids it. If you
 see it, report it with the game and quality.
 
-**The controller does not work after a Go Live.** Unplug it and plug it back in. If the core
-was stopped while it held the controller, a reboot frees it.
+**The controller does not work after a Remote Play Go Live.** Unplug it and plug it back in.
+If the core was stopped while it held the controller, a reboot frees it.
 
 ## Notifications
 

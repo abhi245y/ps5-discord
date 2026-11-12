@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Broadcast (Go Live), two backends (prefs golive_backend): the wireless capture (the console's
+// Broadcast (Go Live), two methods (prefs golive_method): 0 (default) hardware encoder (the console's
 // encoder through a helper payload, the sound from the core's own game-audio capture; the
-// controller stays untouched) or a loopback Remote Play session with the console itself, which
+// controller stays untouched) or 1, a loopback Remote Play session with the console itself, which
 // takes the DualSense on USB over for the length of it (its buttons go to the game through the
 // session, its mic and speaker serve the call). The frames go to a sink, the Discord stream
 // connection.
@@ -16,7 +16,7 @@ typedef struct {
 } bc_sink;
 
 void bc_set_sink(const bc_sink *sink); // NULL: frames are only counted
-int bc_start(void); // needs a call (and, for Remote Play, a pairing); 0 when accepted, -1 with bc_error()
+int bc_start(void); // needs a call (Remote Play also needs USB + pairing); 0 accepted, -1 with bc_error()
 void bc_stop(void);
 // 1 from taking the USB DualSense until it is re-enumerated for the system again.
 int bc_holds_controller(void);
@@ -24,8 +24,8 @@ int bc_holds_controller(void);
 void bc_rescue_controller(void);
 void bc_request_keyframe(void); // a viewer lost the picture
 int bc_paced(void); // video may be paced on its sending thread (the wireless backend)
-// Before Go Live: "replug" when the USB controller should be unplugged and plugged in again
-// first (ds5_usb_replug_state), "unknown" when that cannot be told, else "ok".
+// Before Remote Play: "replug" when the USB controller should be unplugged and plugged in again
+// first (ds5_usb_replug_state), "unknown" when that cannot be told, else "ok". Encoder: always "ok".
 const char *bc_controller(void);
 void bc_profile(int *w, int *h, int *fps); // the picture's size and rate (prefs golive_quality)
 const char *bc_state(void); // "off", "starting", "live" or "error"

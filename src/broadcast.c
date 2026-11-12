@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Broadcast (broadcast.h), two backends behind one API (prefs golive_backend: 0 auto, 1 wireless,
-// 2 Remote Play). Auto: a DualSense on USB means Remote Play, else the wireless capture.
+// Broadcast (broadcast.h), two backends behind one API (prefs golive_method: 0 hardware
+// encoder, 1 Remote Play). Only the setting chooses the backend; USB never changes it.
 //
 // Wireless (capture_bc.c): the picture from the capture helper payload, the sound from the
 // core's own game-audio capture. No pairing, no controller takeover.
@@ -118,7 +118,7 @@ static pthread_mutex_t usb_once = PTHREAD_MUTEX_INITIALIZER;
 static time_t usb_at;
 static int usb_present;
 
-// A look at USB opens devices: at most every 2 s (the app asks on every poll).
+// A look at USB opens devices: at most every 2 s, only before starting Remote Play.
 static int usb_pad(void)
 {
     if (!usb_probe)
@@ -139,13 +139,10 @@ void bc_set_usb_probe(int (*probe)(void))
     usb_at = 0; // look again
 }
 
-// Auto goes by the controller: on USB, Remote Play (it takes the pad over, as always) when it
-// is paired (else it could not run: the wireless capture does); with no pad on USB, the wireless
-// capture, which leaves the controller alone. The prefs can force either.
+// Hardware encoder by default. Remote Play must be selected explicitly, even with a USB pad.
 static int choose_backend(void)
 {
-    const int pref = prefs_get("golive_backend");
-    return pref == 1 ? WIRELESS : pref == 2 ? REMOTE_PLAY : usb_pad() && rp_used() >= 0 ? REMOTE_PLAY : WIRELESS;
+    return prefs_get("golive_method") == 1 ? REMOTE_PLAY : WIRELESS;
 }
 
 int bc_needs_pairing(void)
@@ -558,7 +555,12 @@ static void *worker(void *arg)
         const unsigned seen = starts;
         const int b = backend;
         pthread_mutex_unlock(&run_lock);
-        why = b == WIRELESS ? run_wireless() : run();
+        // A stop/start during teardown can select Remote Play for the next run. Check
+        // USB there too, after the previous run has released it, never while it holds it.
+        if (b == REMOTE_PLAY && !usb_pad())
+            why = "Remote Play needs a DualSense connected by USB.";
+        else
+            why = b == WIRELESS ? run_wireless() : run();
         pthread_mutex_lock(&run_lock);
         // Stopped, then started again while run() was handing everything back: it saw the
         // stop, so it runs once more for the start (which was told yes).
@@ -596,16 +598,17 @@ int bc_start(void)
         set_state("error", "Join a call first.");
         return -1;
     }
-    // Only when none is running: a repeat keeps its own backend, and a look at USB must not
-    // happen while Remote Play holds the controller (ds5_usb_replug_state's rule).
-    int chosen = running ? 0 : choose_backend();
     pthread_mutex_lock(&run_lock);
-    if (!running && !chosen) // it ended between the look above and the lock
-        chosen = choose_backend();
-    const int b = running ? (int)backend : chosen;
+    const int b = running ? (int)backend : choose_backend();
     if (b == REMOTE_PLAY && rp_used() < 0) {
         pthread_mutex_unlock(&run_lock);
         set_state("error", "Remote Play is not paired with this console.");
+        return -1;
+    }
+    // A repeat keeps its backend. Never probe USB while Remote Play holds the pad.
+    if (!running && b == REMOTE_PLAY && !usb_pad()) {
+        pthread_mutex_unlock(&run_lock);
+        set_state("error", "Remote Play needs a DualSense connected by USB.");
         return -1;
     }
     if (running && exiting) {

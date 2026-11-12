@@ -75,8 +75,8 @@ struct Row
 
 // Prefs::golive_quality. Remote Play streams 1080p at most; Discord wants H.264.
 constexpr const char *kQualities[] = {"720p · 30 fps", "720p · 60 fps", "1080p · 30 fps", "1080p · 60 fps"};
-// Prefs::golive_backend: how Go Live gets the picture.
-constexpr const char *kCaptures[] = {"Auto", "Wireless", "USB controller"};
+// Prefs::golive_method: how Go Live gets the picture.
+constexpr const char *kCaptureMethods[] = {"Hardware encoder", "Remote Play (legacy)"};
 // Prefs::golive_bitrate: 0 follows the quality (the core's broadcast.c recommended_mbps), level n
 // is n + 1 Mbit/s. Custom stops at what the stream tells Discord it may send: 10 Mbit/s at 720p,
 // 20 at 1080p (src/stream.c max_bitrate).
@@ -153,7 +153,7 @@ constexpr int kSectionCount = sizeof kSections / sizeof *kSections;
 
 std::string day_text(std::int64_t unix_s, int utc_offset_minutes);
 
-// Remote Play pairing: what the USB controller capture needs.
+// Pairing is only needed by the legacy Remote Play method.
 Row go_live_pair(const discord::Voice &v, const discord::Snapshot &s)
 {
     Row pair;
@@ -174,7 +174,7 @@ Row go_live_pair(const discord::Voice &v, const discord::Snapshot &s)
     else
     {
         pair.value = "Not paired";
-        pair.desc = "The USB controller capture needs a console user paired once.";
+        pair.desc = "Remote Play needs a console user paired once.";
     }
     return pair;
 }
@@ -207,14 +207,18 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
         return {mic, heard};
     }
     case 2: {
-        return {
+        std::vector<Row> rows = {
             choice_row("Quality", "From the next Go Live on. Above 720p · 30 fps may need Nitro.",
                        "golive_quality", kQualities, s.prefs.golive_quality),
             bitrate_row(s.prefs.golive_quality, s.prefs.golive_bitrate),
-            choice_row("Capture", "Auto: USB controller if plugged in and paired, else wireless.",
-                       "golive_backend", kCaptures, s.prefs.golive_backend),
-            go_live_pair(v, s),
+            choice_row("Capture method", s.prefs.golive_method == 1
+                           ? "Remote Play needs a USB controller and pairing."
+                           : "Leaves the controller alone. No USB or pairing needed.",
+                       "golive_method", kCaptureMethods, s.prefs.golive_method),
         };
+        if (s.prefs.golive_method == 1)
+            rows.push_back(go_live_pair(v, s));
+        return rows;
     }
     case 3: {
         const discord::Bluetooth &b = s.bt;
@@ -1003,7 +1007,8 @@ void SettingsScreen::draw(const discord::Snapshot &s, const hui::Settings &app, 
         }
         case Kind::choice: { // ‹ value ›, each arrow faint at its end
             const float w = 300.0f;
-            ui::text(list, ink_.fonts.regular, row.value, right - w * 0.5f, cy + 9.0f, 26.0f, kText,
+            ui::text(list, ink_.fonts.regular, fit(ink_.fonts.regular, row.value, 26.0f, w - 48.0f),
+                     right - w * 0.5f, cy + 9.0f, 26.0f, kText,
                      gfx::Align::center);
             chevron(list, right - 6.0f, cy, row.level < row.count - 1 ? kDim : kLine);
             list.line(right - w + 6.0f, cy - 10.0f, right - w - 4.0f, cy, 3.0f, row.level > 0 ? kDim : kLine);

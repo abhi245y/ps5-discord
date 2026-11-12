@@ -15,7 +15,7 @@ typedef struct {
 
 static pref prefs[] = {
     {"golive_quality", 0, 3, 0, 0}, // broadcast.h bc_profile: 720p30, 720p60, 1080p30, 1080p60
-    {"golive_backend", 0, 2, 0, 0}, // broadcast.c: 0 auto (USB controller: Remote Play, else wireless), 1 wireless, 2 Remote Play
+    {"golive_method", 0, 1, 0, 0}, // broadcast.c: 0 hardware encoder, 1 Remote Play (legacy)
     {"golive_bitrate", 0, 19, 0, 0}, // broadcast.c bitrate_for: 0 recommended, n: n + 1 Mbit/s (wireless)
     {"mic_gain", 0, 10, 5, 5},      // 5 = as captured, 10 = twice
     {"call_volume", 0, 10, 5, 5},   // the voices heard: 5 = as received, 10 = twice

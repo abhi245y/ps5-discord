@@ -28,8 +28,9 @@
 // ---- stubs for the rest of the core -----------------------------------------------------------
 
 static _Atomic int call_on = 1, usb_on, rp_paired = -1;
-static int usb_probe(void) { return usb_on; }
-static int pref_quality, pref_backend, pref_bitrate;
+static int usb_probes;
+static int usb_probe(void) { usb_probes++; return usb_on; }
+static int pref_quality, pref_method, pref_bitrate;
 static _Atomic unsigned stops_of_stream, alerts;
 static char alert_text[160];
 
@@ -48,7 +49,7 @@ int voice_wanted(void) { return call_on; }
 int prefs_get(const char *key)
 {
     return !strcmp(key, "golive_quality")   ? pref_quality
-           : !strcmp(key, "golive_backend") ? pref_backend
+           : !strcmp(key, "golive_method")  ? pref_method
            : !strcmp(key, "golive_bitrate") ? pref_bitrate
                                             : 0;
 }
@@ -898,55 +899,60 @@ int main(void)
     check_stopped_clean();
     cases++;
 
-    // Backend selection: Auto goes by a DualSense on USB (Remote Play takes it over, as before),
-    // otherwise the wireless capture; the pref overrides either way. Remote Play on the host has
-    // no console under it: it fails with its own message, which tells which backend was chosen.
-    bc_set_usb_probe(usb_probe);
-    pref_backend = 0;
-    usb_on = 0;
+    // Only the capture method chooses the backend. USB and pairing never override the
+    // hardware encoder default. Remote Play on the host fails with its own message,
+    // proving that the encoder helper was never launched for that method.
+    pref_method = 0;
+    for (int setup = 0; setup < 3; setup++) {
+        usb_on = setup != 0;
+        rp_paired = setup == 2 ? 5 : -1;
+        bc_set_usb_probe(usb_probe);
+        assert(!bc_needs_pairing() && !strcmp(bc_controller(), "ok"));
+        reset(H_NORMAL);
+        assert(bc_start() == 0);
+        WAIT(!strcmp(bc_state(), "live"), 5000);
+        assert(launches == 1 && bc_holds_controller() == 0);
+        bc_stop();
+        check_stopped_clean();
+        assert(usb_probes == 0); // even a paired USB pad is never probed for the encoder
+    }
+
+    pref_method = 1;
+    assert(bc_needs_pairing());
     rp_paired = -1;
+    reset(H_NORMAL);
+    assert(bc_start() == -1 && strstr(bc_error(), "not paired") && launches == 0);
+    rp_paired = 5;
+    usb_on = 0;
     bc_set_usb_probe(usb_probe);
-    assert(!bc_needs_pairing() && !strcmp(bc_controller(), "ok")); // auto, no USB pad: wireless
+    assert(bc_start() == -1 && !strcmp(bc_error(), "Remote Play needs a DualSense connected by USB.") && launches == 0);
     usb_on = 1;
     bc_set_usb_probe(usb_probe);
-    assert(!bc_needs_pairing()); // auto, pad on USB but Remote Play not paired: it could not run, so wireless
-    rp_paired = 5;
-    assert(bc_needs_pairing()); // auto, pad on USB, paired: Remote Play
-    reset(H_NORMAL);
     assert(bc_start() == 0);
     WAIT(!strcmp(bc_state(), "error"), 3000);
     assert(!strcmp(bc_error(), "Broadcasting needs the console.") && launches == 0); // Remote Play's run()
     WAIT(alerts == 1, 1000);
-    rp_paired = -1;
-    pref_backend = 1; // wireless forced: the pad on USB is left alone, no pairing asked
-    assert(!bc_needs_pairing() && !strcmp(bc_controller(), "ok"));
-    reset(H_NORMAL);
-    assert(bc_start() == 0);
-    WAIT(!strcmp(bc_state(), "live"), 5000);
-    assert(launches == 1 && bc_holds_controller() == 0);
-    bc_stop();
-    check_stopped_clean();
-    pref_backend = 2; // Remote Play forced without a pad on USB or a pairing: its own error
+
+    pref_method = 0;
     usb_on = 0;
-    bc_set_usb_probe(usb_probe);
-    assert(bc_needs_pairing());
-    reset(H_NORMAL);
-    assert(bc_start() == -1 && strstr(bc_error(), "not paired") && launches == 0);
-    pref_backend = 0; // auto again: a running wireless Go Live keeps its backend when a pad appears
+    rp_paired = -1;
     bc_set_usb_probe(usb_probe);
     reset(H_NORMAL);
     assert(bc_start() == 0);
     WAIT(!strcmp(bc_state(), "live"), 5000);
+    pref_method = 1; // changing the method affects the next Go Live, not this running encoder
     usb_on = 1;
-    rp_paired = 5; // now Auto would pick Remote Play, but this Go Live is running wireless
+    rp_paired = 5;
     bc_set_usb_probe(usb_probe);
     assert(!bc_needs_pairing() && !strcmp(bc_controller(), "ok"));
-    assert(bc_start() == 0 && launches == 1); // a repeat while running is the same Go Live
+    assert(bc_start() == 0 && launches == 1);
     bc_stop();
     check_stopped_clean();
+    assert(bc_needs_pairing()); // stopped: the next Go Live uses the new method
+    pref_method = 0;
     usb_on = 0;
     rp_paired = -1;
-    cases += 5;
+    cases += 7;
 
     printf("PASS: wireless backend: %d scenarios against a replayed console recording\n", cases);
     return 0;
