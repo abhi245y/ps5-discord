@@ -9,7 +9,12 @@ All notable changes to this project are documented here. The format follows
 ### Added
 - Settings, Voice & audio: opt-in **Controller audio**, saved per console user. Calls
   automatically capture the USB DualSense microphone and speaker while forwarding
-  controller input; disabling it or ending the call releases USB. Press PS afterward.
+  controller input to the console through a virtual controller (no Remote Play session);
+  disabling it or ending the call releases USB. Press PS afterward. It shares the USB
+  controller safely with Remote Play (legacy) Go Live through one owner lock and recovers the
+  controller after a crash; the app shows who holds call audio (app, Bluetooth, controller,
+  Remote Play).
+- Settings lists scroll with focus (the Overlay page no longer overflows).
 - Wireless Go Live: the picture from the console's own hardware encoder through a helper payload
   (`capture/`, GPL-3.0-only), the sound from the core's game-audio capture, shared with the
   Bluetooth headset (`src/bt/game_audio.cpp`). The controller is left alone. Settings, Go Live,
