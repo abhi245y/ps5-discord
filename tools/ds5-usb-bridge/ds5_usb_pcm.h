@@ -56,8 +56,10 @@ static inline int ds5_usb_parse_controller(const uint8_t *report, size_t size,
     return 1;
 }
 
-static inline void ds5_usb_route_report(uint8_t report[63], const ds5_usb_config *config,
-                                       int headphones, int muted)
+// headset_mic: the jack reports a headset with a mic (status byte bit 1). Audio flags (byte 8):
+// bit 0 forces the built-in mic, bit 1 the headset's; with neither set, a plugged headset wins.
+static inline void ds5_usb_route_report_mic(uint8_t report[63], const ds5_usb_config *config,
+                                           int headphones, int muted, int headset_mic)
 {
     memset(report, 0, 63);
     report[0] = 2;
@@ -66,7 +68,7 @@ static inline void ds5_usb_route_report(uint8_t report[63], const ds5_usb_config
     report[5] = headphones ? config->headphone_volume : 0;
     report[6] = headphones ? 0 : config->speaker_volume;
     report[7] = config->mic_volume;
-    report[8] = (headphones ? 0 : 0x30) | 1;
+    report[8] = (headphones ? 0 : 0x30) | (headset_mic ? 0 : 1);
     report[9] = muted ? 1 : 0;
     report[10] = muted ? 0x10 : 0;
     report[38] = config->speaker_pre_gain;
@@ -82,5 +84,11 @@ static inline void ds5_usb_route_report(uint8_t report[63], const ds5_usb_config
         report[46] = 0xc8;        // teal: green and blue
         report[47] = 0xb4;
     }
+}
+
+static inline void ds5_usb_route_report(uint8_t report[63], const ds5_usb_config *config,
+                                       int headphones, int muted)
+{
+    ds5_usb_route_report_mic(report, config, headphones, muted, 0); // built-in mic, as before
 }
 #endif
