@@ -1,1 +1,9 @@
 /vpad-probe.elf
+/vpad-game-probe.elf
+/vpad-usb-probe.elf
+/vpad-usb-audio-probe.elf
+/vpad-usb-call-probe.elf
+/vpad-usb-restore-probe.elf
+/vpad-usb-call-restore-probe.elf
+/controller-audio.elf
+/usb-forward-test

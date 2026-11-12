@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Settings, Voice & audio: opt-in **Controller audio**, saved per console user. Calls
+  automatically capture the USB DualSense microphone and speaker while forwarding
+  controller input; disabling it or ending the call releases USB. Press PS afterward.
 - Wireless Go Live: the picture from the console's own hardware encoder through a helper payload
   (`capture/`, GPL-3.0-only), the sound from the core's game-audio capture, shared with the
   Bluetooth headset (`src/bt/game_audio.cpp`). The controller is left alone. Settings, Go Live,
@@ -22,6 +25,8 @@ All notable changes to this project are documented here. The format follows
   with the new standalone pill lab (`overlay/`, `make pill-lab`).
 
 ### Fixed
+- Controller audio forwards the physical PS button so the console can open its
+  control center while USB microphone and speaker capture stays active.
 - Wireless Go Live keeps streaming through a game launch (each HDMI change recovers), attaches
   when Remote Play's code cannot be read, and paces video (80 Mbit/s bursts, no Nagle delay on the
   helper link) so keyframes no longer cause hitches. 1080p loss came from too high a bitrate.

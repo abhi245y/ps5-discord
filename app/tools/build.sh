@@ -301,6 +301,14 @@ if [[ -f $root/../build/ps5-discord.elf ]]; then
 else
     echo "warning: ../build/ps5-discord.elf missing; the app will not start the core" >&2
 fi
+
+# Automatic controller audio uses the separately supervised USB/virtual-pad worker.
+make -C "$root/../tools/vpad-probe" service PS5_PAYLOAD_SDK="$root/../.deps/ps5-payload-sdk"
+if [[ ! -s $root/../tools/vpad-probe/controller-audio.elf ]]; then
+    echo "error: controller audio worker missing; refusing incomplete app" >&2
+    exit 1
+fi
+cp "$root/../tools/vpad-probe/controller-audio.elf" "$app/assets/controller-audio.elf"
 # A USB Bluetooth adapter's firmware for the headset (the core reads /app0/firmware), with
 # its licence (tools/deps.sh at the repo root fetches both).
 if [[ -f $root/../.deps/firmware/rtl8761bu_fw.bin ]]; then

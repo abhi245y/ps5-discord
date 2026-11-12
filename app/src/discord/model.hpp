@@ -360,6 +360,7 @@ struct Prefs
     int golive_bitrate = 0; // 0 recommended for the quality, n: n + 1 Mbit/s
     int mic_gain = 5;       // 0..10, 5 = as captured
     int call_volume = 5;    // 0..10, the voices heard: 5 = as received
+    bool controller_audio = false; // Automatically use USB controller mic/speaker in calls.
     bool notify_dm = true;
     int notify_server = 1;     // 0 off, 1 as set in Discord, 2 every message
     bool notify_system = true; // PS5 alerts while the app is not on screen
@@ -387,6 +388,8 @@ struct Prefs
             mic_gain = value;
         else if (key == "call_volume")
             call_volume = value;
+        else if (key == "controller_audio")
+            controller_audio = value != 0;
         else if (key == "notify_dm")
             notify_dm = value != 0;
         else if (key == "notify_server")

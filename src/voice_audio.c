@@ -16,6 +16,10 @@
 #include "core_key.h"
 #include "log.h"
 #include "pcm_stream.h"
+#include "pcm_clients.h"
+#ifdef __PROSPERO__
+#include "broadcast.h"
+#endif
 #include "prefs.h"
 #include "voice_proto.h"
 
@@ -229,7 +233,9 @@ typedef struct {
 // Everything below is guarded by mu. The voice thread and the engine both touch libdave.
 static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
 static OpusEncoder *enc_opus;
-static int listen_fd = -1, client_fd = -1;
+static int listen_fd = -1, usb_listen_fd = -1;
+static pcm_clients audio_clients = PCM_CLIENTS_INIT;
+static _Atomic int usb_client, app_client;
 
 // the connection (set by vau_attach / vau_dave_state)
 static int attached, udp = -1;
@@ -276,7 +282,7 @@ static unsigned st_rx, st_nopeer, st_nokey, st_open_fail, st_decoded, st_mixed, 
     st_sent, st_seal_fail;
 static int64_t st_at;
 
-static int mic_head, mic_count, mic_carry = -1;
+static int mic_head, mic_count, mic_carry = -1, mic_skip;
 static uint8_t out_buf[OUT_CAP * OUT_FRAME_BYTES];
 static size_t out_len;
 
@@ -379,19 +385,38 @@ static void mic_push(const uint8_t *b, size_t n)
     }
 }
 
-static void client_drop(void)
+static void client_buffers_reset(void)
 {
-    if (client_fd >= 0)
-        close(client_fd);
-    client_fd = -1;
     mic_head = mic_count = 0;
     mic_carry = -1;
+    mic_skip = audio_clients.resume_skip;
     out_len = 0;
+}
+
+static void external_buffers_reset(void)
+{
+    pthread_mutex_lock(&ext_mu);
+    ext_mic_head = ext_mic_count = 0;
+    memset(&ext_out, 0, sizeof ext_out);
+    pthread_mutex_unlock(&ext_mu);
+}
+
+static void client_drop(void)
+{
+    int was_usb = audio_clients.usb;
+    pcm_clients_drop(&audio_clients);
+    usb_client = audio_clients.usb;
+    app_client = audio_clients.current >= 0;
+    client_buffers_reset();
+    if (was_usb)
+        external_buffers_reset();
+    if (was_usb && audio_clients.current >= 0)
+        LOG("voice audio: app PCM resumed after USB release");
 }
 
 // A new connection first sends the core key (core_key.h); until then it is only a
 // candidate, and the app on the link keeps it. One candidate at a time, 2 s to show it.
-static int pending_fd = -1;
+static int pending_fd = -1, pending_usb;
 static char pending_key[CORE_KEY_LEN];
 static size_t pending_len;
 static int64_t pending_ms;
@@ -427,46 +452,88 @@ static void check_pending(void)
         pending_drop();
         return;
     }
-    client_drop(); // one app at a time: the newest replaces the old (a restarted app)
+    if (pending_usb) {
+        int busy = audio_clients.usb;
+#ifdef __PROSPERO__
+        busy = busy || bc_holds_controller();
+#endif
+        /* Acknowledgement gates USB takeover in the client. Existing app
+         * clients on 9042 retain their original key-then-PCM protocol. */
+        if (busy || send(pending_fd, "OK", 2, MSG_DONTWAIT | MSG_NOSIGNAL) != 2) {
+            LOG("voice audio: USB PCM unavailable");
+            pending_drop();
+            return;
+        }
+    }
     int one = 1;
     setsockopt(pending_fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
-    client_fd = pending_fd; // what follows the key is mic audio, read by read_mic
+    int app_phase = mic_carry >= 0 || mic_skip;
+    int changed = pcm_clients_take(&audio_clients, pending_fd, pending_usb);
+    if (changed < 0) {
+        pending_drop();
+        return;
+    }
+    if (changed && pending_usb && audio_clients.parked >= 0)
+        audio_clients.parked_phase = app_phase;
+    if (changed)
+        client_buffers_reset();
+    if (changed && pending_usb)
+        external_buffers_reset();
+    usb_client = audio_clients.usb;
+    app_client = audio_clients.parked >= 0 || (audio_clients.current >= 0 && !audio_clients.usb);
     pending_fd = -1;
     pending_len = 0;
-    LOG("voice audio: app connected");
+    LOG("voice audio: %s PCM %s", pending_usb ? "USB" : "app", changed ? "active" : "parked");
 }
 
 static void accept_client(void)
 {
-    if (listen_fd < 0 || pending_fd >= 0) // the next waits in the backlog
+    if (pending_fd >= 0)
         return;
-    struct sockaddr_in a;
-    socklen_t l = sizeof a;
-    int fd = accept(listen_fd, (struct sockaddr *)&a, &l);
-    if (fd < 0)
-        return;
-    if (!vau_loopback(a.sin_addr.s_addr)) {
-        close(fd);
+    /* USB first; each role remains IPv4 loopback-only and key-authenticated. */
+    for (int role = 1; role >= 0; --role) {
+        int listener = role ? usb_listen_fd : listen_fd;
+        if (listener < 0)
+            continue;
+        struct sockaddr_in a;
+        socklen_t l = sizeof a;
+        int fd = accept(listener, (struct sockaddr *)&a, &l);
+        if (fd < 0)
+            continue;
+        if (!vau_loopback(a.sin_addr.s_addr)) {
+            close(fd);
+            continue;
+        }
+        int flags = fcntl(fd, F_GETFL, 0);
+        if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) {
+            close(fd);
+            continue;
+        }
+        pending_fd = fd;
+        pending_usb = role;
+        pending_ms = now_ms();
         return;
     }
-    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
-    pending_fd = fd;
-    pending_ms = now_ms();
 }
 
 static void read_mic(void)
 {
     uint8_t buf[4096];
-    for (int i = 0; i < 8 && client_fd >= 0; i++) {
-        ssize_t r = recv(client_fd, buf, sizeof buf, MSG_DONTWAIT);
-        if (r > 0 && ext_on) // the device is the mic; keep draining the app's socket
+    for (int i = 0; i < 8 && audio_clients.current >= 0; i++) {
+        ssize_t r = recv(audio_clients.current, buf, sizeof buf, MSG_DONTWAIT);
+        if (r > 0 && ext_on && !audio_clients.usb) { // drain app mic, retaining sample alignment
+            mic_skip = ((mic_carry >= 0 || mic_skip) + (int)(r & 1)) & 1;
+            mic_carry = -1;
             continue;
+        }
         if (r > 0) {
-            mic_push(buf, (size_t)r);
-            st_mic_bytes += (unsigned)r;
+            size_t skip = mic_skip ? 1u : 0u;
+            mic_skip = 0;
+            mic_push(buf + skip, (size_t)r - skip);
+            st_mic_bytes += (unsigned)((size_t)r - skip);
         }
         else if (r == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
-            LOG("voice audio: app disconnected");
+            LOG("voice audio: %s disconnected", audio_clients.usb ? "USB" : "app");
             client_drop();
         } else
             break;
@@ -475,8 +542,8 @@ static void read_mic(void)
 
 static void out_flush(void)
 {
-    while (client_fd >= 0 && out_len) {
-        ssize_t w = send(client_fd, out_buf, out_len, MSG_DONTWAIT);
+    while (audio_clients.current >= 0 && out_len) {
+        ssize_t w = send(audio_clients.current, out_buf, out_len, MSG_DONTWAIT);
         if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
             return;
         if (w <= 0) {
@@ -713,14 +780,14 @@ static void play(void)
     if (any && volume != 5)
         for (int i = 0; i < 2 * VAU_FRAME; i++)
             acc[i] = acc[i] * volume / 5; // vau_mix_out clips
-    if (any && ext_on) {
+    if (any && ext_on && !audio_clients.usb) {
         vau_mix_out(acc, out);
         pthread_mutex_lock(&ext_mu);
         ds5_pcm_receive(&ext_out, (const uint8_t *)out, sizeof out); // little endian
         pthread_mutex_unlock(&ext_mu);
         st_out_bytes += sizeof out;
         st_mixed++;
-    } else if (any && client_fd >= 0) {
+    } else if (any && audio_clients.current >= 0) {
         vau_mix_out(acc, out);
         out_push(out);
         st_mixed++;
@@ -746,6 +813,8 @@ static void keepalive(int64_t now)
 // Moves the device's mic samples into the mic ring (bytes, as the app sends them).
 static void read_ext_mic(void)
 {
+    if (usb_client)
+        return;
     uint8_t b[2 * 1024];
     for (;;) {
         pthread_mutex_lock(&ext_mu);
@@ -769,6 +838,8 @@ static void tick(void)
 {
     accept_client();
     check_pending();
+    pcm_clients_discard_parked(&audio_clients);
+    app_client = audio_clients.parked >= 0 || (audio_clients.current >= 0 && !audio_clients.usb);
     read_mic();
     read_ext_mic();
     if (!attached) { // no call: the mic is not wanted
@@ -803,14 +874,14 @@ static void *engine_main(void *arg)
     return NULL;
 }
 
-static int listen_loopback(void)
+static int listen_loopback(int port)
 {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0)
         return -1;
     int one = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
-    struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons(VAU_PORT)};
+    struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons((uint16_t)port)};
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     if (bind(fd, (struct sockaddr *)&a, sizeof a) != 0 || listen(fd, 1) != 0) {
         close(fd);
@@ -825,7 +896,10 @@ void vau_init(void)
     enc_opus = vau_encoder_new();
     if (!enc_opus)
         LOG("voice audio: Opus encoder failed, no audio");
-    listen_fd = listen_loopback();
+    listen_fd = listen_loopback(VAU_PORT);
+    usb_listen_fd = listen_loopback(VAU_USB_PORT);
+    if (usb_listen_fd < 0)
+        LOG("voice audio: USB PCM listener unavailable on 127.0.0.1:%d", VAU_USB_PORT);
     if (listen_fd < 0)
         LOG("voice audio: cannot listen on 127.0.0.1:%d (errno %d)", VAU_PORT, errno);
     else
@@ -1039,5 +1113,18 @@ size_t vau_ext_playback(int16_t *stereo, size_t frames)
 
 int vau_app_connected(void)
 {
-    return client_fd >= 0;
+    return app_client;
+}
+
+int vau_usb_connected(void)
+{
+    return usb_client;
+}
+
+void vau_usb_release(void)
+{
+    pthread_mutex_lock(&mu);
+    if (audio_clients.usb)
+        client_drop();
+    pthread_mutex_unlock(&mu);
 }

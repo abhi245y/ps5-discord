@@ -1450,6 +1450,7 @@ void Client::poll_voice()
             prefs.golive_bitrate = std::clamp(static_cast<int>(num(p, "golive_bitrate", 0.0)), 0, 19);
             prefs.mic_gain = std::clamp(static_cast<int>(num(p, "mic_gain", 5.0)), 0, 10);
             prefs.call_volume = std::clamp(static_cast<int>(num(p, "call_volume", 5.0)), 0, 10);
+            prefs.controller_audio = num(p, "controller_audio", 0.0) != 0.0;
             prefs.notify_dm = num(p, "notify_dm", 1.0) != 0.0;
             prefs.notify_server = std::clamp(static_cast<int>(num(p, "notify_server", 1.0)), 0, 2);
             prefs.notify_system = num(p, "notify_system", 1.0) != 0.0;

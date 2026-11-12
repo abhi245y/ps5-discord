@@ -1,34 +1,53 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Controller audio (controller_voice.h). A supervisor checks five times a second
-// whether the controller should be the call's audio and starts or stops the USB
-// runtime (tools/ds5-usb-bridge/ds5_usb.c, audio only: the console keeps the buttons,
-// the headphone jack and the mute button) to match.
+// Core manages call lifetime and saved preference; supervised worker owns USB.
 #include "controller_voice.h"
-
-#include <pthread.h>
-#include <stdio.h>
-#include <unistd.h>
-
-#include "log.h"
+#include "prefs.h"
 #include "voice.h"
 #include "voice_audio.h"
 
-static volatile int tv = 1;
-static volatile int on, missing;
+#include <stdatomic.h>
 
-void cv_set_tv(int pick)
+static atomic_int paused, suppressed, owned, state;
+enum { OFF, STARTING, ON, MISSING, STOPPING, ERROR };
+#ifdef __PROSPERO__
+static int worker_busy(void);
+#endif
+
+void cv_set_tv(int tv)
 {
-    tv = pick;
+    (void)prefs_set("controller_audio", !tv);
 }
 
 int cv_tv(void)
 {
-    return tv;
+    return !prefs_get("controller_audio");
+}
+
+int cv_holds_controller(void)
+{
+#ifdef __PROSPERO__
+    return owned || worker_busy();
+#else
+    return owned;
+#endif
+}
+
+void cv_pause(int on)
+{
+    paused = on;
+}
+
+void cv_stop(void)
+{
+    suppressed = 1;
 }
 
 const char *cv_state(void)
 {
-    return on ? "on" : missing ? "missing" : "off";
+    if (vau_usb_connected())
+        return "on";
+    static const char *const names[] = {"off", "starting", "on", "missing", "stopping", "error"};
+    return names[atomic_load(&state)];
 }
 
 #ifndef __PROSPERO__
@@ -36,99 +55,180 @@ void cv_init(void)
 {
 }
 #else
-
 #include "ds5_usb.h"
+#include "log.h"
 
-static volatile int usb_done = 1;
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <sys/file.h>
+#include <sys/socket.h>
+#include <time.h>
+#include <unistd.h>
 
-static void usb_log(void *user, const char *message)
+#define WORKER "/data/homebrew/PPSA99072/assets/controller-audio.elf"
+#define WORKER_LOCK "/data/ps5-discord/vpad-probe.lock"
+
+static uint64_t milliseconds(void)
 {
-    (void)user;
-    LOG("controller audio: %s", message);
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+        return 0;
+    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
 }
 
-static void usb_mic(void *user, const int16_t *mono, size_t frames, int muted)
+static int worker_busy(void)
 {
-    (void)user;
-    (void)muted;
-    vau_ext_mic(mono, frames);
+    int fd = open(WORKER_LOCK, O_RDWR);
+    if (fd < 0)
+        return errno == ENOENT ? 0 : 1;
+    int busy = flock(fd, LOCK_EX | LOCK_NB) != 0;
+    close(fd);
+    return busy;
 }
 
-static size_t usb_playback(void *user, int16_t *stereo, size_t frames)
+static int launch_worker(void)
 {
-    (void)user;
-    return vau_ext_playback(stereo, frames);
+    FILE *file = fopen(WORKER, "rb");
+    if (!file) {
+        LOG("controller audio: worker asset unavailable (%d)", errno);
+        return -1;
+    }
+    int fd = socket(AF_INET, SOCK_STREAM, 0), result = -1;
+    if (fd < 0)
+        goto done;
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0)
+        goto done;
+    struct sockaddr_in to = {.sin_len = sizeof to, .sin_family = AF_INET, .sin_port = htons(9021)};
+    to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    int rc = connect(fd, (struct sockaddr *)&to, sizeof to);
+    if (rc != 0 && errno != EINPROGRESS)
+        goto done;
+    uint64_t deadline = milliseconds() + 3000u;
+    size_t total = 0;
+    unsigned char bytes[4096];
+    while (!atomic_load(&paused) && !atomic_load(&suppressed) && milliseconds() < deadline) {
+        struct pollfd wait = {.fd = fd, .events = POLLOUT};
+        rc = poll(&wait, 1, 50);
+        if (rc < 0 && errno == EINTR)
+            continue;
+        if (rc <= 0)
+            continue;
+        if (wait.revents & (POLLERR | POLLHUP | POLLNVAL))
+            goto done;
+        int error = 0;
+        socklen_t len = sizeof error;
+        if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &len) != 0 || error)
+            goto done;
+        size_t n = fread(bytes, 1, sizeof bytes, file);
+        if (!n) {
+            if (!ferror(file) && total)
+                result = 0;
+            break;
+        }
+        for (size_t sent = 0; sent < n;) {
+            ssize_t count = send(fd, bytes + sent, n - sent, MSG_NOSIGNAL);
+            if (count > 0) {
+                sent += (size_t)count;
+                total += (size_t)count;
+            } else if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+                if (milliseconds() >= deadline || atomic_load(&paused) || atomic_load(&suppressed))
+                    goto done;
+                usleep(1000);
+            } else
+                goto done;
+        }
+    }
+done:
+    if (fd >= 0)
+        close(fd);
+    fclose(file);
+    LOG("controller audio: worker launch %s", result == 0 ? "sent" : "failed");
+    return result;
 }
 
-static void *usb_main(void *arg)
+static void *supervise(void *unused)
 {
-    (void)arg;
-    ds5_usb_config config;
-    ds5_usb_default_config(&config);
-    config.duration_ms = 0;       // until the supervisor stops it
-    config.audio_only = 1;
-    config.notifications = 0;     // the app shows the state
-    config.headphone_gain_q15 = 32768; // the console sets the volume
-    const ds5_usb_callbacks callbacks = {.log = usb_log, .microphone = usb_mic, .playback = usb_playback};
-    ds5_usb_stats stats = {0};
-    int r = ds5_usb_run(&config, &callbacks, NULL, &stats);
-    if (stats.microphone_frames || r == DS5_USB_OK)
-        LOG("controller audio: released (%d): mic %llu frames, played %llu", r,
-            (unsigned long long)stats.microphone_frames, (unsigned long long)stats.playback_frames);
-    usb_done = 1;
-    return NULL;
-}
-
-static void *supervise(void *arg)
-{
-    (void)arg;
-    pthread_t usb;
-    int running = 0;
-    unsigned retry = 0; // ticks to wait after the controller was not found
+    (void)unused;
+    int stopping = 0, seen_owner = 0;
+    uint64_t started = 0, retry = 0;
     for (;;) {
         usleep(200000);
-        int want = voice_wanted() && (!tv || !vau_app_connected());
-        if (running && usb_done) { // ended by itself: unplugged, or never found
-            pthread_join(usb, NULL);
-            running = on = 0;
-            vau_ext_set(0);
-            missing = 1;
-            retry = 150; // 30 s: most controllers are on Bluetooth
-        }
-        if (want && !running && (retry == 0 || --retry == 0)) {
-            usb_done = 0;
-            vau_ext_set(1);
-            running = pthread_create(&usb, NULL, usb_main, NULL) == 0;
-            if (!running) {
-                vau_ext_set(0);
-                usb_done = 1;
+        int call = voice_wanted();
+        if (!call)
+            suppressed = 0;
+        int want =
+            prefs_loaded() && prefs_get("controller_audio") && call && !paused && !suppressed;
+        uint64_t now = milliseconds();
+        if (owned) {
+            if (vau_usb_connected())
+                seen_owner = 1;
+            if (!want && !stopping) {
+                stopping = 1;
+                state = STOPPING;
+                vau_usb_release();
             }
-            on = running;
-            missing = 0;
-        } else if (!want && running) {
-            ds5_usb_request_stop();
-            pthread_join(usb, NULL);
-            running = on = 0;
-            vau_ext_set(0);
+            if (stopping) {
+                if (vau_usb_connected())
+                    vau_usb_release();
+                if ((seen_owner || now - started >= 4000u) && !worker_busy()) {
+                    owned = 0;
+                    stopping = seen_owner = 0;
+                    state = OFF;
+                    retry = now + 1000u;
+                }
+            } else if (vau_usb_connected())
+                state = ON;
+            else if ((seen_owner || now - started >= 10000u) && !worker_busy()) {
+                owned = 0;
+                seen_owner = 0;
+                state = ERROR;
+                retry = now + 10000u;
+            }
+            continue;
         }
-        if (!want)
-            missing = 0, retry = 0;
+        if (!want) {
+            state = OFF;
+            continue;
+        }
+        if (vau_usb_connected()) {
+            state = ON;
+            continue;
+        }
+        if (now < retry || worker_busy())
+            continue;
+        if (!ds5_usb_present()) {
+            state = MISSING;
+            retry = now + 2000u;
+            continue;
+        }
+        state = STARTING;
+        owned = 1;
+        started = now;
+        if (launch_worker() != 0) {
+            state = ERROR;
+            stopping = 1;
+            retry = now + 10000u;
+        }
     }
     return NULL;
 }
 
 void cv_init(void)
 {
-    // ponytail: parked (2026-10-28). Audio-only takeover stops the console's buttons
-    // until a replug and the speaker stays silent without our route report; revisit
-    // with the full takeover that worked through Remote Play.
-    if (1)
-        return;
-    pthread_t t;
+    pthread_t thread;
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-    if (pthread_create(&t, &attr, supervise, NULL) != 0)
-        LOG("controller audio: supervisor did not start");
+    if (pthread_create(&thread, &attr, supervise, NULL) != 0) {
+        state = ERROR;
+        LOG("controller audio: supervisor failed to start");
+    }
+    pthread_attr_destroy(&attr);
 }
 #endif

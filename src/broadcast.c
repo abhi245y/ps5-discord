@@ -24,6 +24,7 @@
 #include <time.h>
 
 #include "capture_bc.h"
+#include "controller_voice.h"
 #include "log.h"
 #include "notify.h"
 #include "prefs.h"
@@ -444,8 +445,17 @@ static const char *run(void)
     ChiakiAudioSink audio = {NULL, audio_header_cb, audio_frame_cb};
     chiaki_session_set_audio_sink(&session, &audio);
     const char *why = NULL;
-    const int started = chiaki_session_start(&session) == CHIAKI_ERR_SUCCESS;
-    if (!started)
+    const int reserve_controller = mine && want;
+    if (reserve_controller) {
+        cv_pause(1);
+        vau_usb_release();
+        for (int i = 0; i < 300 && want && cv_holds_controller(); ++i)
+            usleep(100000);
+        if (cv_holds_controller())
+            why = "Controller audio is still releasing. Try Go Live again.";
+    }
+    const int started = !why && want && chiaki_session_start(&session) == CHIAKI_ERR_SUCCESS;
+    if (!started && !why && want)
         why = "Remote Play could not start.";
     for (int i = 0; !why && !connected && !quit && want && i < 200; i++) // 20 s
         usleep(100000);
@@ -508,6 +518,8 @@ static const char *run(void)
         chiaki_session_join(&session);
     }
     chiaki_session_fini(&session);
+    if (reserve_controller)
+        cv_pause(0);
     return why;
 }
 

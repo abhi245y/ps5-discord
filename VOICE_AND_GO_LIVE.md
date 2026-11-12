@@ -34,13 +34,22 @@ room.
 ![Chatting while in a call](screenshots/13-chat-in-call.jpg)
 
 Settings, **Voice & audio**: **Mic gain** (how loud you are; join a call to see your level
-there) and **Call volume** (how loud the call is for you).
+there), **Call volume** (how loud the call is for you), and **Controller audio**.
+Controller audio defaults to Off. Turn it On to automatically use a USB-connected
+DualSense microphone and speaker during calls, including while a game is in front.
+Use a USB data cable and set controller communication to **Use USB Cable**.
+Turning it Off or leaving the call releases the controller; press PS to wake it afterward.
+The choice is saved per console user. Remote Play temporarily reserves the controller
+for its own audio path.
+PS opens the control center while audio stays active. Create, motion sensing and
+touchpad coordinates are not forwarded; the touchpad click is supported.
 
 ### Things to know
 
 - **Without an external audio device, the app must be on screen for you to talk and hear.**
   When a game is in front, the console does not give the app the mic or the sound. To talk
-  while you play, use a Bluetooth headset through the USB adapter, or [Go Live](#go-live)
+  while you play, enable **Controller audio** with a USB cable, use a Bluetooth headset
+  through the USB adapter, or [Go Live](#go-live)
   with **Remote Play (legacy)**: there the USB controller is your headset. The default
   hardware encoder capture does not take over controller audio.
 - **What ends a call:** Leave, Settings, Account, **Sign out** or **Quit Discord**, and

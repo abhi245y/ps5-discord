@@ -33,12 +33,7 @@ OPUS_INCLUDES := -I$(OPUS)/include -I$(OPUS)/celt -I$(OPUS)/silk -I$(OPUS)/silk/
 
 DS5 := tools/ds5-usb-bridge
 APP_SRC := src/main.c src/log.c src/status.c src/web.c src/chat.c src/gateway.c src/remote_auth.c src/browser_auth.c src/browser_storage.c src/http.c src/props.c src/ws.c src/tls.c src/zstream.c src/ratelimit.c \
-	src/core_key.c src/voice.c src/voice_proto.c src/voice_audio.c src/broadcast.c src/capture_bc.c src/golive_opus.c src/rp_pair.c src/prefs.c src/notify.c src/stream.c src/playing.c src/update.c src/update_verify.c src/resample.c src/overlay.c src/png_circle.c $(DS5)/pcm_stream.c
-# Controller audio without Go Live (controller_voice.c) is parked: CONTROLLER_VOICE=1 builds it.
-ifneq ($(CONTROLLER_VOICE),)
-APP_SRC += src/controller_voice.c
-CV_FLAGS := -DCONTROLLER_VOICE
-endif
+	src/core_key.c src/voice.c src/voice_proto.c src/voice_audio.c src/controller_voice.c src/broadcast.c src/capture_bc.c src/golive_opus.c src/rp_pair.c src/prefs.c src/notify.c src/stream.c src/playing.c src/update.c src/update_verify.c src/resample.c src/overlay.c src/png_circle.c $(DS5)/pcm_stream.c
 # Go Live (console only): a loopback Remote Play session (vendored chiaki-ng,
 # third_party/README.md) and the DualSense USB runtime from tools/ds5-usb-bridge.
 CHIAKI := third_party/chiaki-ng
@@ -107,8 +102,8 @@ export LLVM_CONFIG ?= $(or $(shell command -v llvm-config),$(abspath tools/llvm-
 # no _FORTIFY_SOURCE.
 HARDEN := -fstack-protector-strong -Wformat=2 -Wformat-security
 PS5_CFLAGS := -std=gnu11 -O2 -Wall -Wextra $(HARDEN) $(INCLUDES) $(OPUS_FLAGS) $(PS5_DAVE_INC) -D__unix__ $(CHIAKI_FLAGS) \
-	'-DMBEDTLS_USER_CONFIG_FILE="platform/mbedtls_config_ps5.h"' $(SQLITE_FLAGS) $(CV_FLAGS)
-HOST_CFLAGS := -std=gnu11 -O1 -g -Wall -Wextra $(HARDEN) $(INCLUDES) $(OPUS_FLAGS) $(HOST_DAVE_INC) $(SQLITE_FLAGS) $(CV_FLAGS) \
+	'-DMBEDTLS_USER_CONFIG_FILE="platform/mbedtls_config_ps5.h"' $(SQLITE_FLAGS)
+HOST_CFLAGS := -std=gnu11 -O1 -g -Wall -Wextra $(HARDEN) $(INCLUDES) $(OPUS_FLAGS) $(HOST_DAVE_INC) $(SQLITE_FLAGS) \
 	'-DMBEDTLS_USER_CONFIG_FILE="platform/mbedtls_config_core.h"'
 # build/build_config.h, rewritten only when it changes (so the files using it rebuild then):
 # - CORE_VERSION: VERSION, or VERSION-dev+g<commit> unless RELEASE=1 (GIT_COMMIT where the
@@ -126,7 +121,7 @@ PS5_OBJ = $(patsubst %.c,build/ps5/%.o,$(APP_SRC) $(PS5_ONLY_SRC) $(PS5_DAVE_SRC
 	$(patsubst %.cpp,build/ps5/%.o,$(BLUEV_CXX))
 HOST_OBJ = $(patsubst %.c,build/host/%.o,$(APP_SRC) src/headset_stub.c $(HOST_DAVE_SRC) build/ca_bundle.c $(DEP_SRC))
 
-.PHONY: all deps dave ffmpeg host test deploy stop clean release capture capture-test FORCE
+.PHONY: all deps dave ffmpeg host test deploy stop clean release capture capture-test controller-audio-test FORCE
 .DEFAULT_GOAL := all
 
 build/build_config.h: FORCE
@@ -202,9 +197,13 @@ build/host/%.o: %.c
 	@$(HOST_CC) $(if $(filter .deps/%,$<),-w) $(HOST_CFLAGS) $(if $(filter src/% tests/%,$<),-Werror) -MMD -MP -c $< -o $@
 
 test: build/host/selftest build/host/browser-storage-test build/host/client-read-state-test build/host/gif-frames-test \
+		build/host/pcm-clients-test build/host/pcm-engine-test build/host/controller-prefs-test \
 		build/host/ds5-usb-test build/host/web-test build/host/gateway-test build/host/update-test $(HOST_DAVE_TEST) \
-		build/host/golive-opus-test build/host/game-audio-test build/host/game-audio-tsan-test build/host/capture-test build/host/capture-io-test capture-test
+		build/host/golive-opus-test build/host/game-audio-test build/host/game-audio-tsan-test build/host/capture-test build/host/capture-io-test capture-test controller-audio-test
 	./build/host/selftest
+	./build/host/pcm-clients-test
+	./build/host/pcm-engine-test
+	./build/host/controller-prefs-test
 	./build/host/golive-opus-test
 	./build/host/game-audio-test
 	./build/host/game-audio-tsan-test
@@ -219,8 +218,19 @@ test: build/host/selftest build/host/browser-storage-test build/host/client-read
 	./build/host/gif-frames-test
 	$(if $(HOST_DAVE_TEST),./build/host/dave-test)
 
-# Wireless Go Live: the Opus framing, the shared game-sound owner (against a fake Avcap2, under
-# sanitizers and under TSan) and the backend with a fake helper replaying a console recording.
+# Controller audio: ownership, preference persistence, and physical-input forwarding.
+controller-audio-test:
+	$(MAKE) -C tools/vpad-probe test HOST_CC="$(HOST_CC)"
+
+build/host/pcm-clients-test: tests/pcm_clients.c src/pcm_clients.h
+	@mkdir -p $(@D)
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -g -fsanitize=address,undefined -o $@ $<
+
+build/host/controller-prefs-test: tests/controller_prefs.c src/prefs.c src/prefs.h $(CJSON)/cJSON.c
+	@mkdir -p $(@D)
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -g -fsanitize=address,undefined -I$(CJSON) -o $@ tests/controller_prefs.c src/prefs.c $(CJSON)/cJSON.c -lpthread
+
+# Wireless Go Live: Opus framing, shared game audio, and helper lifecycle.
 build/host/golive-opus-test: tests/golive_opus.c src/golive_opus.c src/golive_opus.h $(patsubst %.c,build/host/%.o,$(OPUS_SRC))
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) -Werror -o $@ tests/golive_opus.c src/golive_opus.c $(patsubst %.c,build/host/%.o,$(OPUS_SRC)) -lm
@@ -305,6 +315,10 @@ SELFTEST_SRC := tests/selftest.c src/resample.c src/overlay.c src/png_circle.c s
 build/host/selftest: $(patsubst %.c,build/host/%.o,$(SELFTEST_SRC)) | build/build_config.h
 	@mkdir -p $(@D)
 	@echo "  LD    $@"
+	@$(HOST_CC) -o $@ $^ $(HOST_DAVE_LINK)
+
+build/host/pcm-engine-test: build/host/tests/pcm_engine.o $(filter-out build/host/tests/selftest.o,$(patsubst %.c,build/host/%.o,$(SELFTEST_SRC))) | build/build_config.h
+	@mkdir -p $(@D)
 	@$(HOST_CC) -o $@ $^ $(HOST_DAVE_LINK)
 
 # A development core (CORE_LAN=1: make stop can reach it). The console must then run this

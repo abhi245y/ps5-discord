@@ -551,7 +551,7 @@ class Radio
             }
         }
         // Go Live with the USB controller has the call's audio; otherwise the headset.
-        const bool want = !bc_holds_controller();
+        const bool want = !bc_holds_controller() && !vau_usb_connected();
         if (want && !vau_ext_get())
         {
             vau_ext_set(1);

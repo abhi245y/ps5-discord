@@ -204,7 +204,24 @@ std::vector<Row> rows_for(int section, const discord::Snapshot &s, const hui::Se
                   s.prefs.call_volume, false, false, Act::pref};
         heard.key = "call_volume";
         heard.percent = 20;
-        return {mic, heard};
+        const char *controller_help = "Use its mic and speaker in calls. USB cable required.";
+        if (v.controller == "stopping")
+            controller_help = "Releasing controller. Press PS when it stops.";
+        else if (s.prefs.controller_audio)
+        {
+            if (v.controller == "on")
+                controller_help = "Using controller mic and speaker. Press PS after release.";
+            else if (v.controller == "starting")
+                controller_help = "Connecting USB controller audio...";
+            else if (v.controller == "missing")
+                controller_help = "Connect your controller with a USB data cable.";
+            else if (v.controller == "error")
+                controller_help = "Could not start. Reconnect USB, then try again.";
+            else
+                controller_help = "Starts automatically in calls. USB cable required.";
+        }
+        return {mic, heard,
+                toggle_row("Controller audio", controller_help, "controller_audio", s.prefs.controller_audio)};
     }
     case 2: {
         std::vector<Row> rows = {
@@ -1051,6 +1068,7 @@ void SettingsScreen::draw(const discord::Snapshot &s, const hui::Settings &app, 
         // The description gets the row's width, less the control at the right.
         const float control = row.kind == Kind::info     ? 0.0f
                               : row.kind == Kind::button ? 260.0f
+                              : row.kind == Kind::toggle ? 120.0f
                               : row.kind == Kind::value || row.kind == Kind::choice ? r.w * 0.36f
                                                                                      : 480.0f;
         if (row.meter)

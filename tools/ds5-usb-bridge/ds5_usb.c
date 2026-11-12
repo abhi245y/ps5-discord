@@ -298,6 +298,9 @@ static int complete_one(int fd, unsigned *slot)
 static int run_usb(void)
 {
     int fd = -1, result = 1, detached = 0, initialized = 0, hid = -1, detaching = 0;
+#ifdef DS5_USB_RESTORE_CONFIG
+    int saved_config = -1;
+#endif
     unsigned changed = 0, opened = 0;
     struct ds5_mic_format formats[2];
     struct usb_alt_interface old[2];
@@ -309,6 +312,10 @@ static int run_usb(void)
     fd = scan(0);
     if (fd < 0 || discover(fd, formats, &hid, hid_ep))
         goto cleanup;
+#ifdef DS5_USB_RESTORE_CONFIG
+    if (ioctl(fd, USB_GET_CONFIG, &saved_config) || saved_config < 0 || saved_config >= 255)
+        goto cleanup;
+#endif
     for (unsigned n = 0; n < 2; n++) {
         old[n] = (struct usb_alt_interface){.uai_interface_index = formats[n].interface_index};
         if (ioctl(fd, USB_GET_ALTINTERFACE, &old[n]))
@@ -527,6 +534,50 @@ cleanup:
             atomic_store(&plug_unknown, 0); // it answered this time
         }
         int rc = -1;
+#ifdef DS5_USB_RESTORE_CONFIG
+        /* Opt-in controller worker handback. FreeBSD 11 usb_generic.c's driver-detach
+         * path inhibits attachment until the next set-configuration event.
+         * Reapply only this device's saved index, then verify HID driver state.
+         * Verified with the USB worker on FW 13.00; retain the reset fallback.
+         * https://github.com/freebsd/freebsd-src/blob/releng/11.0/sys/dev/usb/usb_generic.c */
+        if (saved_config >= 0) {
+#if DS5_USB_RESTORE_CONFIG >= 2
+            /* Reapplying the current index can be a no-op in FreeBSD. A
+             * distinct unconfigured state forces an actual configuration
+             * transition. Only this already-owned controller is affected. */
+            int unconfigured = USB_UNCONFIG_INDEX;
+            int unconfig_rc = ioctl(fd, USB_SET_CONFIG, &unconfigured);
+            log_line("handback unconfigure rc %d errno %d", unconfig_rc,
+                     unconfig_rc ? errno : 0);
+            if (!unconfig_rc) {
+                for (int attempt = 0; attempt < 10; ++attempt) {
+                    int current = -1;
+                    if (!ioctl(fd, USB_GET_CONFIG, &current) && current == USB_UNCONFIG_INDEX) {
+                        log_line("handback unconfigured state confirmed");
+                        break;
+                    }
+                    usleep(100000);
+                }
+            }
+#endif
+            int reset_rc = ioctl(fd, USB_SET_CONFIG, &saved_config);
+            log_line("handback restore config index %d rc %d errno %d",
+                     saved_config, reset_rc, reset_rc ? errno : 0);
+            if (!reset_rc) {
+                for (int attempt = 0; attempt < 10; ++attempt) {
+                    int iface = hid;
+                    if (!ioctl(fd, USB_IFACE_DRIVER_ACTIVE, &iface)) {
+                        rc = 0;
+                        log_line("handback HID driver reattached; press PS to wake controller");
+                        break;
+                    }
+                    usleep(100000);
+                }
+            }
+            if (rc)
+                log_line("handback restore not verified; using re-enumeration fallback");
+        }
+#endif
         for (int i = 0; i < 3 && rc; i++) {
             int zero = 0;
             if (i)

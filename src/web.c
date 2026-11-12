@@ -596,8 +596,9 @@ static char *voice_json(void)
     free(s);
     if (!o)
         return NULL;
-    cJSON_AddStringToObject(o, "controller", cv_state());
-    cJSON_AddStringToObject(o, "output", cv_tv() ? "tv" : "controller");
+    int usb_audio = vau_usb_connected();
+    cJSON_AddStringToObject(o, "controller", usb_audio ? "on" : cv_state());
+    cJSON_AddStringToObject(o, "output", usb_audio || !cv_tv() ? "controller" : "tv");
     // One state for the app: the picture (broadcast.c) and Discord's side (stream.c).
     const char *b = bc_state(), *st = stream_state();
     int failed = strcmp(st, "error") == 0 || strcmp(b, "error") == 0;

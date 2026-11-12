@@ -63,6 +63,12 @@ constexpr app::TourStep kTour[] = {
     {0.4f, 0, Direction::right},
     {0.4f, 0, Direction::right},
     {0.6f, 0, Direction::none, "settings-voice"},
+    {0.4f, 0, Direction::down},
+    {0.4f, 0, Direction::down},
+    {0.4f, action_bit(Action::confirm)},
+    {0.6f, 0, Direction::none, "settings-controller-audio-on"},
+    {0.4f, action_bit(Action::confirm)},
+    {0.6f, 0, Direction::none, "settings-controller-audio-off"},
     // Go Live: quality, bitrate, capture method; choose Remote Play to show pairing.
     {0.4f, action_bit(Action::back)},
     {0.4f, 0, Direction::down},

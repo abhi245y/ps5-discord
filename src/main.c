@@ -25,6 +25,7 @@
 #include "status.h"
 #include "web.h"
 #include "voice.h"
+#include "voice_audio.h"
 #include "controller_voice.h"
 #include "broadcast.h"
 #include "http.h"
@@ -124,14 +125,18 @@ int core_sign_out(void)
 // handback gets up to 30 s; Remote Play's teardown after it, the rest of 10 s.
 static void end_calls(void)
 {
+    cv_stop();
+    vau_usb_release();
     stream_stop();
     bc_stop();
-    for (int i = 0; i < 300 && (bc_holds_controller() || (i < 100 && strcmp(bc_state(), "off") != 0 &&
+    for (int i = 0; i < 300 && (cv_holds_controller() || bc_holds_controller() || (i < 100 && strcmp(bc_state(), "off") != 0 &&
                                                              strcmp(bc_state(), "error") != 0));
          i++)
         usleep(100000);
     if (bc_holds_controller())
         LOG("quit: the controller was not given back in 30 s");
+    if (cv_holds_controller())
+        LOG("quit: automatic controller audio did not release within 30 s");
     voice_leave();
 }
 

@@ -12,6 +12,7 @@
 #define VAU_FRAME 960 // samples per channel in one 20 ms frame
 #define VAU_RTP_PT 0x78 // Opus payload type in RTP
 #define VAU_PORT 9042
+#define VAU_USB_PORT 9045 // Authenticated USB PCM role; replies "OK" after accepting its key.
 #define VAU_ID 32 // user id buffer, snowflake plus NUL
 #define VAU_FIFO 6 // decoded frames kept per speaker (~120 ms)
 #define VAU_MAX_PKT 1500
@@ -106,3 +107,6 @@ void vau_ext_mic(const int16_t *mono, size_t frames);       // device thread; co
 size_t vau_ext_playback(int16_t *stereo, size_t frames);    // device thread; frames supplied
 // 1 while the app's audio socket is connected: the app is on screen in a call.
 int vau_app_connected(void);
+// 1 while the authenticated USB PCM client owns audio (app socket stays parked).
+int vau_usb_connected(void);
+void vau_usb_release(void); // Release lease; worker deletes virtual pad and hands USB back.

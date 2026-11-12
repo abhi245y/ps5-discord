@@ -4,6 +4,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdatomic.h>
 
 #include "log.h"
 
@@ -19,6 +20,7 @@ static pref prefs[] = {
     {"golive_bitrate", 0, 19, 0, 0}, // broadcast.c bitrate_for: 0 recommended, n: n + 1 Mbit/s (wireless)
     {"mic_gain", 0, 10, 5, 5},      // 5 = as captured, 10 = twice
     {"call_volume", 0, 10, 5, 5},   // the voices heard: 5 = as received, 10 = twice
+    {"controller_audio", 0, 1, 0, 0}, // opt-in automatic USB mic/speaker capture during calls
     {"notify_dm", 0, 1, 1, 1},      // DMs and mentions (chat.c notify_kind)
     {"notify_server", 0, 2, 1, 1},  // server messages: 0 off, 1 as set in Discord, 2 every one
     {"notify_system", 0, 1, 1, 1},  // PS5 alerts while the app is not on screen
@@ -47,7 +49,7 @@ static pref *find(const char *key)
     return NULL;
 }
 
-static volatile int loaded; // a console user's settings are in (prefs_load ran once)
+static atomic_int loaded; // a console user's settings are in (prefs_load ran once)
 
 int prefs_loaded(void)
 {
@@ -86,8 +88,11 @@ void prefs_load(const char *data_dir, int32_t user)
 
 int prefs_get(const char *key)
 {
+    pthread_mutex_lock(&lock);
     pref *p = find(key);
-    return p ? p->value : 0;
+    int value = p ? p->value : 0;
+    pthread_mutex_unlock(&lock);
+    return value;
 }
 
 int prefs_set(const char *key, int value)
@@ -116,7 +121,9 @@ int prefs_set(const char *key, int value)
 cJSON *prefs_json(void)
 {
     cJSON *o = cJSON_CreateObject();
+    pthread_mutex_lock(&lock);
     for (int i = 0; i < COUNT; i++)
         cJSON_AddNumberToObject(o, prefs[i].key, prefs[i].value);
+    pthread_mutex_unlock(&lock);
     return o;
 }
