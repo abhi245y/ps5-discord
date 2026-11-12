@@ -932,7 +932,9 @@ static int run_session(vthread *t)
             t->ready = 0;
             return -1;
         }
-        int wait = vau_speaking_pending() ? 5 : 500;
+        // 20 ms, the engine's tick: a SPEAKING request raised while we wait goes out within a tick.
+        // With 500 ms the start of speech after a pause was dropped until this thread woke up.
+        int wait = vau_speaking_pending() ? 5 : 20;
         if (t->next_hb && t->next_hb - now < wait)
             wait = (int)(t->next_hb - now);
         int m = ws_recv(&t->ws, wait);
