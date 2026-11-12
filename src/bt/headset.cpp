@@ -120,7 +120,7 @@ class MixSource final : public IAudioSource
         }
         const std::size_t frames = static_cast<std::size_t>(n) / 8;
         m_pcm.resize(frames * 2);
-        const std::size_t got = vau_ext_playback(m_pcm.data(), frames);
+        const std::size_t got = vau_ext_playback(VAU_EXT_BT, m_pcm.data(), frames);
         for (std::size_t i = 0; i < got * 2; i++)
         {
             const float v = buffer[i] + m_pcm[i] / 32768.0f;
@@ -194,7 +194,7 @@ class Radio
           m_mic(m_bt, [this](const std::int16_t* pcm, int n) {
               if (m_ownExt)
               {
-                  vau_ext_mic(pcm, static_cast<std::size_t>(n));
+                  vau_ext_mic(VAU_EXT_BT, pcm, static_cast<std::size_t>(n));
               }
           })
     {
@@ -493,7 +493,7 @@ class Radio
         const auto mic = [this](const std::int16_t* pcm, int n) {
             if (m_ownExt)
             {
-                vau_ext_mic(pcm, static_cast<std::size_t>(n));
+                vau_ext_mic(VAU_EXT_BT, pcm, static_cast<std::size_t>(n));
             }
         };
         while (m_bt.linkUp() && m_wantSco && !m_stopSession)
@@ -506,7 +506,7 @@ class Radio
                 call.assign(frames * 2, 0);
                 if (m_ownExt)
                 {
-                    vau_ext_playback(call.data(), frames);
+                    vau_ext_playback(VAU_EXT_BT, call.data(), frames);
                 }
                 mono.resize(frames);
                 for (std::size_t i = 0; i < frames; i++)
@@ -530,10 +530,7 @@ class Radio
     void releaseExt()
     {
         m_mix.call = false;
-        if (m_ownExt && !bc_holds_controller())
-        {
-            vau_ext_set(0);
-        }
+        vau_ext_release(VAU_EXT_BT);
         m_ownExt = false;
     }
 
@@ -551,11 +548,8 @@ class Radio
             }
         }
         // Go Live with the USB controller has the call's audio; otherwise the headset.
-        const bool want = !bc_holds_controller() && !vau_usb_connected();
-        if (want && !vau_ext_get())
-        {
-            vau_ext_set(1);
-        }
+        // Availability survives USB/Remote Play overrides until releaseExt().
+        const bool want = vau_ext_acquire(VAU_EXT_BT) != 0;
         m_ownExt = want;
         m_mix.call = want;
 

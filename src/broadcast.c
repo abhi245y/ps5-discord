@@ -371,13 +371,13 @@ static void usb_mic(void *user, const int16_t *mono, size_t n, int muted)
 {
     (void)user;
     (void)muted; // already silence while the mute button is on
-    vau_ext_mic(mono, n);
+    vau_ext_mic(VAU_EXT_REMOTE_PLAY, mono, n);
 }
 
 static size_t usb_playback(void *user, int16_t *stereo, size_t n)
 {
     (void)user;
-    return vau_ext_playback(stereo, n);
+    return vau_ext_playback(VAU_EXT_REMOTE_PLAY, stereo, n);
 }
 
 static int usb_service(void *user)
@@ -467,10 +467,12 @@ static const char *run(void)
     if (!why && connected) {
         if (mine && want) { // not when Go Live was stopped (or the core quit) meanwhile
             LOG("broadcast: Remote Play connected, taking the controller");
-            vau_ext_set(1);
+            (void)vau_ext_acquire(VAU_EXT_REMOTE_PLAY);
             holding = 1;
             usb_running = pthread_create(&usb, NULL, usb_main, NULL) == 0;
             holding = usb_running;
+            if (!usb_running)
+                vau_ext_release(VAU_EXT_REMOTE_PLAY);
         } else // another console user's session: the controller stays the user's own
             LOG("broadcast: Remote Play connected as another console user; the controller stays yours");
         pthread_mutex_lock(&live_lock);
@@ -512,7 +514,7 @@ static const char *run(void)
         }
         holding = 0;
     }
-    vau_ext_set(0);
+    vau_ext_release(VAU_EXT_REMOTE_PLAY);
     if (started) { // its thread exists only then
         chiaki_session_stop(&session);
         chiaki_session_join(&session);

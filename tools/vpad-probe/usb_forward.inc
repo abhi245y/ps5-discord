@@ -48,10 +48,11 @@ static void usb_drain(void)
         atomic_store_explicit(&g_usb_messages.read, read, memory_order_release);
     }
     ds5_usb_controller state;
-    while (usb_forward_pop(&g_usb_states, &state)) {
+    uint64_t received_ms;
+    while (usb_forward_pop(&g_usb_states, &state, &received_ms)) {
         g_usb_latest = state;
         ++g_usb_received;
-        g_usb_last = now_ms();
+        g_usb_last = received_ms;
     }
 }
 
@@ -59,7 +60,7 @@ static void usb_controller(void *user, const ds5_usb_controller *state, const ui
 {
     (void)user;
     (void)report;
-    (void)usb_forward_push(&g_usb_states, state);
+    (void)usb_forward_push(&g_usb_states, state, now_ms());
 }
 
 static int usb_service(void *user)
@@ -160,9 +161,7 @@ static int usb_forward_run(void)
             return -1;
         }
         uint8_t report[160];
-        ds5_usb_controller state = g_usb_latest;
-        if (now_ms() - g_usb_last > 250u)
-            state = (ds5_usb_controller){0}; /* Release stale held controls. */
+        ds5_usb_controller state = usb_forward_fresh_state(&g_usb_latest, g_usb_last, now_ms());
         usb_forward_report(report, &state);
         struct hid_request request = {.command = (uint32_t)g_handle, .data = report};
         if (checked_ioctl("InsertData USB", HID_INSERT_DATA, &request) != 0) {

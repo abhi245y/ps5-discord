@@ -40,10 +40,14 @@ static inline void usb_forward_report(uint8_t report[160], const ds5_usb_control
 #define USB_FORWARD_QUEUE_SIZE 64u
 typedef struct {
     atomic_uint write, read, dropped;
-    ds5_usb_controller states[USB_FORWARD_QUEUE_SIZE];
+    struct {
+        ds5_usb_controller state;
+        uint64_t received_ms;
+    } reports[USB_FORWARD_QUEUE_SIZE];
 } usb_forward_queue;
 
-static inline int usb_forward_push(usb_forward_queue *q, const ds5_usb_controller *s)
+static inline int usb_forward_push(usb_forward_queue *q, const ds5_usb_controller *s,
+                                   uint64_t received_ms)
 {
     unsigned write = atomic_load_explicit(&q->write, memory_order_relaxed);
     unsigned next = (write + 1u) % USB_FORWARD_QUEUE_SIZE;
@@ -51,18 +55,27 @@ static inline int usb_forward_push(usb_forward_queue *q, const ds5_usb_controlle
         atomic_fetch_add_explicit(&q->dropped, 1, memory_order_relaxed);
         return 0;
     }
-    q->states[write] = *s;
+    q->reports[write].state = *s;
+    q->reports[write].received_ms = received_ms;
     atomic_store_explicit(&q->write, next, memory_order_release);
     return 1;
 }
 
-static inline int usb_forward_pop(usb_forward_queue *q, ds5_usb_controller *s)
+static inline int usb_forward_pop(usb_forward_queue *q, ds5_usb_controller *s,
+                                  uint64_t *received_ms)
 {
     unsigned read = atomic_load_explicit(&q->read, memory_order_relaxed);
     if (read == atomic_load_explicit(&q->write, memory_order_acquire))
         return 0;
-    *s = q->states[read];
+    *s = q->reports[read].state;
+    *received_ms = q->reports[read].received_ms;
     atomic_store_explicit(&q->read, (read + 1u) % USB_FORWARD_QUEUE_SIZE, memory_order_release);
     return 1;
+}
+
+static inline ds5_usb_controller usb_forward_fresh_state(const ds5_usb_controller *s,
+                                                         uint64_t received_ms, uint64_t now)
+{
+    return now - received_ms > 250u ? (ds5_usb_controller){0} : *s;
 }
 #endif

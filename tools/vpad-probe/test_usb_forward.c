@@ -14,7 +14,7 @@ static void *produce(void *unused)
     for (unsigned i = 0; i < 100000; ++i) {
         ds5_usb_controller state = {.buttons = i, .left_trigger = (uint8_t)i,
             .right_trigger = (uint8_t)~i};
-        while (!usb_forward_push(&queue, &state))
+        while (!usb_forward_push(&queue, &state, i))
             sched_yield();
     }
     return NULL;
@@ -81,24 +81,43 @@ int main(void)
     assert(buttons == 0);
     for (unsigned i = 0; i < USB_FORWARD_QUEUE_SIZE - 1; ++i) {
         state.buttons = i;
-        assert(usb_forward_push(&queue, &state));
+        assert(usb_forward_push(&queue, &state, 1000u + i));
     }
-    assert(!usb_forward_push(&queue, &state));
+    assert(!usb_forward_push(&queue, &state, 2000u));
     assert(atomic_load(&queue.dropped) == 1);
+    uint64_t received_ms;
     for (unsigned i = 0; i < USB_FORWARD_QUEUE_SIZE - 1; ++i) {
-        assert(usb_forward_pop(&queue, &state));
+        assert(usb_forward_pop(&queue, &state, &received_ms));
         assert(state.buttons == i);
+        assert(received_ms == 1000u + i);
     }
-    assert(!usb_forward_pop(&queue, &state));
+    assert(!usb_forward_pop(&queue, &state, &received_ms));
+    // Consumer resumes after a 300 ms stall: queued held controls are already stale.
+    state = (ds5_usb_controller){.buttons = DS5_CROSS, .left_x = 32512, .left_trigger = 231};
+    assert(usb_forward_push(&queue, &state, 1000));
+    assert(usb_forward_pop(&queue, &state, &received_ms));
+    ds5_usb_controller fresh = usb_forward_fresh_state(&state, received_ms, 1250);
+    assert(fresh.buttons == DS5_CROSS && fresh.left_x == 32512 && fresh.left_trigger == 231);
+    fresh = usb_forward_fresh_state(&state, received_ms, 1300);
+    usb_forward_report(report, &fresh);
+    memcpy(&buttons, report + 12, sizeof buttons);
+    assert(buttons == 0 && report[16] == 128 && report[20] == 0);
+    // Fresh reports resume input immediately, retaining their producer timestamp.
+    assert(usb_forward_push(&queue, &state, 1301));
+    assert(usb_forward_pop(&queue, &state, &received_ms));
+    fresh = usb_forward_fresh_state(&state, received_ms, 1302);
+    assert(fresh.buttons == DS5_CROSS);
     pthread_t thread;
     assert(pthread_create(&thread, NULL, produce, NULL) == 0);
     for (unsigned i = 0; i < 100000; ++i) {
-        while (!usb_forward_pop(&queue, &state))
+        while (!usb_forward_pop(&queue, &state, &received_ms))
             sched_yield();
         assert(state.buttons == i);
+        assert(received_ms == i);
         assert(state.left_trigger == (uint8_t)i && state.right_trigger == (uint8_t)~i);
     }
     assert(pthread_join(thread, NULL) == 0);
-    puts("Tone envelope/stereo/silence, USB mapping, queue bounds and 100000 concurrent transfers passed");
+    puts("Tone envelope/stereo/silence, USB mapping, receipt freshness, queue bounds "
+         "and 100000 concurrent transfers passed");
     return 0;
 }

@@ -65,7 +65,28 @@ int main(void)
     close(app[1]);
     pcm_clients_drop(&c);
     close(next[1]);
+
+    // More than the old 8 * 4096 byte drain limit must be gone before promotion.
+    pair(app);
+    pair(usb);
+    assert(pcm_clients_take(&c, app[0], 0) == 1);
+    assert(pcm_clients_take(&c, usb[0], 1) == 1);
+    char backlog[65539];
+    memset(backlog, 0x5a, sizeof backlog);
+    int room = 2 * (int)sizeof backlog;
+    assert(setsockopt(app[1], SOL_SOCKET, SO_SNDBUF, &room, sizeof room) == 0);
+    assert(send(app[1], backlog, sizeof backlog, MSG_DONTWAIT) == sizeof backlog);
+    pcm_clients_drop(&c);
+    assert(c.current == app[0] && c.parked == -1 && !c.usb);
+    assert(c.resume_skip == 1);
+    assert(recv(c.current, bytes, sizeof bytes, MSG_DONTWAIT) < 0 &&
+           (errno == EAGAIN || errno == EWOULDBLOCK));
+    assert(send(app[1], "fresh", 5, 0) == 5);
+    assert(recv(c.current, bytes, sizeof bytes, 0) == 5 && memcmp(bytes, "fresh", 5) == 0);
+    pcm_clients_drop(&c);
+    close(app[1]);
+    close(usb[1]);
     puts("PCM ownership: park, discard stale mic, reject second USB, replace "
-         "app, resume, disconnect passed");
+         "app, resume, disconnect, >32 KiB backlog passed");
     return 0;
 }

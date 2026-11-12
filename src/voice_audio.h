@@ -98,13 +98,14 @@ int vau_speaking_pending(void);
 // Users heard in the last 300 ms, and us while we send. Returns how many were written.
 int vau_speaking(char ids[][VAU_ID], int max);
 
-// An external audio device (the DualSense on USB, controller_voice.c) instead of the
-// app: while on, its mic feeds the call (the app's mic bytes are ignored) and the call
-// plays on it instead of in the app.
-void vau_ext_set(int on);
+// External routes retain availability until their owner releases it. Remote Play
+// takes precedence over BT; the USB PCM client takes precedence over both.
+typedef enum { VAU_EXT_NONE = 0, VAU_EXT_BT = 1, VAU_EXT_REMOTE_PLAY = 2 } vau_ext_owner;
+int vau_ext_acquire(vau_ext_owner owner); // 1 if selected, including USB PCM priority
+void vau_ext_release(vau_ext_owner owner);
 int vau_ext_get(void); // 1 while an external device has the call's audio
-void vau_ext_mic(const int16_t *mono, size_t frames);       // device thread; copies
-size_t vau_ext_playback(int16_t *stereo, size_t frames);    // device thread; frames supplied
+void vau_ext_mic(vau_ext_owner owner, const int16_t *mono, size_t frames);
+size_t vau_ext_playback(vau_ext_owner owner, int16_t *stereo, size_t frames);
 // 1 while the app's audio socket is connected: the app is on screen in a call.
 int vau_app_connected(void);
 // 1 while the authenticated USB PCM client owns audio (app socket stays parked).

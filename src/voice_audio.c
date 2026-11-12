@@ -289,7 +289,8 @@ static size_t out_len;
 // The external device (vau_ext_*). Its thread must never wait on the engine, which
 // holds mu through Opus and DAVE, so the two meet only in these rings under ext_mu.
 static pthread_mutex_t ext_mu = PTHREAD_MUTEX_INITIALIZER;
-static _Atomic int ext_on;
+static unsigned ext_available; // mu: owners remain available while USB overrides them
+static _Atomic int ext_owner;  // changes under mu and ext_mu; getters may read atomically
 static int16_t ext_mic[MIC_CAP];
 static int ext_mic_head, ext_mic_count;
 static ds5_pcm_stream ext_out; // playback with a 60 ms prefill (tools/ds5-usb-bridge)
@@ -390,7 +391,8 @@ static void client_buffers_reset(void)
     mic_head = mic_count = 0;
     mic_carry = -1;
     mic_skip = audio_clients.resume_skip;
-    out_len = 0;
+    out_len = pcm_clients_playback_padding(&audio_clients);
+    memset(out_buf, 0, out_len);
 }
 
 static void external_buffers_reset(void)
@@ -521,7 +523,7 @@ static void read_mic(void)
     uint8_t buf[4096];
     for (int i = 0; i < 8 && audio_clients.current >= 0; i++) {
         ssize_t r = recv(audio_clients.current, buf, sizeof buf, MSG_DONTWAIT);
-        if (r > 0 && ext_on && !audio_clients.usb) { // drain app mic, retaining sample alignment
+        if (r > 0 && ext_owner && !audio_clients.usb) { // drain app mic, retaining sample alignment
             mic_skip = ((mic_carry >= 0 || mic_skip) + (int)(r & 1)) & 1;
             mic_carry = -1;
             continue;
@@ -552,6 +554,7 @@ static void out_flush(void)
             return;
         }
         st_out_bytes += (unsigned)w;
+        pcm_clients_sent(&audio_clients, (size_t)w);
         memmove(out_buf, out_buf + w, out_len - (size_t)w);
         out_len -= (size_t)w;
     }
@@ -780,7 +783,7 @@ static void play(void)
     if (any && volume != 5)
         for (int i = 0; i < 2 * VAU_FRAME; i++)
             acc[i] = acc[i] * volume / 5; // vau_mix_out clips
-    if (any && ext_on && !audio_clients.usb) {
+    if (any && ext_owner && !audio_clients.usb) {
         vau_mix_out(acc, out);
         pthread_mutex_lock(&ext_mu);
         ds5_pcm_receive(&ext_out, (const uint8_t *)out, sizeof out); // little endian
@@ -1076,23 +1079,54 @@ int vau_speaking(char ids[][VAU_ID], int max)
     return n;
 }
 
-void vau_ext_set(int on)
+// mu held. Route switches and owner-checked ring I/O serialize under ext_mu.
+static void external_select(void)
 {
+    int owner = (ext_available & VAU_EXT_REMOTE_PLAY) ? VAU_EXT_REMOTE_PLAY
+                : (ext_available & VAU_EXT_BT) ? VAU_EXT_BT : VAU_EXT_NONE;
+    if (owner == ext_owner)
+        return;
     pthread_mutex_lock(&ext_mu);
     ext_mic_head = ext_mic_count = 0;
     memset(&ext_out, 0, sizeof ext_out);
-    ext_on = on;
+    ext_owner = owner;
     pthread_mutex_unlock(&ext_mu);
+}
+
+int vau_ext_acquire(vau_ext_owner owner)
+{
+    if (owner != VAU_EXT_BT && owner != VAU_EXT_REMOTE_PLAY)
+        return 0;
+    pthread_mutex_lock(&mu);
+    ext_available |= (unsigned)owner;
+    external_select();
+    int selected = ext_owner == (int)owner && !audio_clients.usb;
+    pthread_mutex_unlock(&mu);
+    return selected;
+}
+
+void vau_ext_release(vau_ext_owner owner)
+{
+    if (owner != VAU_EXT_BT && owner != VAU_EXT_REMOTE_PLAY)
+        return;
+    pthread_mutex_lock(&mu);
+    ext_available &= ~(unsigned)owner;
+    external_select();
+    pthread_mutex_unlock(&mu);
 }
 
 int vau_ext_get(void)
 {
-    return ext_on;
+    return ext_owner != VAU_EXT_NONE;
 }
 
-void vau_ext_mic(const int16_t *mono, size_t frames)
+void vau_ext_mic(vau_ext_owner owner, const int16_t *mono, size_t frames)
 {
     pthread_mutex_lock(&ext_mu);
+    if (owner == VAU_EXT_NONE || ext_owner != (int)owner || usb_client) {
+        pthread_mutex_unlock(&ext_mu);
+        return;
+    }
     for (size_t i = 0; i < frames; i++) {
         ext_mic[(ext_mic_head + ext_mic_count) % MIC_CAP] = mono[i];
         if (ext_mic_count < MIC_CAP)
@@ -1103,10 +1137,11 @@ void vau_ext_mic(const int16_t *mono, size_t frames)
     pthread_mutex_unlock(&ext_mu);
 }
 
-size_t vau_ext_playback(int16_t *stereo, size_t frames)
+size_t vau_ext_playback(vau_ext_owner owner, int16_t *stereo, size_t frames)
 {
     pthread_mutex_lock(&ext_mu);
-    size_t n = ds5_pcm_playback(&ext_out, stereo, frames);
+    size_t n = owner != VAU_EXT_NONE && ext_owner == (int)owner && !usb_client
+                   ? ds5_pcm_playback(&ext_out, stereo, frames) : 0;
     pthread_mutex_unlock(&ext_mu);
     return n;
 }

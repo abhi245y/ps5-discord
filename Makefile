@@ -317,7 +317,9 @@ build/host/selftest: $(patsubst %.c,build/host/%.o,$(SELFTEST_SRC)) | build/buil
 	@echo "  LD    $@"
 	@$(HOST_CC) -o $@ $^ $(HOST_DAVE_LINK)
 
-build/host/pcm-engine-test: build/host/tests/pcm_engine.o $(filter-out build/host/tests/selftest.o,$(patsubst %.c,build/host/%.o,$(SELFTEST_SRC))) | build/build_config.h
+# pcm_engine.c includes the engine for deterministic routing/partial-write checks.
+build/host/tests/pcm_engine.o: src/voice_audio.c
+build/host/pcm-engine-test: build/host/tests/pcm_engine.o $(filter-out build/host/tests/selftest.o build/host/src/voice_audio.o,$(patsubst %.c,build/host/%.o,$(SELFTEST_SRC))) | build/build_config.h
 	@mkdir -p $(@D)
 	@$(HOST_CC) -o $@ $^ $(HOST_DAVE_LINK)
 
