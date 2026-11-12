@@ -28,6 +28,11 @@ All notable changes to this project are documented here. The format follows
 - The capture helper's processes are named (discord-capture-supervisor.elf / -worker.elf).
 - Wireless Go Live: loader upload and commands handle short writes, backpressure and cancellation;
   concurrent handshake candidates and media deadlines prevent a stalled helper holding the session.
+- Go Live with a USB controller: a headset plugged into the DualSense jack is now used for the mic.
+  The built-in mic is only forced when the controller reports no headset mic, so friends no longer
+  hear the controller's mic (button clicks). The mute button still works. (#8)
+- Voice: the start of a sentence after a pause is no longer delayed by up to 500 ms; the voice thread
+  now waits 20 ms instead of 500 ms before sending SPEAKING. (#9)
 - Capture setup observes Stop and disconnected cores between stages; the 120 Hz guard also runs
   during streaming, while other display transitions preserve the existing recovery path.
 - Capture SPS timing matches the requested 30/60 fps, validated against saved console recordings.
