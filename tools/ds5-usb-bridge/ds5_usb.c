@@ -40,6 +40,7 @@ static struct {
     uint32_t lengths[SLOTS][FRAMES];
     int busy[SLOTS];
     int headphones, observed, muted, route_dirty, sent_headphones, sent_muted, applied, initial;
+    int headset_mic, observed_mic;
     uint8_t previous_buttons;
     uint64_t jack_changed, last[SLOTS];
     unsigned mic_transfers, output_transfers, hid_reports, handoffs;
@@ -167,12 +168,13 @@ static int submit_route(int fd)
 {
     if (g.busy[HID_OUT] || !g.route_dirty)
         return 0;
-    ds5_usb_route_report(g.data[HID_OUT][0], &g.config, g.headphones, g.muted);
+    ds5_usb_route_report_mic(g.data[HID_OUT][0], &g.config, g.headphones, g.muted, g.headset_mic);
     g.sent_headphones = g.headphones;
     g.sent_muted = g.muted;
     g.route_dirty = 0;
-    log_line("route requested: %s mic %s (built-in mic forced)",
-             g.headphones ? "headphones" : "speaker", g.muted ? "muted" : "live");
+    log_line("route requested: %s mic %s (%s)", g.headphones ? "headphones" : "speaker",
+             g.muted ? "muted" : "live",
+             g.headset_mic ? "headset mic detected, built-in mic not forced" : "built-in mic forced");
     return submit(fd, HID_OUT);
 }
 
@@ -184,11 +186,13 @@ static void process_hid(void)
     if (g.callbacks.controller)
         g.callbacks.controller(g.user, &controller, g.data[HID_IN][0]);
     int hp = !!(g.data[HID_IN][0][54] & 1);
+    int hs = !!(g.data[HID_IN][0][54] & 2); // the plugged headset has a mic
     int muted = !!(g.data[HID_IN][0][54] & 4);
     uint8_t buttons = g.data[HID_IN][0][10];
     g.hid_reports++;
     if (g.initial) {
         g.headphones = g.observed = hp;
+        g.headset_mic = g.observed_mic = hs;
         g.muted = muted;
         g.previous_buttons = buttons;
         g.jack_changed = now_ms();
@@ -210,8 +214,15 @@ static void process_hid(void)
         g.jack_changed = now_ms();
         log_line("jack observed: status %02x headphones %d", g.data[HID_IN][0][54], hp);
     }
-    if (g.observed != g.headphones && now_ms() - g.jack_changed >= 100) {
+    if (hs != g.observed_mic) {
+        g.observed_mic = hs;
+        g.jack_changed = now_ms();
+        log_line("headset mic observed: status %02x headset mic %d", g.data[HID_IN][0][54], hs);
+    }
+    if ((g.observed != g.headphones || g.observed_mic != g.headset_mic) &&
+        now_ms() - g.jack_changed >= 100) {
         g.headphones = g.observed;
+        g.headset_mic = g.observed_mic;
         g.route_dirty = 1;
     }
 }
